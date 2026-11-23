@@ -88,6 +88,7 @@ mod security_tests {
             std::env::temp_dir().join(format!("mynofy-review2-journal-{}", std::process::id()));
         assert!(!directory.exists());
         cfg.security_storage = Some(SecurityStorage {
+            sync: false,
             directory: directory.clone(),
             queue_capacity: 4,
             compact_after_records: 4096,

@@ -164,10 +164,25 @@ returns `content_memory_budget_exceeded` before capture and releases the save sl
 `content_storage.working_memory_reserved_bytes` in admin status reports the
 admitted estimate while capture/writing is in progress, then returns to zero.
 
-Only one content capture/write runs per engine. Topic selection is indexed once
-in the writer; a compatible single-topic image is borrowed instead of copied a
-second time. These reduce temporary allocations but do not eliminate capture
-pauses or serialization buffers. This setting is an admission estimate, not a
+Only one content capture/write runs per engine. Broad saves pin initialized
+record and payload blocks under the owner lock, together with producer counters,
+topic heads/policies, expiry cutoff and ID reservations. The worker selects and
+compacts this immutable epoch before writing. A later live mutation copies only
+its affected shared block; an ordinary unique write performs no atomic reference-
+count operation. When the last snapshot is gone, a subsequent write recovers the
+original unique buffer without copying it.
+
+For smaller selections, the existing topic indexes capture only selected records
+under the lock, without pinning unrelated RAM payload pages. Saves with no selected records do
+not pin empty retained arenas. Unselected persistent-topic metadata remains bound
+to the same epoch; RAM-only content is never written. No wire or disk format changes.
+
+A queued save is not a completed save: compaction/size validation, encryption and
+I/O may fail on the worker. Such failures preserve the previous manifest, keep
+changes dirty and release the save slot/working-memory reservation. Check status
+for completion. A compatible single-topic image is borrowed by the writer rather
+than copied again. Capture still has bounded-by-data metadata and copy-on-write
+costs; it is not lock-free. This setting is an admission estimate, not a
 hard allocator or process RSS cap. Startup/offline loading, transport buffers,
 normal live-message growth and allocator retention require separate headroom.
 Per-response transport limits remain independent. See the
@@ -204,3 +219,17 @@ upgraded when opened. Offline restore retains the maximum saved owner-time cutof
 of the destination and backup, together with the current time, so a clock rollback
 cannot revive a record already expired in the destination's saved history.
 See [restart and storage guide](restart-and-storage.md).
+
+## Aggregate size of the next generation
+
+`max_snapshot_bytes` limits the encoded files of the next committed generation,
+including its manifest. A multi-topic save counts unchanged files plus the new
+versions of all selected topics; replaced old versions are excluded together,
+so growing one selected topic and shrinking another is independent of selection
+order. Staging still needs physical disk space for old and new slots until commit.
+
+Live RAM-topic names and policies do not consume the encoded snapshot budget.
+Projection limits bound the image itself; the bounded encoder and aggregate
+writer count actual serialized controls and files. The separate working-memory
+admission may conservatively include the entire live owner. Check save completion
+and errors through status; an accepted queue request is not a commit receipt.

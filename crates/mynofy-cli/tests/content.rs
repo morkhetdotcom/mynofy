@@ -38,6 +38,7 @@ fn fixture(mode: ContentEncryption) -> Fixture {
         json!([{"client_id":id,"allow":["publish","subscribe","inspect_own"]}]);
     let mut cfg: Config = serde_json::from_value(cfg).unwrap();
     cfg.security_storage = Some(SecurityStorage {
+        sync: false,
         directory: dir.join("security"),
         queue_capacity: 128,
         compact_after_records: 4096,
@@ -223,7 +224,7 @@ async fn plaintext_password_and_key_snapshots_restore_complete_state_before_serv
         ready(&f, &mut owner).await;
         let status = call(&f, A::Status {}).await;
         assert_eq!(status["content_storage"]["loaded"], true);
-        assert_eq!(status["storage"]["resident_records"], 3);
+        assert_eq!(status["resident_messages"], 3);
 
         let mut client =
             mynofy_client::connect_unix_client(&f.dir.join("data.sock"), &f.key, "local", None)
@@ -570,7 +571,7 @@ async fn cli_restart_progress_and_offline_storage_workflow_preserve_security() {
         let oversized = cli_input(args, &vec![b'x'; 64 * 1024 + 1]).await;
         assert!(!oversized.status.success());
         assert!(String::from_utf8_lossy(&oversized.stderr).contains("64 KiB"));
-        assert_eq!(call(&f, A::Status {}).await["storage"]["active_records"], 1);
+        assert_eq!(call(&f, A::StorageStats {}).await["active_records"], 1);
     }
     let initial = cli_input(
         client_args.clone(),
@@ -906,4 +907,104 @@ int fsync(int fd) {
     .await;
     successful(&good);
     assert!(outputs.join("good-backup/state.bin").is_file());
+}
+
+#[tokio::test]
+async fn offline_topic_ram_preserves_unrelated_messages_after_fresh_cli_and_service_reopen() {
+    if support::under_unprivileged_identity(
+        "offline_topic_ram_preserves_unrelated_messages_after_fresh_cli_and_service_reopen",
+    ) {
+        return;
+    }
+    use mynofy_server::config::{Client, PublicKey, Rule, TopicStorage};
+    let mut f = fixture(ContentEncryption::None);
+    let other_key = crypto::generate_key().unwrap();
+    let public = crypto::public_key(&other_key).unwrap();
+    let other_id = crypto::initial_client_id(&public);
+    f.cfg.clients.push(Client {
+        client_id: other_id.clone(),
+        display_name: None,
+        disabled: false,
+        keys: vec![PublicKey {
+            algorithm: "ed25519".into(),
+            public_key: crypto::encode(&public),
+            valid_until: mynofy_protocol::timestamp(now_ms() + 86400000).unwrap(),
+        }],
+    });
+    let mut live = f.cfg.topics[0].clone();
+    live.name = "live".into();
+    live.acl = Some(vec![Rule {
+        client_id: other_id.clone(),
+        allow: vec![Action::Publish, Action::Subscribe],
+    }]);
+    f.cfg.topics.push(live);
+    let mut converted = f.cfg.topics[0].clone();
+    converted.name = "converted".into();
+    f.cfg.topics.push(converted);
+    std::fs::write(&f.config, f.cfg.to_yaml().unwrap()).unwrap();
+    let mut owner = spawn(&f, None).await;
+    ready(&f, &mut owner).await;
+    let mut first =
+        mynofy_client::connect_unix_client(&f.dir.join("data.sock"), &f.key, "local", None)
+            .await
+            .unwrap();
+    let expires = now_ms() + 3000;
+    let expired=mynofy_client::exchange(&mut first,&json!({"version":1,"type":"publish","id":"old","topic":"local/events","payload":"expires","expires":{"time":mynofy_protocol::timestamp(expires).unwrap()}})).await.unwrap();
+    assert_eq!(expired["type"], "result");
+    let mut second =
+        mynofy_client::connect_unix_client(&f.dir.join("data.sock"), &other_key, "local", None)
+            .await
+            .unwrap();
+    let published=mynofy_client::exchange(&mut second,&json!({"version":1,"type":"publish","id":"live","topic":"live","payload":"survives conversion"})).await.unwrap();
+    assert_eq!(published["type"], "result");
+    let save = call(&f, A::ContentSave { topics: None }).await;
+    saved(&f, save["revision"].as_u64().unwrap()).await;
+    drop(first);
+    drop(second);
+    kill(&f, &mut owner).await;
+    f.cfg.topics.last_mut().unwrap().storage = TopicStorage::Ram {};
+    std::fs::write(&f.config, f.cfg.to_yaml().unwrap()).unwrap();
+    tokio::time::sleep(Duration::from_millis(expires.saturating_sub(now_ms()) + 25)).await;
+    for operation in ["topic-ram", "check"] {
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_mynofy"));
+        command
+            .args(["storage", operation, "--config"])
+            .arg(&f.config);
+        if operation == "topic-ram" {
+            command.args(["--topic", "converted"]);
+        }
+        let result = command.output().await.unwrap();
+        assert!(
+            result.status.success(),
+            "{}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+        let result: Value = serde_json::from_slice(&result.stdout).unwrap();
+        assert_eq!(result["active_messages"], 1);
+    }
+    let mut owner = spawn(&f, None).await;
+    ready(&f, &mut owner).await;
+    let mut client = mynofy_client::connect_unix_client(
+        &f.dir.join("data.sock"),
+        &other_key,
+        "local",
+        Some(&other_id),
+    )
+    .await
+    .unwrap();
+    let page = mynofy_client::exchange(
+        &mut client,
+        &json!({"version":1,"type":"poll","id":"read","topic":"live"}),
+    )
+    .await
+    .unwrap();
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(page["items"][0]["message"]["id"], published["message_id"]);
+    assert_eq!(page["items"][0]["message"]["producer_id"], other_id);
+    assert_eq!(
+        page["items"][0]["message"]["payload"],
+        "survives conversion"
+    );
+    drop(client);
+    kill(&f, &mut owner).await;
 }

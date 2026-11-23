@@ -68,11 +68,17 @@ pub enum ContentEncryption {
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SecurityStorage {
+    /// Confirm security mutations only after journal synchronization (default true).
+    #[serde(default = "security_sync")]
+    pub sync: bool,
     pub directory: PathBuf,
     #[serde(default = "security_queue")]
     pub queue_capacity: usize,
     #[serde(default = "security_compaction")]
     pub compact_after_records: u64,
+}
+fn security_sync() -> bool {
+    true
 }
 fn security_queue() -> usize {
     128
@@ -312,6 +318,7 @@ impl Config {
                 .to_os_string();
             directory.push(".security");
             cfg.security_storage = Some(SecurityStorage {
+                sync: security_sync(),
                 directory: parent.join(directory),
                 queue_capacity: security_queue(),
                 compact_after_records: security_compaction(),
@@ -656,6 +663,25 @@ pub fn read_public(key: &PublicKey) -> Result<([u8; 32], u64)> {
 
 #[cfg(test)]
 mod security_tests {
+    #[test]
+    fn security_sync_defaults_to_durable_and_preserves_explicit_async() {
+        let mut storage: super::SecurityStorage =
+            serde_json::from_str(r#"{"directory":"security"}"#).unwrap();
+        assert!(storage.sync);
+        storage.sync = false;
+        let encoded = serde_json::to_string(&storage).unwrap();
+        assert!(
+            !serde_json::from_str::<super::SecurityStorage>(&encoded)
+                .unwrap()
+                .sync
+        );
+        assert!(
+            serde_json::from_str::<super::SecurityStorage>(
+                r#"{"directory":"security","sync":"true"}"#
+            )
+            .is_err()
+        );
+    }
     use super::*;
     #[test]
     fn security_storage_limits_are_checked_without_touching_disk() {
@@ -664,6 +690,7 @@ mod security_tests {
         for (capacity, compact) in [(0, 1), (4097, 1), (1, 0), (1, 1_000_001)] {
             let mut config = baseline.clone();
             config.security_storage = Some(SecurityStorage {
+                sync: false,
                 directory: "security".into(),
                 queue_capacity: capacity,
                 compact_after_records: compact,

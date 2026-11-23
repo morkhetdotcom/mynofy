@@ -4,6 +4,19 @@ use crate::{
     security::{Change, Reservation, Status},
 };
 impl Engine {
+    /// Service transports confirm this fence after releasing the Engine lock.
+    /// Embedders invoking synchronous Core APIs own their acknowledgement policy.
+    pub(crate) fn security_confirmation(&self) -> Option<crate::security::DurabilityFence> {
+        self.security
+            .as_ref()
+            .filter(|_| {
+                self.config
+                    .security_storage
+                    .as_ref()
+                    .is_some_and(|storage| storage.sync)
+            })
+            .map(|journal| journal.durability_fence())
+    }
     pub(crate) fn security_check(&self, change: &Change) -> Result<()> {
         if let Some(journal) = &self.security {
             journal.validate_change(change)?;

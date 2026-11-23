@@ -334,7 +334,7 @@ dependencies = [
 
 [[package]]
 name = "mynofy-cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures-util",
  "mynofy-client",
@@ -351,7 +351,7 @@ dependencies = [
 
 [[package]]
 name = "mynofy-client"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures-util",
  "mynofy-protocol",
@@ -366,7 +366,7 @@ dependencies = [
 
 [[package]]
 name = "mynofy-client-c"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "futures-util",
  "mynofy-client",
@@ -380,7 +380,7 @@ dependencies = [
 
 [[package]]
 name = "mynofy-protocol"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aws-lc-rs",
  "base64",
@@ -396,7 +396,7 @@ dependencies = [
 
 [[package]]
 name = "mynofy-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "aws-lc-rs",
  "bytes",

@@ -113,6 +113,9 @@ impl OfflineStorage {
         let has_manifest = store.has_state()?;
 
         let (checkpoint, entries) = if allow_empty && !has_manifest {
+            // An initialized target has an unknown cutoff after manifest loss.
+            // Never turn it into a fresh target and permit expiry rollback.
+            store.require_fresh()?;
             let image = crate::message_image::MessageImage::capture(
                 &config.service.id,
                 &[],
@@ -336,7 +339,9 @@ impl OfflineStorage {
             .filter(|(_, name)| name.as_str() != topic)
             .map(|(slot, _)| slot as u16)
             .collect();
-        let checkpoint = self.checkpoint.select(&selected, self.maximum)?;
+        let checkpoint = self
+            .checkpoint
+            .select_shared_registry(&selected, self.maximum)?;
         topics::save(
             &self.store,
             &checkpoint,

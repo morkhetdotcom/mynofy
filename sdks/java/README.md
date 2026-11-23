@@ -21,7 +21,7 @@ Im eigenen Maven-Projekt:
 <dependency>
   <groupId>dev.mynofy</groupId>
   <artifactId>mynofy-client</artifactId>
-  <version>0.1.0-SNAPSHOT</version>
+  <version>0.2.0-SNAPSHOT</version>
 </dependency>
 ```
 

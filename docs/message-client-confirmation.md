@@ -16,15 +16,10 @@ requires current Subscribe permission.
 
 ## Compatibility
 
-Retired command tags and message fields remain reserved in Protobuf. Old
-confirmation sections in MYNCP001 checkpoints are validated and discarded during
-load. New saves contain no confirmation entries or delivery allocator state.
-An existing `references.bin` is inert legacy data.
+Release v0.1.0 is the first supported baseline: protocol version 1 and C ABI 2.
+Earlier demos and development formats are not supported release versions.
+Retired Protobuf tags remain reserved. Future incompatible changes require an
+explicit version and upgrade plan; see [the protocol guide](protobuf.md).
 
-Remove retired delivery-state quota and timeout configuration keys. The legacy
-`inspect_own` ACL token remains readable for old security journals, without
-exposing retired delivery counts. The C ABI is version 2; rebuild older consumers
-against the matching header and library.
-
-For persistent CLI cursors, restart detection and storage operations, see
-[restart and storage](restart-and-storage.md).
+Legacy checkpoint import remains an implementation convenience and does not
+establish a supported pre-release compatibility contract.

@@ -25,14 +25,15 @@ Application-message sizes; transport headers excluded.
 | Measurement | Recorded result | Workload |
 | --- | ---: | --- |
 | Publish | **0.92 million messages/s** | 100,000 messages, 256-byte payloads |
-| Batched poll | **5.77 million message reads/s** | 100,000 messages, 256-byte payloads, eight readers |
-| Retained message heap | **107.9 bytes/event** | 10,000 parameterless events, including indexes |
-| Process RSS growth | **2.07 MiB** | 20,000 parameterless events after two traversals by eight readers |
+| Batched poll | **5.83 million message reads/s** | 100,000 messages, 256-byte payloads, one reader; pages of 100 |
+| Active-event RSS growth | **103 bytes/event** | 20,000 parameterless events, including indexes and allocator effects |
+| Active process RSS | **7.90 MiB** | 20,000 parameterless events; core plus benchmark driver |
 
-Reference measurements: Linux x86-64, AMD Ryzen 5 5500U, Rust 1.99.1;
-15 November 2026. Median of seven optimized core runs, excluding network/TLS and
-disk I/O. Heap and RSS values are incremental, not total process memory. Results
-predate later security fixes and are workload-dependent.
+Measured 23 November 2026: Linux x86-64, AMD Ryzen 5 5500U, Rust 1.99.1;
+medians of seven optimized core runs, excluding network/TLS and disk I/O. Request
+preparation is outside operation timers. RSS growth is measured above the
+initialized benchmark baseline; active process RSS includes the driver. Results
+are workload-dependent. Reproduce with `cargo bench --locked -p mynofy-server --bench core -- --messages 100000 --payload-bytes 256`.
 
 [Get started](docs/getting-started.md) · [Networking](docs/networking.md) ·
 [Security](docs/security.md) · [Examples](examples/code-review/README.md) ·
@@ -162,6 +163,7 @@ returns a message ID; poll returns messages and a cursor for the next request.
 | Local endpoint protection | Unix sockets use protected paths and peer-UID checks. Administration uses a separate Unix socket. |
 | Peer and owner verification | Service links require approved, certificate-authenticated peers. Proxied clients verify and authenticate independently at the final owner. |
 | Resource limits | Authentication attempts, commands, connections, channels, frames, and output have configured limits or deadlines. |
+| Security durability | Security changes receive durable journal confirmation by default; `security_storage.sync: false` opts into asynchronous confirmation. |
 | Optional content encryption | Encrypt per-topic snapshots using a shared startup secret. |
 
 Cryptography and TLS use established libraries. Security state is stored separately
@@ -189,8 +191,9 @@ that requires no AI accounts.
 - Message expiry is time-based. The owner supplies the topic default when the
   producer does not specify a time. Expired content is not an audit log.
 - Content is loaded completely at startup. Security changes apply in RAM
-  immediately and are journaled asynchronously; unsynced changes can be lost on
-  a crash. There is no exactly-once execution, replication, or offline forwarding.
+  immediately; their success confirmations wait for disk synchronization by default.
+  Setting `security_storage.sync: false` allows asynchronous confirmation and can lose
+  unsynced changes on a crash. There is no exactly-once execution, replication, or offline forwarding.
 
 REST, MQTT/Kafka/SQS connectors, and custom runtime catalogs are future options,
 not current features.

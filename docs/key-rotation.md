@@ -30,7 +30,7 @@ Jeder Vorgang hat eine feste Frist aus der Konfiguration. Wird er bis dahin nich
 
 Vor dem atomaren Commit bleibt der bisherige Schlüssel maßgeblich. Nach einem erfolgreichen Commit ist der neue Schlüssel maßgeblich, auch wenn die Antwort verloren ging. Ein Fristablauf rollt einen bereits übernommenen Schlüssel nicht zurück. Der Client behält deshalb den neuen privaten Schlüssel und kann dessen Anmeldung versuchen. Scheitert ein unvollständiger Ablauf, startet er mit dem noch gültigen akzeptierten Schlüssel neu; ist keiner mehr gültig oder vorhanden, ist eine neue Einrichtung nötig. Es wird kein automatischer Rückfall auf einen widerrufenen oder abgelaufenen Schlüssel erlaubt.
 
-Ein Prozessneustart ist davon getrennt: Der RAM-Zustand entfällt und der Dateistand wird neu geladen. Persistenz beziehungsweise ein dauerhaftes Wechseljournal sind ausdrücklich spätere Erweiterungen. Der Prototyp garantiert keine Wiederherstellung des letzten Laufzeit-Schlüsselstands nach Prozessneustart.
+On restart, the service restores the synchronized security journal. With `security_storage.sync: true`, `rotation_complete` confirms that the new key was synchronized. Durable confirmation is the default. Explicit `security_storage.sync: false` can lose unsynced changes on a crash. A lost commit response or failed synchronization leaves the outcome unknown; retain both keys and reconcile without automatically replaying the commit.
 
 Rechteentzug, Widerruf und Ablauf haben Vorrang vor einem noch offenen Commit. Die Prüfung und der Commit erfolgen serialisiert gegen die aktuelle Konfigurationsgeneration. Ein Limit schützt nicht vor jedem verteilten Angriff; zusätzliche Listener-/Quellenlimits greifen bereits vor erfolgreicher Authentifizierung.
 

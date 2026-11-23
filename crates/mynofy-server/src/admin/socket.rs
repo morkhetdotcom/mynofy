@@ -76,10 +76,40 @@ async fn connection(mut stream: UnixStream, engine: Arc<Mutex<Engine>>) -> Resul
     }
     let response = match parsed {
         Ok(request) if request.version == VERSION => {
-            let result = engine
-                .lock()
-                .map_err(|_| "Service state lock is poisoned")?
-                .admin(request.command, now_ms());
+            let mutating = matches!(
+                request.command,
+                Command::ClientAdd { .. }
+                    | Command::ClientDisable { .. }
+                    | Command::KeyAdd { .. }
+                    | Command::KeyRevoke { .. }
+                    | Command::AclSet { .. }
+                    | Command::PeerSet { .. }
+                    | Command::PeerDelete { .. }
+                    | Command::PeerDisable { .. }
+                    | Command::PeerCertificateRevoke { .. }
+                    | Command::TopicCreate { .. }
+                    | Command::TopicDelete { .. }
+            );
+            let (result, confirmation) = {
+                let mut state = engine
+                    .lock()
+                    .map_err(|_| "Service state lock is poisoned")?;
+                let result = state.admin(request.command, now_ms());
+                let confirmation = (mutating && result.is_ok())
+                    .then(|| state.security_confirmation())
+                    .flatten();
+                (result, confirmation)
+            };
+            let result = if let Some(confirmation) = confirmation
+                && confirmation.confirm().await.is_err()
+            {
+                Err(protocol::ApiError::new(
+                    "security_storage_unsynced",
+                    "RAM change applied; durable confirmation failed. Inspect security status before retrying.",
+                ))
+            } else {
+                result
+            };
             match result {
                 Ok(result) => {
                     if let ResultBody::Configuration(config) = &result {

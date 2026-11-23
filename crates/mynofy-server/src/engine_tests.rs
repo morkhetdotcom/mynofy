@@ -1624,6 +1624,7 @@ impl SecurityDirectory {
             .create(&path)
             .unwrap();
         config.security_storage = Some(SecurityStorage {
+            sync: false,
             directory: path.clone(),
             queue_capacity: capacity,
             compact_after_records: compact,
@@ -4041,6 +4042,23 @@ fn offline_restore_preserves_observed_time_and_still_allows_fresh_store_recovery
         assert_eq!(storage.check()["active_messages"], 0);
     }
     assert_eq!(Engine::new(f.cfg.clone(), NOW).unwrap().records.len(), 0);
+    // Losing the initialized target manifest must not erase its observed cutoff.
+    let manifest = directory.0.join("content/state.bin");
+    let preserved = directory.0.join("preserved-manifest");
+    std::fs::rename(&manifest, &preserved).unwrap();
+    let marker = std::fs::read(directory.0.join("content/lock")).unwrap();
+    assert_eq!(marker, b"MYNCOM01");
+    assert!(Engine::new(f.cfg.clone(), NOW).is_err());
+    let error = OfflineStorage::open_for_restore(f.cfg.clone(), None)
+        .err()
+        .expect("initialized missing manifest must fail");
+    assert!(error.to_string().contains("manifest missing"), "{error}");
+    assert!(!manifest.exists());
+    assert_eq!(
+        std::fs::read(directory.0.join("content/lock")).unwrap(),
+        marker
+    );
+    std::fs::rename(&preserved, &manifest).unwrap();
     f.cfg.content_storage.as_mut().unwrap().directory = directory.0.join("fresh-restore");
     {
         let mut storage = OfflineStorage::open_for_restore(f.cfg.clone(), None).unwrap();
@@ -4099,4 +4117,456 @@ fn expired_rotation_is_replaced_despite_cleanup_backlog_without_resetting_rate_l
         )["code"],
         "rate_limited"
     );
+}
+
+#[cfg(unix)]
+#[test]
+fn captured_content_is_an_owned_epoch_across_live_expiry_reuse_and_registry_changes() {
+    use crate::admin::Command as A;
+    let mut f = fixture();
+    let _directory = content_fixture(&mut f, ContentEncryption::None);
+    let mut ram = f.cfg.topics[0].clone();
+    ram.name = "ram-only".into();
+    ram.storage = TopicStorage::Ram {};
+    f.cfg.topics.push(ram);
+    let mut e = Engine::new(f.cfg.clone(), NOW).unwrap();
+    let a = auth(&mut e, &f.keys[0], NOW);
+    let b = auth(&mut e, &f.keys[1], NOW);
+    let original = publish(&mut e, a, json!({"snapshot":"original"}), NOW);
+    let other = send(
+        &mut e,
+        b,
+        json!({"version":1,"type":"publish","id":"other","topic":"other","payload":{"kind":"bytes","data":"b3RoZXI=","content_type":"application/other"}}),
+        NOW,
+    );
+    assert_eq!(other["type"], "result");
+    let ram = send(
+        &mut e,
+        a,
+        json!({"version":1,"type":"publish","id":"ram","topic":"ram-only","payload":"RAM-ONLY-SECRET-MARKER"}),
+        NOW,
+    );
+    assert_eq!(ram["type"], "result");
+    e.content.as_ref().unwrap().reserve().unwrap();
+    let selection = vec![
+        (
+            "local/events".into(),
+            TopicStorage::Manual { encrypted: false },
+        ),
+        ("other".into(), TopicStorage::Manual { encrypted: false }),
+    ];
+    // Keep only one RAM record, then create enough persistent records for broad capture.
+    for _ in 0..8 {
+        publish(&mut e, a, json!({"snapshot":"extra"}), NOW);
+    }
+    let capture = e.capture_content(&selection).unwrap();
+    let old_head = e.topics["local/events"].head;
+    let old_next = e.next_message;
+    let old_produced: Vec<_> = e
+        .client_names
+        .iter()
+        .map(|name| e.clients[name].produced)
+        .collect();
+    // Expire and reclaim all live records/pages, then reuse storage and add an identity.
+    let later = NOW + 400_000;
+    for _ in 0..64 {
+        e.maintenance(later);
+    }
+    assert_eq!(e.records.len(), 0);
+    let fresh = publish(&mut e, a, json!("after capture"), later);
+    assert_eq!(fresh["type"], "result");
+    let key = crypto::generate_key().unwrap();
+    e.admin(
+        A::ClientAdd {
+            public_key: crypto::encode(&crypto::public_key(&key).unwrap()),
+            valid_until: None,
+            display_name: Some("after-capture".into()),
+        },
+        later,
+    )
+    .unwrap();
+    let image = capture.finish(&selection, 128 * 1024 * 1024).unwrap();
+    assert_eq!(image.image.message_count(), 10);
+    assert_eq!(image.next_message, old_next);
+    assert_eq!(image.produced, old_produced);
+    assert_eq!(image.cutoff, NOW);
+    assert_eq!(image.topics[0].head, old_head);
+    assert_eq!(image.image.clients.len(), 2);
+    let captured_other = image
+        .image
+        .message(other["message_id"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(
+        captured_other.payload.content_type.as_deref(),
+        Some("application/other")
+    );
+    assert_eq!(
+        captured_other.payload.to_json().unwrap()["content_type"],
+        "application/other"
+    );
+
+    assert_eq!(image.image.topics, vec!["local/events", "other"]);
+    assert_eq!(
+        image
+            .image
+            .message(original["message_id"].as_str().unwrap())
+            .unwrap()
+            .payload
+            .to_json()
+            .unwrap(),
+        json!({"snapshot":"original"})
+    );
+    assert!(
+        image
+            .image
+            .message(fresh["message_id"].as_str().unwrap())
+            .is_none()
+    );
+    let bytes = image.write(128 * 1024 * 1024).unwrap();
+    assert!(
+        !bytes
+            .windows(b"RAM-ONLY-SECRET-MARKER".len())
+            .any(|w| w == b"RAM-ONLY-SECRET-MARKER")
+    );
+    e.content.as_ref().unwrap().cancel();
+    drop(e);
+    let restored = crate::content::Checkpoint::read(&bytes, &f.cfg, 128 * 1024 * 1024).unwrap();
+    assert_eq!(restored.image.message_count(), 10);
+    assert_eq!(restored.produced, old_produced);
+}
+
+#[cfg(unix)]
+#[test]
+fn selected_save_ignores_large_ram_topics_and_never_writes_their_content() {
+    let mut f = fixture();
+    let directory = content_fixture(&mut f, ContentEncryption::None);
+    f.cfg.topics[1].storage = TopicStorage::Ram {};
+    f.cfg.content_storage.as_mut().unwrap().max_snapshot_bytes = 65536;
+    f.cfg.limits.client_burst = 1000;
+    let mut e = Engine::new(f.cfg.clone(), NOW).unwrap();
+    let session = auth(&mut e, &f.keys[0], NOW);
+    let original = publish(&mut e, session, json!("small persistent message"), NOW);
+    let marker = b"PRIVATE-RAM-TOPIC-MARKER";
+    let mut bytes = vec![b'x'; 4096];
+    bytes[..marker.len()].copy_from_slice(marker);
+    for i in 0..100 {
+        let reply = send(
+            &mut e,
+            session,
+            json!({"version":1,"type":"publish","id":format!("ram-{i}"),"topic":"other","payload":{"kind":"bytes","data":crypto::encode(&bytes)}}),
+            NOW,
+        );
+        assert_eq!(reply["type"], "result", "{reply}");
+    }
+    assert!(e.payloads.allocated_bytes() > 65536);
+    e.content.as_ref().unwrap().reserve().unwrap();
+    let capture = e
+        .capture_content(&[(
+            "local/events".into(),
+            TopicStorage::Manual { encrypted: false },
+        )])
+        .unwrap();
+    assert_eq!(capture.checkpoint.image.message_count(), 1);
+    assert!(capture.checkpoint.image.blobs.allocated_bytes() < 65536);
+    drop(capture);
+    e.content.as_ref().unwrap().cancel();
+
+    let revision = e.save_content().unwrap();
+    wait_content(&e, |status| !status.save_in_progress);
+    assert_eq!(e.content_status().saved_revision, revision);
+    assert!(e.content_status().last_error.is_none());
+    for entry in std::fs::read_dir(directory.0.join("content")).unwrap() {
+        let p = entry.unwrap().path();
+        if p.is_file() {
+            let data = std::fs::read(p).unwrap();
+            assert!(!data.windows(marker.len()).any(|w| w == marker));
+        }
+    }
+    drop(e);
+    let mut restored = Engine::new(f.cfg, NOW).unwrap();
+    assert_eq!(restored.records.len(), 1);
+    let session = auth(&mut restored, &f.keys[0], NOW);
+    assert_eq!(
+        get(
+            &mut restored,
+            session,
+            original["message_id"].as_str().unwrap(),
+            NOW
+        )["type"],
+        "message_status"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn worker_projection_failure_preserves_manifest_dirty_state_and_save_budget() {
+    let mut f = fixture();
+    let directory = content_fixture(&mut f, ContentEncryption::None);
+    f.cfg.content_storage.as_mut().unwrap().max_snapshot_bytes = 65536;
+    f.cfg.limits.client_burst = 1000;
+    let mut e = Engine::new(f.cfg.clone(), NOW).unwrap();
+    let session = auth(&mut e, &f.keys[0], NOW);
+    publish(
+        &mut e,
+        session,
+        json!("saved before oversized projection"),
+        NOW,
+    );
+    let revision = e.save_content().unwrap();
+    wait_content(&e, |s| s.saved_revision == revision && !s.save_in_progress);
+    let manifest = directory.0.join("content/state.bin");
+    let original = std::fs::read(&manifest).unwrap();
+    let payload = json!({"kind":"bytes","data":crypto::encode(&[7;4096])});
+    for _ in 0..32 {
+        assert_eq!(
+            publish(&mut e, session, payload.clone(), NOW)["type"],
+            "result"
+        );
+    }
+    e.save_content().unwrap();
+    wait_content(&e, |s| !s.save_in_progress && s.last_error.is_some());
+    assert!(e.content_status().dirty);
+    assert_eq!(e.content_status().working_memory_reserved_bytes, 0);
+    assert_eq!(std::fs::read(&manifest).unwrap(), original);
+    assert_eq!(e.records.len(), 33);
+    e.content.as_ref().unwrap().reserve().unwrap();
+    e.content.as_ref().unwrap().cancel();
+    drop(e);
+    assert_eq!(Engine::new(f.cfg, NOW).unwrap().records.len(), 1);
+}
+
+#[test]
+fn basic_status_never_runs_storage_diagnostics_and_explicit_stats_keep_expired_residents() {
+    use crate::admin::{Command as A, ResultBody};
+    let f = fixture();
+    let mut e = Engine::new(f.cfg, NOW).unwrap();
+    let producer = e.clients[&f.ids[0]].slot;
+    for i in 0..257 {
+        e.publish_typed(
+            producer,
+            "p",
+            "local/events",
+            Payload::bytes(vec![42; if i == 256 { 7 } else { 32 }], None),
+            Some(protocol::Expires {
+                time: protocol::timestamp(NOW + if i == 256 { 5000 } else { 1000 }).unwrap(),
+            }),
+            NOW,
+        )
+        .unwrap();
+    }
+    let before = STORAGE_STATS_SCANS.with(|scans| scans.get());
+    let ResultBody::Data(status) = e.admin(A::Status {}, NOW + 1000).unwrap() else {
+        panic!("status data")
+    };
+    assert_eq!(STORAGE_STATS_SCANS.with(|scans| scans.get()), before);
+    assert!(status.get("storage").is_none());
+    assert!(status.get("active_records").is_none());
+    assert_eq!(status["resident_messages"], e.records.len());
+    assert!(e.records.len() > 1); // Bounded normal cleanup leaves expired residents.
+    let ResultBody::Data(stats) = e.admin(A::StorageStats {}, NOW + 1000).unwrap() else {
+        panic!("storage data")
+    };
+    assert_eq!(STORAGE_STATS_SCANS.with(|scans| scans.get()), before + 1);
+    assert_eq!(stats["active_records"], 1);
+    assert_eq!(stats["resident_records"], e.records.len());
+    assert_eq!(stats["expired_resident_records"], e.records.len() - 1);
+    assert_eq!(stats["payload_data_bytes"], (e.records.len() - 1) * 32 + 7);
+    assert_eq!(stats["record_bytes"], 80);
+    e.admin(A::Status {}, NOW + 1000).unwrap();
+    assert_eq!(STORAGE_STATS_SCANS.with(|scans| scans.get()), before + 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn offline_topic_ram_keeps_bindings_of_untouched_expired_producers_on_reopen() {
+    use crate::content::offline::OfflineStorage;
+    let mut f = fixture();
+    let _directory = content_fixture(&mut f, ContentEncryption::None);
+    let mut third = f.cfg.topics[0].clone();
+    third.name = "converted".into();
+    f.cfg.topics.push(third);
+    let now = crate::transport::now_ms() - 5000;
+    let mut e = Engine::new(f.cfg.clone(), now).unwrap();
+    let old = auth(&mut e, &f.keys[0], now);
+    let live = auth(&mut e, &f.keys[1], now);
+    assert_eq!(
+        send(
+            &mut e,
+            old,
+            json!({"version":1,"type":"publish","id":"old","topic":"local/events","payload":"expired producer","expires":{"time":protocol::timestamp(now+1000).unwrap()}}),
+            now
+        )["type"],
+        "result"
+    );
+    let message = send(
+        &mut e,
+        live,
+        json!({"version":1,"type":"publish","id":"live","topic":"other","payload":"survives offline conversion"}),
+        now,
+    );
+    assert_eq!(message["type"], "result");
+    let revision = e.save_content().unwrap();
+    wait_content(&e, |s| !s.save_in_progress && s.saved_revision == revision);
+    drop(e);
+    f.cfg.topics[2].storage = TopicStorage::Ram {};
+    {
+        let mut store = OfflineStorage::open(f.cfg.clone(), None).unwrap();
+        assert_eq!(store.check()["active_messages"], 1);
+        store.topic_to_ram("converted").unwrap();
+        assert_eq!(store.check()["active_messages"], 1);
+    }
+    assert_eq!(
+        OfflineStorage::open(f.cfg.clone(), None).unwrap().check()["active_messages"],
+        1
+    );
+    let now = crate::transport::now_ms();
+    let mut reopened = Engine::new(f.cfg, now).unwrap();
+    let session = auth(&mut reopened, &f.keys[1], now);
+    let page = send(
+        &mut reopened,
+        session,
+        json!({"version":1,"type":"poll","id":"check","topic":"other"}),
+        now,
+    );
+    assert_eq!(page["items"].as_array().unwrap().len(), 1);
+    assert_eq!(page["items"][0]["message"]["id"], message["message_id"]);
+    assert_eq!(page["items"][0]["message"]["producer_id"], f.ids[1]);
+    assert_eq!(
+        page["items"][0]["message"]["payload"],
+        "survives offline conversion"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn combined_topic_replacement_budgets_the_final_generation_in_both_orders() {
+    for reverse in [false, true] {
+        let mut f = fixture();
+        let directory = content_fixture(&mut f, ContentEncryption::None);
+        f.cfg.content_storage.as_mut().unwrap().max_snapshot_bytes = 90000;
+        if reverse {
+            f.cfg.topics.reverse();
+        }
+        let mut e = Engine::new(f.cfg.clone(), NOW).unwrap();
+        let producer = e.clients[&f.ids[0]].slot;
+        for _ in 0..7 {
+            e.publish_typed(
+                producer,
+                "old",
+                "other",
+                Payload::bytes(vec![7; 3700], None),
+                Some(protocol::Expires {
+                    time: protocol::timestamp(NOW + 1000).unwrap(),
+                }),
+                NOW,
+            )
+            .unwrap();
+        }
+        let revision = e.save_content().unwrap();
+        wait_content(&e, |s| !s.save_in_progress && s.saved_revision == revision);
+        drop(e);
+        let now = NOW + 2000;
+        let mut e = Engine::new(f.cfg.clone(), now).unwrap();
+        assert_eq!(e.records.len(), 0);
+        let producer = e.clients[&f.ids[0]].slot;
+        for _ in 0..7 {
+            e.publish_typed(
+                producer,
+                "new",
+                "local/events",
+                Payload::bytes(vec![9; 3700], None),
+                None,
+                now,
+            )
+            .unwrap();
+        }
+        let manifest = directory.0.join("content/state.bin");
+        let previous = std::fs::read(&manifest).unwrap();
+        // An untouched old B still consumes disk space: replacing only A must fail.
+        e.save_content_topics(Some(&["local/events".to_owned()]))
+            .unwrap();
+        wait_content(&e, |s| !s.save_in_progress);
+        assert!(
+            e.content_status()
+                .last_error
+                .as_ref()
+                .is_some_and(|e| e.contains("aggregate size"))
+        );
+        assert_eq!(std::fs::read(&manifest).unwrap(), previous);
+        let revision = e.save_content().unwrap();
+        wait_content(&e, |s| !s.save_in_progress);
+        assert!(
+            e.content_status().last_error.is_none(),
+            "reverse={reverse}: {:?}",
+            e.content_status().last_error
+        );
+        assert_eq!(e.content_status().saved_revision, revision);
+        drop(e);
+        let mut reopened = Engine::new(f.cfg, now).unwrap();
+        assert_eq!(reopened.records.len(), 7);
+        let session = auth(&mut reopened, &f.keys[0], now);
+        let page = poll(&mut reopened, session, None, 20, now);
+        assert_eq!(page["items"].as_array().unwrap().len(), 7);
+        for item in page["items"].as_array().unwrap() {
+            assert_eq!(
+                item["message"]["payload"]["data"],
+                crypto::encode(&[9; 3700])
+            );
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn empty_ram_topic_names_do_not_consume_disk_budget_in_both_capture_paths() {
+    let mut f = fixture();
+    let directory = content_fixture(&mut f, ContentEncryption::None);
+    f.cfg.content_storage.as_mut().unwrap().max_snapshot_bytes = 65536;
+    f.cfg.topics[1].storage = TopicStorage::Ram {};
+    let base = f.cfg.topics[1].clone();
+    for i in 0..2199 {
+        let mut topic = base.clone();
+        topic.name = format!("ram/{i}");
+        f.cfg.topics.push(topic);
+    }
+    let mut e = Engine::new(f.cfg.clone(), NOW).unwrap();
+    let session = auth(&mut e, &f.keys[0], NOW);
+    let message = publish(&mut e, session, json!("persistent"), NOW);
+    assert_eq!(message["type"], "result");
+    // First broad, then indexed: one persistent and one RAM record.
+    for sparse in [false, true] {
+        if sparse {
+            assert_eq!(
+                send(
+                    &mut e,
+                    session,
+                    json!({"version":1,"type":"publish","id":"ram","topic":"other","payload":"RAM only"}),
+                    NOW
+                )["type"],
+                "result"
+            );
+        }
+        let revision = e.save_content().unwrap();
+        wait_content(&e, |s| !s.save_in_progress);
+        assert!(
+            e.content_status().last_error.is_none(),
+            "sparse={sparse}: {:?}",
+            e.content_status().last_error
+        );
+        assert_eq!(e.content_status().saved_revision, revision);
+    }
+    drop(e);
+    let mut reopened = Engine::new(f.cfg, NOW).unwrap();
+    assert_eq!(reopened.records.len(), 1);
+    let revision = reopened.save_content().unwrap();
+    wait_content(&reopened, |s| !s.save_in_progress);
+    assert!(reopened.content_status().last_error.is_none());
+    assert_eq!(reopened.content_status().saved_revision, revision);
+    let total: u64 = std::fs::read_dir(directory.0.join("content"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|s| s == "bin"))
+        .map(|p| std::fs::metadata(p).unwrap().len())
+        .sum();
+    assert!(total <= 65536, "{total}");
 }

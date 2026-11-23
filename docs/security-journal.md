@@ -1,6 +1,44 @@
-# Asynchrones Security-Journal
+# Security-Journal
 
-Inhalte und Sicherheitszustand sind getrennt. Nachrichten, Bestätigungspaare und Topic-Fortschritt bleiben standardmäßig im RAM und können separat über Content-Saves gespeichert werden. Sessions und unvollständige Schlüsselwechsel bleiben flüchtig. Bestätigte Sicherheitsänderungen wirken sofort im RAM und werden unmittelbar geordnet zur Speicherung eingereiht. Die Antwort wartet weder auf Schreiben noch auf `sync_all`. Ein Prozessabbruch vor der Synchronisierung kann deshalb eine bereits im RAM wirksame Änderung verlieren.
+Message content and security state have separate lifecycles. Security changes
+apply immediately in RAM and enter an ordered append-only journal. By default,
+successful service security-mutation responses wait for disk synchronization.
+Explicit `sync: false` allows asynchronous confirmations and can lose unsynced
+changes on a crash.
+
+## Durable security confirmations
+
+Durable confirmation is the default, including when the security storage section
+is omitted. This explicit configuration selects the same default (YAML or JSON):
+
+```yaml
+security_storage:
+  directory: ./security
+  sync: true
+```
+
+Only set `sync: false` to opt out of durable confirmation.
+
+`sync` defaults to `true`. With the default, successful security mutation responses on
+the Admin socket and successful client key-rotation commits wait for the journal
+sequence to be synchronized to disk. This includes client/key/ACL changes, peer
+policy changes and topic security resets. It does not make message publications
+or topic content durable; those retain their separate storage policy.
+
+RAM changes and session invalidations still happen immediately. The service waits
+outside the Engine mutex, on a blocking worker, with a five-second fence deadline;
+other clients and Admin status reads can continue. The Admin connection itself
+also has a bounded deadline. If synchronization fails, Admin returns
+`security_storage_unsynced` when its deadline permits a response. The change is
+already applied in RAM and may become durable later. Inspect status instead of
+blindly retrying. A failed rotation confirmation closes the client connection,
+preserving an unknown commit outcome; retain both keys until reconciled.
+
+Admin status exposes `security_storage.sync`, `submitted_sequence`,
+`durable_sequence` and `last_error`. The asynchronous journal and retry mechanism
+are the same in both modes; `sync` changes the service's success-confirmation
+policy. Embedded synchronous Engine APIs still modify RAM and enqueue records;
+only the service transports perform the asynchronous confirmation wait.
 
 ## Einrichtung
 

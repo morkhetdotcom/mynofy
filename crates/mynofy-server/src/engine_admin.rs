@@ -266,8 +266,9 @@ impl Engine {
                 json!({"queued":true,"revision":revision})
             }
             AdminCommand::Status {} => {
-                json!({"service_id":self.config.service.id,"restart_counter":self.restart_counter,"clients":self.clients.len(),"registered_keys":self.keys.len(),"sessions":self.sessions.keys().filter(|id|self.authenticated(**id,now)).count(),"topics":self.topics.len(),"storage":self.storage_stats(),"message_bytes_charged":self.active_bytes,"cleanup_pending":self.cleanup_record.is_some()||self.cleanup_batch.is_some()||self.expiry.has_due(now)||self.records.needs_reclaim()||self.rotation_expiry.first().is_some_and(|entry|entry.0<=now),"limits":self.config.limits,"security_storage":self.security_status(),"content_storage":self.content_status(),"service_links":self.link_status.lock().map_err(|_|ApiError::internal())?.clone()})
+                json!({"service_id":self.config.service.id,"restart_counter":self.restart_counter,"clients":self.clients.len(),"registered_keys":self.keys.len(),"sessions":self.sessions.keys().filter(|id|self.authenticated(**id,now)).count(),"topics":self.topics.len(),"resident_messages":self.records.len(),"message_bytes_charged":self.active_bytes,"cleanup_pending":self.cleanup_record.is_some()||self.cleanup_batch.is_some()||self.expiry.has_due(now)||self.records.needs_reclaim()||self.rotation_expiry.first().is_some_and(|entry|entry.0<=now),"limits":self.config.limits,"security_storage":self.security_status(),"content_storage":self.content_status(),"service_links":self.link_status.lock().map_err(|_|ApiError::internal())?.clone()})
             }
+            AdminCommand::StorageStats {} => json!(self.storage_stats()),
             AdminCommand::Export {} => {
                 return Ok(ResultBody::Configuration(Box::new(self.admin_export()?)));
             }

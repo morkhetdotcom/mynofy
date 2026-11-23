@@ -47,7 +47,13 @@ fn fixture() -> Fixture {
 }
 #[tokio::test]
 async fn unix_publish_poll_rotate_and_cleanup() {
-    let f = fixture();
+    let mut f = fixture();
+    f.config.security_storage = Some(mynofy_server::config::SecurityStorage {
+        sync: true,
+        directory: f.dir.join("security"),
+        queue_capacity: 128,
+        compact_after_records: 4096,
+    });
     f.config.validate().unwrap();
     let bound = transport::bind_unix(&f.socket).unwrap();
     let meta = std::fs::symlink_metadata(&f.socket).unwrap();

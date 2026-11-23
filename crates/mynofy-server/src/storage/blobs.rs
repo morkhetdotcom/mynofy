@@ -6,7 +6,7 @@ const MAX_LOG: u8 = 12;
 const CLASSES: usize = (MAX_LOG - MIN_LOG + 1) as usize;
 #[derive(Clone)]
 pub(super) struct Page {
-    pub bytes: Box<[u8]>,
+    pub bytes: super::block::Block,
     first_word: usize,
 }
 impl Page {
@@ -15,7 +15,7 @@ impl Page {
         let mut bytes = vec![0; 8 + slots.div_ceil(64) * 8 + PAGE].into_boxed_slice();
         bytes[0] = log;
         Self {
-            bytes,
+            bytes: bytes.into(),
             first_word: 0,
         }
     }
@@ -145,11 +145,16 @@ impl Blobs {
             self.empty += 1;
         }
     }
+    pub(crate) fn freeze(&mut self) {
+        for page in self.pages.iter_mut().flatten() {
+            page.bytes.freeze();
+        }
+    }
     pub(crate) fn allocated_bytes(&self) -> usize {
         self.pages
             .iter()
             .flatten()
-            .map(|page| page.bytes.len())
+            .map(|page| page.bytes.len() + page.bytes.sharing_bytes())
             .sum::<usize>()
             + self.pages.capacity() * size_of::<Option<Page>>()
             + self
@@ -213,7 +218,7 @@ impl Blobs {
                 return Err(ApiError::invalid());
             }
             let page = Page {
-                bytes,
+                bytes: bytes.into(),
                 first_word: 0,
             };
             if page.bytes.len() != page.header() + PAGE || page.live() > page.slots() {
@@ -312,7 +317,10 @@ mod tests {
         let rebuilt = Blobs::rebuild(
             pool.pages
                 .iter()
-                .map(|page| page.as_ref().map(|page| page.bytes.clone()))
+                .map(|page| {
+                    page.as_ref()
+                        .map(|page| page.bytes.to_vec().into_boxed_slice())
+                })
                 .collect(),
         )
         .unwrap();

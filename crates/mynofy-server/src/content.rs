@@ -65,7 +65,7 @@ struct Schedule {
 }
 struct Save {
     security: Option<crate::security::DurabilityFence>,
-    checkpoint: Checkpoint,
+    capture: checkpoint::Capture,
     selected: Vec<(String, TopicStorage)>,
 }
 struct Shared {
@@ -286,7 +286,7 @@ impl ContentRuntime {
     }
     pub(crate) fn submit(
         &self,
-        checkpoint: Checkpoint,
+        capture: checkpoint::Capture,
         selected: Vec<(String, TopicStorage)>,
         security: Option<crate::security::DurabilityFence>,
     ) -> Result<()> {
@@ -294,7 +294,7 @@ impl ContentRuntime {
             sender
                 .try_send(Save {
                     security,
-                    checkpoint,
+                    capture,
                     selected,
                 })
                 .is_err()
@@ -476,15 +476,16 @@ impl Startup {
                 let mut entries = self.entries;
                 while let Ok(Save {
                     security,
-                    checkpoint,
+                    capture,
                     selected,
                 }) = receiver.recv()
                 {
-                    let revision = checkpoint.revision;
+                    let revision = capture.checkpoint.revision;
                     let result = (|| -> std::result::Result<(), BoxError> {
                         if let Some(fence) = security {
                             fence.wait()?;
                         }
+                        let checkpoint = capture.finish(&selected, maximum)?;
                         topics::save(
                             &self.store,
                             &checkpoint,
@@ -496,7 +497,6 @@ impl Startup {
                         )?;
                         Ok(())
                     })();
-                    drop(checkpoint);
                     let failure = match result {
                         Ok(()) => None,
                         Err(error) => Some(error.to_string()),

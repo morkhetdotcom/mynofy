@@ -98,6 +98,14 @@ async fn run(
     let mut publish_samples = Vec::with_capacity(messages);
     let mut poll_samples = Vec::with_capacity(messages);
     let mut empty_samples = Vec::with_capacity(1000);
+    // Fault benchmark sample pages in before the RSS baseline: do not attribute
+    // the driver's sample storage to retained server messages.
+    publish_samples.resize(messages, 1);
+    publish_samples.clear();
+    poll_samples.resize(messages, 1);
+    poll_samples.clear();
+    empty_samples.resize(1000, 1);
+    empty_samples.clear();
     // One immutable prepared Publish template is deliberately reused; no generator in the loop.
     let rss_baseline = rss_bytes();
     for i in 0..messages {

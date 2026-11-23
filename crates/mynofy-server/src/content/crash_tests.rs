@@ -168,6 +168,7 @@ fn config(root: &Path, mode: ContentEncryption) -> Config {
         max_snapshot_bytes: 4 * 1024 * 1024,
     });
     config.security_storage = Some(SecurityStorage {
+        sync: false,
         directory: root.join("security"),
         queue_capacity: 128,
         compact_after_records: 4096,

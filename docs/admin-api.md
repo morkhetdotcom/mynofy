@@ -2,6 +2,39 @@
 
 Die Verwaltungs-API ist implementiert und verwendet einen eigenen Unix-Socket. Sie verwaltet Identitäten, Schlüssel und ACLs im laufenden Owner. Sie ist weder Teil des Nachrichtenprotokolls noch über Topics, REST oder den WSS-Port erreichbar. Sie funktioniert neben einem WSS-Datenlistener oder einem lokalen Daten-Unix-Socket.
 
+## Basic status and explicit storage diagnostics
+
+```sh
+# Routine monitoring: no full message-storage scan.
+mynofy admin status --socket .local/unix/run/mynofy-admin.sock
+
+# On-demand record, payload, arena and index statistics.
+mynofy admin storage stats --socket .local/unix/run/mynofy-admin.sock
+```
+
+`status` reports service identity, client/key/session/topic counts,
+`resident_messages`, charged message bytes, limits, security/content persistence
+health and service links. `resident_messages` is the constant-time resident record
+count, including expired records awaiting normal bounded cleanup. It is not an
+exact active-message count. Session validation and configured metadata processing
+remain; this is not a constant-time claim for arbitrary metadata sizes.
+
+`storage_stats` scans resident messages to report active/expired counts, payload
+bytes, record layout, allocated arena/pages and index sizes. It holds the owner
+lock for a consistent view, so use it on demand rather than as a frequent health
+check. Both commands are read-only and do not wait for security durability.
+
+Admin JSON request (on the separate protected Unix socket):
+
+```json
+{"version":1,"command":{"op":"storage_stats"}}
+```
+
+The former `status.result.storage` object moves to `storage_stats.result`;
+the CLI prints that result directly. Update scripts that consumed detailed storage
+fields to use the explicit command. Routine save/journal monitoring keeps using
+`status` and its `content_storage` / `security_storage` fields.
+
 ## Aktivieren
 
 In der bestehenden Startkonfiguration unter `service` ergänzen:
@@ -70,7 +103,7 @@ Lokale Topics und TTL-Policies können über die [Topic-Verwaltung](runtime-topi
 
 ## Expliziter Export
 
-Sicherheitsmutationen wirken sofort im RAM und werden automatisch im separaten [Security-Journal](security-journal.md) eingereiht. Die Antwort wartet nicht auf Datenträger-I/O. Ein Neustart stellt den synchronisierten Sicherheitszustand wieder her; noch ausstehende Writes können bei einem Absturz verloren gehen. Der Status enthält dafür `security_storage` mit eingereihter/dauerhafter Sequenz, Queue-Belegung und Speicherfehler. Eine volle Queue weist neue Mutationen vor ihrer Wirkung mit `security_storage_busy` ab. Die ursprüngliche CFG-Datei wird nie automatisch zurückgeschrieben. Ein Export enthält die aktuell registrierten Keys einschließlich abgeschlossener Rotation, Laufzeit-Registrierungen, Sperrflags und aktuelle ACLs:
+Sicherheitsmutationen wirken sofort im RAM und werden automatisch im separaten [Security-Journal](security-journal.md) eingereiht. By default (`security_storage.sync: true`), successful security-mutation replies wait for the captured journal sequence outside the core lock. Explicit `security_storage.sync: false` allows asynchronous confirmation. `security_storage_unsynced` means RAM was changed but durable confirmation failed; inspect status before retrying. Read-only requests remain immediate. Ein Neustart stellt den synchronisierten Sicherheitszustand wieder her; noch ausstehende Writes können bei einem Absturz verloren gehen. Der Status enthält dafür `security_storage` mit eingereihter/dauerhafter Sequenz, Queue-Belegung und Speicherfehler. Eine volle Queue weist neue Mutationen vor ihrer Wirkung mit `security_storage_busy` ab. Die ursprüngliche CFG-Datei wird nie automatisch zurückgeschrieben. Ein Export enthält die aktuell registrierten Keys einschließlich abgeschlossener Rotation, Laufzeit-Registrierungen, Sperrflags und aktuelle ACLs:
 
 ```sh
 cargo run --locked -- admin export \
@@ -132,3 +165,8 @@ Im [Peer-/Proxy-Betrieb](service-network.md) enthält Status zusätzlich `servic
 `peers list|set|delete|disable|enable` und
 `peers revoke-certificate|revoked-certificates` erweitern denselben getrennten
 Admin-Socket. [Befehle, Sicherheitswirkung und Persistenz](runtime-peers.md).
+
+All completed responses use the same JSONL framing: one JSON object followed by
+LF and connection shutdown, including `security_storage_unsynced` errors. A
+transport interruption or deadline can still truncate a response; never interpret
+such a partial frame as a successful mutation confirmation.

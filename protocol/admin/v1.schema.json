@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://mynofy.local/protocol/admin/v1",
   "title": "mynofy local admin v1",
-  "description": "Separate same-UID Unix socket; one JSON line per connection. Security mutations are journaled asynchronously; topic topology and policy changes affect RAM until explicitly saved or exported.",
+  "description": "Separate same-UID Unix socket; one JSON line per connection. Basic status avoids full storage scans; storage_stats provides explicit diagnostics. Security changes apply in RAM; durable confirmations are the default; security_storage.sync=false opts out. Topic topology and policy affect RAM until saved or exported.",
   "oneOf": [
     {
       "$ref": "#/$defs/request"
@@ -302,6 +302,9 @@
             },
             {
               "$ref": "#/$defs/status"
+            },
+            {
+              "$ref": "#/$defs/storage_stats"
             },
             {
               "$ref": "#/$defs/export"
@@ -811,6 +814,18 @@
               "type": "null"
             }
           ]
+        }
+      },
+      "required": [
+        "op"
+      ],
+      "additionalProperties": false
+    },
+    "storage_stats": {
+      "type": "object",
+      "properties": {
+        "op": {
+          "const": "storage_stats"
         }
       },
       "required": [

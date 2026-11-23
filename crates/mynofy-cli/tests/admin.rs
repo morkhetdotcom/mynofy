@@ -76,6 +76,10 @@ async fn raw(f: &Fixture, request: &[u8]) -> Value {
     stream.write_all(request).await.unwrap();
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await.unwrap();
+    assert!(
+        response.ends_with(b"\n"),
+        "Admin response must be JSONL: {response:?}"
+    );
     serde_json::from_slice(&response).unwrap()
 }
 async fn cli(args: &[&str]) -> std::process::Output {
@@ -289,7 +293,7 @@ async fn admin_rejects_malformed_duplicate_oversized_and_message_protocol_reques
     );
     let status = call(&f, A::Status {}).await;
     assert_eq!(status["clients"], 1);
-    assert_eq!(status["storage"]["resident_records"], 0);
+    assert_eq!(status["resident_messages"], 0);
     server.abort();
     let _ = server.await;
 }
@@ -538,9 +542,39 @@ async fn security_journal_recovers_after_sigkill_while_messages_stay_in_ram() {
     ) {
         return;
     }
-    let f = fixture();
+    journal_crash_recovery(false).await;
+}
+#[tokio::test]
+async fn synchronous_security_survives_sigkill_without_status_barrier() {
+    if support::under_unprivileged_identity(
+        "synchronous_security_survives_sigkill_without_status_barrier",
+    ) {
+        return;
+    }
+    journal_crash_recovery(true).await;
+}
+async fn journal_crash_recovery(sync: bool) {
+    let mut f = fixture();
+    if !sync {
+        f.config.security_storage = Some(mynofy_server::config::SecurityStorage {
+            sync: false,
+            directory: f.dir.join("config.json.security"),
+            queue_capacity: 128,
+            compact_after_records: 4096,
+        });
+    }
     let config = f.dir.join("config.json");
     std::fs::write(&config, serde_json::to_vec(&f.config).unwrap()).unwrap();
+    // Omitted storage configuration must enable durable service confirmations;
+    // the asynchronous branch is an explicit opt-out, never an implicit default.
+    assert_eq!(
+        Config::load(&config)
+            .unwrap()
+            .security_storage
+            .unwrap()
+            .sync,
+        sync
+    );
     let stderr = f.dir.join("server.stderr");
     let launch = || {
         tokio::process::Command::new(env!("CARGO_BIN_EXE_mynofy"))
@@ -644,20 +678,27 @@ async fn security_journal_recovers_after_sigkill_while_messages_stay_in_ram() {
     let published=mynofy_client::exchange(&mut client,&json!({"version":1,"type":"publish","id":"p","topic":"local/events","payload":"volatile crash test"})).await.unwrap();
     assert_eq!(published["type"], "result");
     drop(client);
-    // Observe beyond the listener's initial 20-token burst even on fast disks.
-    // This exercises sustained monitoring instead of depending on slow fsync.
-    let mut observations = 0;
-    observed_status(
-        &f,
-        &mut server,
-        "journal durability before SIGKILL",
-        false,
-        |status| {
-            observations += 1;
-            observations >= 24 && status["security_storage"]["durable_sequence"] == 2
-        },
-    )
-    .await;
+    if sync {
+        let public = &f.config.clients[0].keys[0].public_key;
+        let token = crypto::token_id(&crypto::decode::<32>(public).unwrap());
+        call(&f, A::KeyRevoke { token }).await;
+        // No status polling or grace interval between the durable reply and SIGKILL.
+    } else {
+        // Observe beyond the listener's initial 20-token burst even on fast disks.
+        // This exercises sustained monitoring instead of depending on slow fsync.
+        let mut observations = 0;
+        observed_status(
+            &f,
+            &mut server,
+            "journal durability before SIGKILL",
+            false,
+            |status| {
+                observations += 1;
+                observations >= 24 && status["security_storage"]["durable_sequence"] == 2
+            },
+        )
+        .await;
+    }
     let storage = f.dir.join("config.json.security");
     assert!(std::fs::metadata(storage.join("journal")).unwrap().len() > 0);
     server.kill().await.unwrap();
@@ -672,9 +713,25 @@ async fn security_journal_recovers_after_sigkill_while_messages_stay_in_ram() {
         "survives-crash"
     );
     let status = call(&f, A::Status {}).await;
-    assert_eq!(status["security_storage"]["durable_sequence"], 2);
-    assert_eq!(status["security_storage"]["snapshot_sequence"], 2);
-    assert_eq!(status["storage"]["resident_records"], 0);
+    assert_eq!(
+        status["security_storage"]["durable_sequence"],
+        if sync { 3 } else { 2 }
+    );
+    assert_eq!(
+        status["security_storage"]["snapshot_sequence"],
+        if sync { 3 } else { 2 }
+    );
+    assert_eq!(status["resident_messages"], 0);
+    if sync {
+        let revoked = call(
+            &f,
+            A::ClientGet {
+                client: f.config.clients[0].client_id.clone(),
+            },
+        )
+        .await;
+        assert_eq!(revoked["keys"].as_array().unwrap().len(), 0);
+    }
     let mut client = mynofy_client::connect_unix_client(&f.data, &key, "local", Some(&id))
         .await
         .unwrap();
@@ -829,6 +886,203 @@ async fn admin_cli_manages_topics_with_live_data_acl_and_export() {
         )
         .await["allow"],
         json!([])
+    );
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn synchronous_security_reports_failed_sync_without_blocking_reads_or_rolling_back_ram() {
+    if support::under_unprivileged_identity(
+        "synchronous_security_reports_failed_sync_without_blocking_reads_or_rolling_back_ram",
+    ) {
+        return;
+    }
+    let mut f = fixture();
+    let directory = f.dir.join("security");
+    f.config.security_storage = Some(mynofy_server::config::SecurityStorage {
+        sync: true,
+        directory: directory.clone(),
+        queue_capacity: 8,
+        compact_after_records: 1,
+    });
+    let server = start(&f, f.config.clone()).await;
+    assert_eq!(
+        raw(&f, b"{\"version\":1,\"command\":{\"op\":\"status\"}}\n").await["ok"],
+        true
+    );
+    std::fs::create_dir(directory.join("snapshot.tmp")).unwrap();
+    let id = f.config.clients[0].client_id.clone();
+    call(
+        &f,
+        A::AclSet {
+            client: id.clone(),
+            topic: "local/events".into(),
+            allow: vec![],
+        },
+    )
+    .await;
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let status = call(&f, A::Status {}).await;
+            if !status["security_storage"]["last_error"].is_null() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(125)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let token =
+        crypto::token_id(&crypto::decode::<32>(&f.config.clients[0].keys[0].public_key).unwrap());
+    let mut request = serde_json::to_vec(&admin::Request {
+        version: admin::VERSION,
+        command: A::KeyRevoke {
+            token: token.clone(),
+        },
+    })
+    .unwrap();
+    request.push(b'\n');
+    let reply = raw(&f, &request).await;
+    assert_eq!(reply["ok"], false, "{reply}");
+    assert_eq!(reply["error"]["code"], "security_storage_unsynced");
+    // A repeated revoke reports not_found, never a false durable success.
+    let reply = admin::request(&f.admin, A::KeyRevoke { token })
+        .await
+        .unwrap();
+    assert_eq!(reply["error"]["code"], "not_found");
+    let client = call(&f, A::ClientGet { client: id }).await;
+    assert_eq!(client["keys"].as_array().unwrap().len(), 0);
+    let status = call(&f, A::Status {}).await;
+    assert_eq!(status["security_storage"]["sync"], true);
+    assert_eq!(status["security_storage"]["submitted_sequence"], 2);
+    assert_eq!(status["security_storage"]["durable_sequence"], 1);
+    std::fs::remove_dir(directory.join("snapshot.tmp")).unwrap();
+    // A later mutation can be confirmed after the writer recovers.
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let status = call(&f, A::Status {}).await;
+            if status["security_storage"]["durable_sequence"] == 2 {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(125)).await;
+        }
+    })
+    .await
+    .unwrap();
+    call(
+        &f,
+        A::AclSet {
+            client: f.config.clients[0].client_id.clone(),
+            topic: "local/events".into(),
+            allow: vec![],
+        },
+    )
+    .await;
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn synchronous_rotation_sync_failure_preserves_unknown_commit_outcome() {
+    if support::under_unprivileged_identity(
+        "synchronous_rotation_sync_failure_preserves_unknown_commit_outcome",
+    ) {
+        return;
+    }
+    let mut f = fixture();
+    let directory = f.dir.join("security");
+    f.config.security_storage = Some(mynofy_server::config::SecurityStorage {
+        sync: true,
+        directory: directory.clone(),
+        queue_capacity: 8,
+        compact_after_records: 1,
+    });
+    let key = crypto::generate_key().unwrap();
+    let public = crypto::public_key(&key).unwrap();
+    let id = crypto::initial_client_id(&public);
+    let server = start(&f, f.config.clone()).await;
+    std::fs::create_dir(directory.join("snapshot.tmp")).unwrap();
+    call(
+        &f,
+        A::ClientAdd {
+            public_key: crypto::encode(&public),
+            valid_until: None,
+            display_name: None,
+        },
+    )
+    .await;
+    tokio::time::timeout(std::time::Duration::from_secs(3), async {
+        loop {
+            let status = call(&f, A::Status {}).await;
+            if !status["security_storage"]["last_error"].is_null() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(125)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let mut client = mynofy_client::connect_unix_client(&f.data, &key, "local", Some(&id))
+        .await
+        .unwrap();
+    let new = crypto::generate_key().unwrap();
+    let error = mynofy_client::rotate_client(&mut client, &key, &new, "local", &id)
+        .await
+        .unwrap_err();
+    let error = error
+        .downcast_ref::<mynofy_client::RotationError>()
+        .unwrap();
+    assert!(error.outcome_unknown(), "{error}");
+    assert!(error.broker.is_none());
+    assert_eq!(error.phase, mynofy_client::RotationPhase::Commit);
+    let state = call(&f, A::ClientGet { client: id }).await;
+    assert_eq!(
+        state["keys"][0]["public_key"],
+        crypto::encode(&crypto::public_key(&new).unwrap())
+    );
+    std::fs::remove_dir(directory.join("snapshot.tmp")).unwrap();
+    server.abort();
+    let _ = server.await;
+}
+
+#[tokio::test]
+async fn admin_cli_separates_basic_status_from_explicit_storage_diagnostics() {
+    if support::under_unprivileged_identity(
+        "admin_cli_separates_basic_status_from_explicit_storage_diagnostics",
+    ) {
+        return;
+    }
+    let f = fixture();
+    let server = start(&f, f.config.clone()).await;
+    let socket = f.admin.to_str().unwrap();
+    let status = cli(&["admin", "status", "--socket", socket]).await;
+    assert!(
+        status.status.success(),
+        "{}",
+        String::from_utf8_lossy(&status.stderr)
+    );
+    let status: Value = serde_json::from_slice(&status.stdout).unwrap();
+    assert_eq!(status["resident_messages"], 0);
+    assert!(status.get("storage").is_none());
+    let stats = cli(&["admin", "storage", "stats", "--socket", socket]).await;
+    assert!(
+        stats.status.success(),
+        "{}",
+        String::from_utf8_lossy(&stats.stderr)
+    );
+    let stats: Value = serde_json::from_slice(&stats.stdout).unwrap();
+    assert_eq!(stats["resident_records"], 0);
+    assert_eq!(stats["active_records"], 0);
+    assert_eq!(stats["record_bytes"], 80);
+    assert!(stats.get("security_storage").is_none());
+    assert_eq!(
+        raw(
+            &f,
+            b"{\"version\":1,\"command\":{\"op\":\"storage_stats\",\"unexpected\":true}}\n"
+        )
+        .await["error"]["code"],
+        "invalid_request"
     );
     server.abort();
     let _ = server.await;

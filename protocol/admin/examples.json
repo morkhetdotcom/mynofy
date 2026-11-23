@@ -8,6 +8,12 @@
   {
     "version": 1,
     "command": {
+      "op": "storage_stats"
+    }
+  },
+  {
+    "version": 1,
+    "command": {
       "op": "clients_list",
       "limit": 20
     }

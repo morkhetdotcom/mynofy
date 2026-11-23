@@ -266,7 +266,18 @@ pub(super) fn save(
     let mut next = entries.clone();
     // Configured RAM topics are absent from the captured persistent registry; remove old entries.
     next.retain(|name, _| checkpoint.image.topics.contains(name));
-    let mut total = next.values().map(|entry| entry.bytes).sum::<u64>();
+    // Budget the next committed generation, not a mixture of old and new
+    // selected files. Old slots remain on disk until the atomic manifest commit.
+    let replacing: std::collections::HashSet<_> =
+        selected.iter().map(|(name, _)| name.as_str()).collect();
+    let mut total = next
+        .iter()
+        .filter(|(name, _)| !replacing.contains(name.as_str()))
+        .try_fold(0u64, |total, (_, entry)| {
+            total
+                .checked_add(entry.bytes)
+                .ok_or("Topic storage size overflow")
+        })?;
     // One pass over the captured records/pairs, rather than one whole scan per topic.
     let mut record_slots = vec![Vec::new(); checkpoint.image.topics.len()];
     for (slot, record) in checkpoint.image.records.iter_slots() {
@@ -298,7 +309,6 @@ pub(super) fn save(
         };
         let topic = owned.as_ref().unwrap_or(checkpoint);
         let bytes = encryption::encode(topic.write(maximum)?, mode(storage, common), secret)?;
-        total = total.saturating_sub(next.get(name).map_or(0, |entry| entry.bytes));
         total = total
             .checked_add(bytes.len() as u64)
             .ok_or("Topic storage size overflow")?;

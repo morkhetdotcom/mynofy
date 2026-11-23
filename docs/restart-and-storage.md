@@ -139,3 +139,18 @@ newline and terminate locally on overflow, even if stdin remains open. Explicit
 `expires: null` is invalid command input; omit `expires` to use owner policy.
 Backup and Admin file output report parent-directory synchronization failures
 rather than claiming a durable newly created name.
+
+## Restore target integrity and retained producer bindings
+
+A normal restore requires either a valid existing manifest (whose observed expiry
+cutoff is preserved) or a genuinely fresh destination marked as such. A previously
+committed store with a missing manifest is not a fresh destination: restore fails
+without replacing its files, because its previous cutoff is unknown. Recover the
+missing manifest from a consistent store copy, or deliberately choose a separate
+fresh destination. Restoring into a new destination does not preserve a lost
+destination's expiry history. Current security is never restored from content.
+
+Offline `topic-ram` keeps the shared producer registry referenced by untouched
+topic files, including producers whose messages have expired. This preserves
+other topics' ability to reopen and bind messages to their original producers;
+it does not re-enable credentials or grant permissions.

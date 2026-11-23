@@ -450,7 +450,7 @@ async fn capacity_rejections_correlate_without_publish_and_preserve_the_session(
     let status = admin::request(&service.admin, admin::Command::Status {})
         .await
         .unwrap();
-    assert_eq!(status["result"]["storage"]["resident_records"], 100);
+    assert_eq!(status["result"]["resident_messages"], 100);
     let Message::Binary(page) = timeout(Duration::from_secs(3), slow.next())
         .await
         .unwrap()
@@ -487,5 +487,5 @@ async fn capacity_rejections_correlate_without_publish_and_preserve_the_session(
     let status = admin::request(&service.admin, admin::Command::Status {})
         .await
         .unwrap();
-    assert_eq!(status["result"]["storage"]["resident_records"], 101);
+    assert_eq!(status["result"]["resident_messages"], 101);
 }

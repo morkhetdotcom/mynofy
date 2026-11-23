@@ -402,8 +402,34 @@ pub(crate) async fn websocket_connection<S: AsyncRead + AsyncWrite + Unpin + Sen
                 } else {
                     None
                 };
-                let kind =
-                    locked(&engine)?.handle_protobuf_into(id, &raw, now_ms(), output.prepare());
+                let (kind, confirmation) = {
+                    let mut state = locked(&engine)?;
+                    let kind = state.handle_protobuf_into(id, &raw, now_ms(), output.prepare());
+                    let confirmation = (kind == "rotation_complete")
+                        .then(|| state.security_confirmation())
+                        .flatten();
+                    (kind, confirmation)
+                };
+                if let Some(confirmation) = confirmation {
+                    // A failed commit confirmation is an unknown outcome, never a
+                    // broker rejection promising that the rotation was not applied.
+                    if !session_output(
+                        async move {
+                            confirmation.confirm().await.map_err(|error| {
+                                tokio_tungstenite::tungstenite::Error::Io(std::io::Error::other(
+                                    error,
+                                ))
+                            })
+                        },
+                        &mut invalidated,
+                        session_deadline(&engine, id, true, auth_until)?,
+                        network_deadline,
+                    )
+                    .await?
+                    {
+                        return Ok(());
+                    }
+                }
                 let response = Message::Binary(output.take());
                 let authenticated = locked(&engine)?.authenticated(id, now_ms());
                 let close =

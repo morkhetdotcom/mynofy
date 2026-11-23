@@ -231,6 +231,7 @@ impl State {
 #[derive(Default, Serialize, Clone)]
 pub(crate) struct Status {
     pub enabled: bool,
+    pub sync: bool,
     pub submitted_sequence: u64,
     pub durable_sequence: u64,
     pub snapshot_sequence: u64,
@@ -251,12 +252,16 @@ impl Shared {
             .unwrap_or_else(|poison| poison.into_inner())
     }
 }
-// Save-job metadata only: no per-message state and no on-disk format change.
+// Sequence-bound confirmation metadata: no per-message state or disk-format change.
 pub(crate) struct DurabilityFence {
     shared: Arc<Shared>,
     sequence: u64,
 }
 impl DurabilityFence {
+    pub(crate) async fn confirm(self) -> std::result::Result<(), BoxError> {
+        // Never block the runtime or retain the Engine mutex while waiting for fsync.
+        tokio::task::spawn_blocking(move || self.wait()).await?
+    }
     pub(crate) fn wait(self) -> std::result::Result<(), BoxError> {
         self.wait_for(std::time::Duration::from_secs(5))
     }
@@ -278,7 +283,9 @@ impl DurabilityFence {
             if !self.shared.alive.load(Ordering::Acquire)
                 || self.shared.stopping.load(Ordering::Acquire)
             {
-                return Err("Security writer stopped before content dependency was durable".into());
+                return Err(
+                    "Security writer stopped before the requested sequence was durable".into(),
+                );
             }
             let remaining = deadline.saturating_duration_since(std::time::Instant::now());
             if remaining.is_zero() {
@@ -346,6 +353,7 @@ impl Journal {
                 progress: Condvar::new(),
                 status: Mutex::new(Status {
                     enabled: true,
+                    sync: options.sync,
                     submitted_sequence: sequence,
                     durable_sequence: sequence,
                     snapshot_sequence: sequence,
@@ -504,6 +512,40 @@ impl OfflineLock {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn confirmation_wait_keeps_runtime_responsive_and_waits_for_its_sequence() {
+        let shared = Arc::new(Shared {
+            progress: Condvar::new(),
+            status: Mutex::new(Status::default()),
+            pending: AtomicUsize::new(1),
+            stopping: AtomicBool::new(false),
+            alive: AtomicBool::new(true),
+        });
+        let fence = DurabilityFence {
+            shared: shared.clone(),
+            sequence: 2,
+        };
+        let waiter = tokio::spawn(fence.confirm());
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert!(!waiter.is_finished());
+        {
+            let mut status = shared.status();
+            status.durable_sequence = 1;
+            shared.progress.notify_all();
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        assert!(!waiter.is_finished());
+        {
+            let mut status = shared.status();
+            status.durable_sequence = 2;
+            shared.progress.notify_all();
+        }
+        tokio::time::timeout(std::time::Duration::from_secs(1), waiter)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+    }
     #[test]
     fn content_fence_waits_for_exact_sequence_and_bounds_failures() {
         fn shared(durable: u64) -> Arc<Shared> {

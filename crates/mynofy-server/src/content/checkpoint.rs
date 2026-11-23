@@ -21,6 +21,83 @@ pub(crate) struct Checkpoint {
     pub produced: Vec<u64>,
     pub topics: Vec<TopicState>,
 }
+/// An isolated RAM epoch, never written directly. May include unselected RAM
+/// topics until the content worker projects it into a persistent checkpoint.
+pub(crate) struct Capture {
+    pub checkpoint: Checkpoint,
+    /// None when a sparse selection was already compacted during capture.
+    pub persistent_topics: Option<Vec<String>>,
+}
+impl Capture {
+    pub(crate) fn finish(
+        self,
+        selected: &[(String, crate::config::TopicStorage)],
+        maximum: u64,
+    ) -> crate::protocol::Result<Checkpoint> {
+        let source = self.checkpoint;
+        let Some(persistent_topics) = self.persistent_topics else {
+            return Ok(source);
+        };
+        let slots: Vec<_> = selected
+            .iter()
+            .map(|(name, _)| {
+                source
+                    .image
+                    .topics
+                    .iter()
+                    .position(|topic| topic == name)
+                    .and_then(|slot| u16::try_from(slot).ok())
+                    .ok_or_else(crate::protocol::ApiError::internal)
+            })
+            .collect::<crate::protocol::Result<_>>()?;
+        // Bound the image itself here; Checkpoint::write and topics::save count
+        // actual serialized headers and aggregate files, never live RAM topics.
+        // Keep all producer bindings for unselected, previously committed topics.
+        // Checkpoint::select would trim that registry to the selected producers.
+        let mut image = MessageImage::selected(
+            &source.image.owner,
+            &source.image.clients,
+            &source.image.topics,
+            (
+                &source.image.records,
+                &source.image.types,
+                &source.image.blobs,
+            ),
+            &slots,
+            Checkpoint::image_limits(maximum),
+        )?;
+        for name in persistent_topics {
+            if !image.topics.contains(&name) {
+                image.topics.push(name);
+            }
+        }
+        let topics = image
+            .topics
+            .iter()
+            .map(|name| {
+                let slot = source
+                    .image
+                    .topics
+                    .iter()
+                    .position(|topic| topic == name)
+                    .ok_or_else(crate::protocol::ApiError::internal)?;
+                Ok(TopicState {
+                    head: source.topics[slot].head,
+                    policy: source.topics[slot].policy.clone(),
+                })
+            })
+            .collect::<crate::protocol::Result<_>>()?;
+        Ok(Checkpoint {
+            image,
+            revision: source.revision,
+            next_message: source.next_message,
+            reserved_ids: source.reserved_ids,
+            cutoff: source.cutoff,
+            produced: source.produced,
+            topics,
+        })
+    }
+}
 struct Bounded {
     bytes: Zeroizing<Vec<u8>>,
     maximum: usize,
@@ -65,6 +142,23 @@ impl Checkpoint {
         maximum: u64,
         indices: Option<&[u32]>,
     ) -> crate::protocol::Result<Self> {
+        self.project(selected, maximum, indices, true)
+    }
+    /// Keep bindings used by topic files that the caller reuses without rewriting.
+    pub(super) fn select_shared_registry(
+        &self,
+        selected: &[u16],
+        maximum: u64,
+    ) -> crate::protocol::Result<Self> {
+        self.project(selected, maximum, None, false)
+    }
+    fn project(
+        &self,
+        selected: &[u16],
+        maximum: u64,
+        indices: Option<&[u32]>,
+        compact_clients: bool,
+    ) -> crate::protocol::Result<Self> {
         let mut image = MessageImage::selected_indexed(
             &self.image.owner,
             &self.image.clients,
@@ -75,7 +169,7 @@ impl Checkpoint {
             indices,
         )?;
         let mut produced = self.produced.clone();
-        if !selected.is_empty() {
+        if compact_clients && !selected.is_empty() {
             let mut used = vec![false; image.clients.len()];
             for record in image.records.iter() {
                 used[record.producer_slot()] = true;

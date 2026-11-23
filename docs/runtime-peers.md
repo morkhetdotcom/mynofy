@@ -92,8 +92,9 @@ die aktuelle Owner-ACL bleibt die maßgebliche Clientautorisierung.
 Peer-Freigaben, Sperren und Zertifikatswiderrufe sind Sicherheitskonfiguration.
 Sie wirken sofort im RAM und werden geordnet asynchron im bestehenden
 Security-Journal gespeichert. Bei voller/nicht verfügbarer Queue erfolgt vor
-Mutation ein Fehler. Der Admin-Security-Status zeigt den dauerhaften Stand;
-eine Laufzeitbestätigung ist weiterhin kein synchroner Disk-Commit.
+Mutation ein Fehler. Der Admin-Security-Status zeigt den dauerhaften Stand.
+With `security_storage.sync: true`, successful peer-mutation responses additionally
+confirm a synchronized journal sequence; this is the default; explicit `sync: false` allows asynchronous confirmation.
 
 Neustart lädt den gespeicherten Sicherheitsstand, ein Admin-Export enthält ihn.
 Die Originalkonfiguration wird nicht zurückgeschrieben. Neue optionale CFG-Felder:

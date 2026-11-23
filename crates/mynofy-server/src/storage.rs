@@ -31,6 +31,7 @@ fn put(bytes: &mut [u8], at: usize, value: &[u8]) {
     bytes[at..at + value.len()].copy_from_slice(value);
 }
 mod arena;
+mod block;
 pub(crate) use arena::Arena;
 mod blobs;
 pub(crate) use blobs::Blobs;

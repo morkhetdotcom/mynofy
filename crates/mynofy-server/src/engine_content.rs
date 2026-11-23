@@ -1,5 +1,8 @@
 use super::*;
-use crate::content::{Checkpoint, checkpoint::TopicState};
+use crate::content::{
+    Checkpoint,
+    checkpoint::{Capture, TopicState},
+};
 impl Engine {
     pub fn enable_topic_storage(
         &mut self,
@@ -52,87 +55,7 @@ impl Engine {
         let selected = content.selection(requested)?;
         content.reserve()?;
         let revision = content.revision;
-        let maximum = content.maximum;
-        let snapshot = (|| -> Result<Checkpoint> {
-            // Conservative aggregate allowance for capture, topic copy, encoding,
-            // encryption growth and index scratch. This is not a process RSS cap.
-            let storage_bytes = self
-                .records
-                .allocated_bytes()
-                .saturating_add(self.payloads.allocated_bytes())
-                .saturating_add(self.content_types.table_bytes())
-                .saturating_add(
-                    self.client_names
-                        .iter()
-                        .chain(&self.topic_names)
-                        .map(|name| name.len().saturating_add(256))
-                        .sum::<usize>(),
-                );
-            let working = storage_bytes
-                .checked_mul(6)
-                .and_then(|bytes| bytes.checked_add(1024 * 1024))
-                .ok_or_else(|| {
-                    ApiError::new(
-                        "content_memory_budget_exceeded",
-                        "Content working-memory estimate overflow.",
-                    )
-                })?;
-            if working > self.config.limits.max_content_working_bytes {
-                return Err(ApiError::new(
-                    "content_memory_budget_exceeded",
-                    "Content capture exceeds the configured working-memory allowance.",
-                ));
-            }
-
-            content.reserve_working(working);
-            let selected_slots: Vec<_> = selected
-                .iter()
-                .map(|(name, _)| self.topics[name].slot)
-                .collect();
-            let controls = (self.client_names.len() * 8 + self.topic_names.len() * 32 + 128) as u64;
-            let image_maximum = maximum
-                .checked_sub(controls)
-                .ok_or_else(ApiError::exhausted)?;
-            let mut image = crate::message_image::MessageImage::selected(
-                &self.config.service.id,
-                &self.client_names,
-                &self.topic_names,
-                (&self.records, &self.content_types, &self.payloads),
-                &selected_slots,
-                Checkpoint::image_limits(image_maximum),
-            )?;
-            // Retain registry names for unselected persistent topics, without copying their records.
-            for topic in &self.config.topics {
-                if topic.owner_id == self.config.service.id
-                    && topic.storage.persistent()
-                    && !image.topics.contains(&topic.name)
-                {
-                    image.topics.push(topic.name.clone());
-                }
-            }
-            let produced = self
-                .client_names
-                .iter()
-                .map(|name| self.clients[name].produced)
-                .collect();
-            let topics = image
-                .topics
-                .iter()
-                .map(|name| TopicState {
-                    head: self.topics[name].head,
-                    policy: self.topics[name].policy.clone(),
-                })
-                .collect();
-            Ok(Checkpoint {
-                image,
-                revision,
-                next_message: self.next_message,
-                reserved_ids: self.message_ids.reserved_position(),
-                cutoff: self.last_cleanup_now,
-                produced,
-                topics,
-            })
-        })();
+        let snapshot = self.capture_content(&selected);
         let content = self.content.as_ref().ok_or_else(ApiError::internal)?;
         match snapshot {
             Ok(snapshot) => content.submit(
@@ -148,6 +71,134 @@ impl Engine {
             }
         }
         Ok(revision)
+    }
+    /// Caller holds the Engine lock and has reserved the single content-save slot.
+    pub(super) fn capture_content(
+        &mut self,
+        selected: &[(String, crate::config::TopicStorage)],
+    ) -> Result<Capture> {
+        let content = self.content.as_ref().ok_or_else(ApiError::internal)?;
+        let revision = content.revision;
+        // Conservative aggregate allowance for capture, topic copy, encoding,
+        // encryption growth and index scratch. This is not a process RSS cap.
+        let storage_bytes = self
+            .records
+            .allocated_bytes()
+            .saturating_add(self.payloads.allocated_bytes())
+            .saturating_add(self.content_types.table_bytes())
+            .saturating_add(
+                self.client_names
+                    .iter()
+                    .chain(&self.topic_names)
+                    .map(|name| name.len().saturating_add(256))
+                    .sum::<usize>(),
+            );
+        let working = storage_bytes
+            .checked_mul(6)
+            .and_then(|bytes| bytes.checked_add(1024 * 1024))
+            .ok_or_else(|| {
+                ApiError::new(
+                    "content_memory_budget_exceeded",
+                    "Content working-memory estimate overflow.",
+                )
+            })?;
+        if working > self.config.limits.max_content_working_bytes {
+            return Err(ApiError::new(
+                "content_memory_budget_exceeded",
+                "Content capture exceeds the configured working-memory allowance.",
+            ));
+        }
+
+        content.reserve_working(working);
+        let selected_records: usize = selected
+            .iter()
+            .map(|(name, _)| self.topics[name].messages.len())
+            .sum();
+        let resident_records = self.records.len();
+        let broad = selected_records != 0
+            && selected_records.saturating_mul(8) >= self.records.len().saturating_mul(7);
+        let persistent_topics: Vec<_> = self
+            .config
+            .topics
+            .iter()
+            .filter(|topic| topic.owner_id == self.config.service.id && topic.storage.persistent())
+            .map(|topic| topic.name.clone())
+            .collect();
+        let mut image = if broad {
+            // Pin initialized blocks, not individual records/payloads. Selection
+            // and compaction run later over this immutable RAM epoch.
+            // These bounds describe live RAM, not the serialized snapshot limit.
+            crate::message_image::MessageImage::capture_shared(
+                &self.config.service.id,
+                &self.client_names,
+                &self.topic_names,
+                &mut self.records,
+                &self.content_types,
+                &mut self.payloads,
+                crate::message_image::ImageLimits {
+                    max_bytes: working as u64,
+                    max_records: resident_records,
+                    max_record_chunks: usize::MAX,
+                    max_blob_pages: usize::MAX,
+                },
+            )?
+        } else {
+            // Small selections must not copy unrelated RAM payload pages. Use the
+            // existing topic indexes and preserve arena iteration order.
+            let mut indices: Vec<_> = selected
+                .iter()
+                .flat_map(|(name, _)| self.topics[name].messages.range(..).map(|(_, slot)| slot))
+                .collect();
+            indices.sort_unstable();
+            let slots: Vec<_> = selected
+                .iter()
+                .map(|(name, _)| self.topics[name].slot)
+                .collect();
+            // Final encoded-size accounting belongs to the writer. Unselected
+            // live topic metadata is not part of the persisted generation.
+            let maximum = content.maximum;
+            crate::message_image::MessageImage::selected_indexed(
+                &self.config.service.id,
+                &self.client_names,
+                &self.topic_names,
+                (&self.records, &self.content_types, &self.payloads),
+                &slots,
+                Checkpoint::image_limits(maximum),
+                Some(&indices),
+            )?
+        };
+        if !broad {
+            for name in &persistent_topics {
+                if !image.topics.contains(name) {
+                    image.topics.push(name.clone());
+                }
+            }
+        }
+        let produced = self
+            .client_names
+            .iter()
+            .map(|name| self.clients[name].produced)
+            .collect();
+        let topics = image
+            .topics
+            .iter()
+            .map(|name| TopicState {
+                head: self.topics[name].head,
+                policy: self.topics[name].policy.clone(),
+            })
+            .collect();
+        Ok(Capture {
+            checkpoint: Checkpoint {
+                image,
+                revision,
+                next_message: self.next_message,
+                reserved_ids: self.message_ids.reserved_position(),
+                cutoff: self.last_cleanup_now,
+                produced,
+                topics,
+            },
+            persistent_topics: broad.then_some(persistent_topics),
+        })
     }
     // Private and called exactly once by the constructor. No live restore/reload API exists.
     pub(super) fn restore_content(&mut self, checkpoint: Checkpoint, now: u64) -> Result<()> {

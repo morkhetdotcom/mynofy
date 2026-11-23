@@ -98,19 +98,20 @@ The whole load/decrypt phase finishes before the service accepts clients; there
 is no lazy content loading. Encryption does not hide data from the running owner
 or protect a compromised process that already holds the secret.
 
-Security state is separate. Registration, ACL, and other security changes apply
-in RAM immediately and enter an asynchronous append-only journal with bounded
-recovery and compaction. A successful change is not a synchronous `fsync` promise;
-a crash can lose unsynced updates. Content publish acknowledgment is likewise not
-a disk-commit acknowledgment. Back up and protect the relevant storage and secrets
-according to your deployment's recovery requirements.
+Security state is separate. Changes take effect in RAM immediately and enter an
+append-only journal. By default (`security_storage.sync: true`), successful Admin
+security mutations and key-rotation commits confirm disk synchronization.
+Explicit `security_storage.sync: false` allows asynchronous confirmations;
+unsynced changes can then be lost on a crash. Waiting does not hold the core lock. Storage errors do not roll
+back RAM changes. See the [security journal guide](security-journal.md).
+Content publishing retains its separate durability contract.
 
 ## Reporting vulnerabilities
 
 Follow [SECURITY.md](../SECURITY.md). Do not include real private keys, tokens,
 production configs, or customer message content in public issues or pull requests.
 
-Operational limits and durability checks are described in the [content storage guide](content-storage.md). Security updates take effect in RAM before asynchronous persistence; a successful mutation alone is not a durable-sync receipt.
+Operational limits and durability checks are described in the [content storage guide](content-storage.md). Security updates take effect in RAM immediately; durable success confirmations are the default; `security_storage.sync: false` explicitly opts out.
 
 Client sessions now notify their transports when ACL/key/client changes disconnect
 them. A blocked response send is cancelled and its transport is dropped without

@@ -89,6 +89,7 @@ async fn run(messages: usize, size: usize, mode: &str) -> Result<(), BoxError> {
         encrypted: mode != "none",
     };
     config.security_storage = Some(SecurityStorage {
+        sync: false,
         directory: directory.0.join("security"),
         queue_capacity: 128,
         compact_after_records: 4096,

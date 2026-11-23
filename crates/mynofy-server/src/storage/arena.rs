@@ -5,7 +5,7 @@ pub(super) const HEADER: usize = 40;
 pub(super) const BYTES: usize = HEADER + CHUNK * RECORD_BYTES;
 #[derive(Clone)]
 pub(super) struct Chunk {
-    pub bytes: Box<[u8]>,
+    pub bytes: super::block::Block,
 }
 impl Chunk {
     fn live(&self) -> usize {
@@ -55,7 +55,7 @@ impl Arena {
                 id
             };
             self.chunks[id as usize] = Some(Chunk {
-                bytes: vec![0; BYTES].into_boxed_slice(),
+                bytes: vec![0; BYTES].into_boxed_slice().into(),
             });
             self.available.push(id);
             self.empty += 1;
@@ -175,8 +175,17 @@ impl Arena {
     pub(crate) fn capacity(&self) -> usize {
         self.chunks.iter().flatten().count() * CHUNK
     }
+    pub(crate) fn freeze(&mut self) {
+        for chunk in self.chunks.iter_mut().flatten() {
+            chunk.bytes.freeze();
+        }
+    }
     pub(crate) fn allocated_bytes(&self) -> usize {
-        self.capacity() / CHUNK * BYTES
+        self.chunks
+            .iter()
+            .flatten()
+            .map(|chunk| chunk.bytes.len() + chunk.bytes.sharing_bytes())
+            .sum::<usize>()
             + self.chunks.capacity() * size_of::<Option<Chunk>>()
             + self.available.capacity() * 4
             + self.vacant.capacity() * 4
@@ -228,7 +237,9 @@ impl Arena {
             if bytes.len() != BYTES || bytes[4..8].iter().any(|byte| *byte != 0) {
                 return Err(ApiError::invalid());
             }
-            let chunk = Chunk { bytes };
+            let chunk = Chunk {
+                bytes: bytes.into(),
+            };
             let live = (0..4)
                 .map(|word| u64_at(&chunk.bytes, 8 + word * 8).count_ones() as usize)
                 .sum::<usize>();

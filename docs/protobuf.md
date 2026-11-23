@@ -1,6 +1,11 @@
 # Protobuf und typisierte Payloads
 
-Current model: [stateless polling and upgrade notes](message-client-confirmation.md). ACK/NACK, delivery IDs, confirmation counters and pair limits have been removed; update services and clients together.
+Release **v0.1.0 is the first compatibility baseline**. Earlier development and
+demo formats are not supported releases and require no migration support.
+Within protocol version 1, preserve existing field numbers, meanings and required
+fields. New optional fields must preserve behavior when absent; retired tags stay
+reserved. Incompatible changes require a new protocol version and an explicit
+upgrade plan. The listener rejects unsupported frame versions.
 
 ## Verfügbare Schnittstelle
 
@@ -8,11 +13,11 @@ Client und CLI verwenden ausschließlich binäre Protobuf-Nachrichten über dens
 
 Die CLI liest und schreibt weiter JSONL für Menschen und Terminalwerkzeuge. Dafür wandelt sie an der Grenze zwischen der lesbaren Darstellung und Protobuf um. Für direkten Zugriff ohne JSON-Konvertierung bietet das SDK `exchange_frame` mit `mynofy_protocol::pb::Frame`. `exchange` ist die bisherige JSON-förmige Komfort-API mit Protobuf auf dem Netzwerk; `exchange_json` wurde entfernt; ein JSON-Text-Wire-Modus für Client-Commands existiert nicht mehr.
 
-Alle bestehenden lokalen Client-Commands haben Protobuf-Varianten: Auth, Publish/Poll, Producer-Abfragen, Permissions, Katalogabruf und Rotation. Peer-/Proxy-Nachrichten sind davon nicht betroffen, weil ihr Laufzeittransport noch Entwurf ist. Der Versionswert bleibt 1; das gesamte Protokoll ist weiterhin ein veränderlicher Prototyp und keine Zusage stabiler Wire-Kompatibilität.
+Alle bestehenden lokalen Client-Commands haben Protobuf-Varianten: Auth, Publish/Poll, Producer-Abfragen, Permissions, Katalogabruf und Rotation. Peer/proxy control messages use a separate protocol; see [networking](networking.md). Protocol version 1 uses release v0.1.0 as its compatibility baseline.
 
 ## Schema und Generierung
 
-[generate.py](../protocol/protobuf/generate.py) enthält die Felddefinitionen und erzeugt das [portable proto2-Schema](../protocol/protobuf/mynofy.proto), prost-Derives, JSON-Adapter und die statischen Katalog-Enums/Mitgliedschaftsprüfungen. Feldnummern dürfen nach Stabilisierung nicht umgedeutet oder wiederverwendet werden. Es gibt keinen zur Laufzeit benötigten Descriptor-Loader und keine Build-Abhängigkeit zu `protoc`/`prost-build`.
+[generate.py](../protocol/protobuf/generate.py) enthält die Felddefinitionen und erzeugt das [portable proto2-Schema](../protocol/protobuf/mynofy.proto), prost-Derives, JSON-Adapter und die statischen Katalog-Enums/Mitgliedschaftsprüfungen. Existing field numbers must not be reinterpreted or reused. Es gibt keinen zur Laufzeit benötigten Descriptor-Loader und keine Build-Abhängigkeit zu `protoc`/`prost-build`.
 
 ```sh
 python3 protocol/protobuf/generate.py

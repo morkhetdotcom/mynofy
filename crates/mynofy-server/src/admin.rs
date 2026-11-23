@@ -105,6 +105,7 @@ pub enum Command {
         topics: Option<Vec<String>>,
     },
     Status {},
+    StorageStats {},
     Export {},
 }
 /// SHA-256 of the complete leaf certificate DER, not its public key/SPKI.

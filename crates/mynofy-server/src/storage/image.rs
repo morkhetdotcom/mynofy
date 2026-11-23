@@ -150,6 +150,21 @@ impl MessageImage {
         }
         Ok(())
     }
+    /// Pin initialized blocks in one owner epoch. Later live writes detach only
+    /// the affected block; unique writes outside snapshot lifetimes stay ordinary.
+    pub(crate) fn capture_shared(
+        owner: &str,
+        clients: &[String],
+        topics: &[String],
+        records: &mut Arena,
+        types: &ContentTypes,
+        blobs: &mut Blobs,
+        limits: ImageLimits,
+    ) -> Result<Self> {
+        records.freeze();
+        blobs.freeze();
+        Self::capture(owner, clients, topics, records, types, blobs, limits)
+    }
     pub(crate) fn capture(
         owner: &str,
         clients: &[String],

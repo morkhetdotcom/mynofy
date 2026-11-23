@@ -19,6 +19,11 @@ use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use zeroize::Zeroizing;
 
+#[cfg(test)]
+thread_local! {
+    static STORAGE_STATS_SCANS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 struct Topic {
     slot: u16,
     head: u64,
@@ -369,8 +374,10 @@ impl Engine {
             limits,
         )
     }
-    /// Profiling only: scans records, never called during normal command handling.
+    /// Explicit diagnostics only: scans resident records, not used by basic status.
     pub fn storage_stats(&self) -> StorageStats {
+        #[cfg(test)]
+        STORAGE_STATS_SCANS.with(|scans| scans.set(scans.get() + 1));
         // Diagnose all resident records once, including expired payloads that
         // still occupy RAM. Do not add counters to the publish/poll hot path.
         let mut active_records = 0;
