@@ -1,0 +1,146 @@
+[
+  {
+    "connection": "producer-a",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "publish",
+      "id": "pub-1",
+      "topic": "jobs/run-7",
+      "payload": {
+        "task": "check",
+        "run_id": "run-7"
+      }
+    }
+  },
+  {
+    "connection": "producer-a",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "result",
+      "request_id": "pub-1",
+      "message_id": "msg-10",
+      "expires": {
+        "time": "2026-12-01T12:00:00Z"
+      }
+    }
+  },
+  {
+    "connection": "producer-a",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "get_message",
+      "id": "status-1",
+      "message_id": "msg-10"
+    }
+  },
+  {
+    "connection": "producer-a",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "message_status",
+      "request_id": "status-1",
+      "message": {
+        "id": "msg-10",
+        "topic": "jobs/run-7",
+        "payload": {
+          "task": "check",
+          "run_id": "run-7"
+        },
+        "expires": {
+          "time": "2026-12-01T12:00:00Z"
+        },
+        "producer_id": "client:ed25519:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+      },
+      "created_at": "2026-11-11T10:00:00Z"
+    }
+  },
+  {
+    "connection": "producer-a",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "publish",
+      "id": "pub-2",
+      "topic": "jobs/run-7",
+      "payload": {
+        "task": "check",
+        "run_id": "run-7"
+      }
+    }
+  },
+  {
+    "connection": "producer-a",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "result",
+      "request_id": "pub-2",
+      "message_id": "msg-11",
+      "expires": {
+        "time": "2026-12-01T12:01:00Z"
+      }
+    }
+  },
+  {
+    "connection": "producer-a",
+    "direction": "client_to_service",
+    "note": "Nach Entzug der Topic-Rechte; Client bleibt mit gültigem Token erneut authentifiziert.",
+    "frame": {
+      "version": 1,
+      "type": "get_message",
+      "id": "own-after-revoke",
+      "message_id": "msg-10"
+    }
+  },
+  {
+    "connection": "producer-a",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "message_status",
+      "request_id": "own-after-revoke",
+      "message": {
+        "id": "msg-10",
+        "topic": "jobs/run-7",
+        "payload": {
+          "task": "check",
+          "run_id": "run-7"
+        },
+        "expires": {
+          "time": "2026-12-01T12:00:00Z"
+        },
+        "producer_id": "client:ed25519:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+      },
+      "created_at": "2026-11-11T10:00:00Z"
+    }
+  },
+  {
+    "connection": "producer-a",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "publish",
+      "id": "pub-after-revoke",
+      "topic": "jobs/run-7",
+      "payload": {
+        "task": "check",
+        "run_id": "run-7"
+      }
+    }
+  },
+  {
+    "connection": "producer-a",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "error",
+      "request_id": "pub-after-revoke",
+      "code": "forbidden",
+      "detail": "Publish permission required."
+    }
+  }
+]

@@ -1,0 +1,29 @@
+[package]
+name = "mynofy-protocol"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "mynofy wire types and optional shared authentication primitives"
+
+[features]
+default = []
+crypto = ["dep:aws-lc-rs"]
+transport = ["dep:tokio", "dep:tokio-tungstenite", "dep:futures-util"]
+
+[dependencies]
+prost.workspace = true
+bytes.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+time.workspace = true
+aws-lc-rs = { workspace = true, optional = true }
+base64.workspace = true
+
+tokio = { workspace = true, features = ["io-util"], optional = true }
+tokio-tungstenite = { workspace = true, optional = true }
+futures-util = { workspace = true, optional = true }
+
+[[example]]
+name = "sdk_vectors"
+required-features = ["crypto"]

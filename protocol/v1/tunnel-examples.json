@@ -1,0 +1,64 @@
+[
+  {
+    "frame": {
+      "version": 1,
+      "type": "client_tunnel",
+      "id": "owner",
+      "topic": "team/events",
+      "owner_id": "owner"
+    }
+  },
+  {
+    "frame": {
+      "version": 1,
+      "type": "client_tunnel_ready",
+      "request_id": "owner",
+      "owner_id": "owner",
+      "path": [
+        "edge",
+        "hub",
+        "owner"
+      ],
+      "expires_at": "2026-12-01T12:00:00Z"
+    }
+  },
+  {
+    "frame": {
+      "version": 1,
+      "type": "tunnel_open",
+      "channel": 2,
+      "topic": "team/events",
+      "owner_id": "owner",
+      "visited": [
+        "edge"
+      ],
+      "hop_limit": 7
+    }
+  },
+  {
+    "frame": {
+      "version": 1,
+      "type": "tunnel_ready",
+      "channel": 2,
+      "path": [
+        "hub",
+        "owner"
+      ],
+      "expires_at": "2026-12-01T12:00:00Z"
+    }
+  },
+  {
+    "frame": {
+      "version": 1,
+      "type": "tunnel_credit",
+      "channel": 2
+    }
+  },
+  {
+    "frame": {
+      "version": 1,
+      "type": "tunnel_close",
+      "channel": 2
+    }
+  }
+]

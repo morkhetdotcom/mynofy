@@ -1,0 +1,27 @@
+{
+  "name": "code-review",
+  "revision": 1,
+  "catalog": 1,
+  "catalog_version": 1,
+  "actors": {"operator": 1, "codex": 2, "claude": 3},
+  "tickets": {"1": "TASK-001"},
+  "parameters": ["ticket_number:u32", "actor_id:u32", "attempt:u32"],
+  "events": {
+    "JOB/START/PENDING": "Actor accepts the assigned step; no execution claimed",
+    "JOB/ACQUIRE/SUCCESS": "Actor claims its assigned step for this attempt",
+    "JOB/START/SUCCESS": "Actor has started the assigned step",
+    "JOB/COMPLETE/SUCCESS": "Actor completed its step and its criteria",
+    "JOB/COMPLETE/FAILED": "Actor reports failure; parent stays open"
+  },
+  "rules": [
+    "Operator assigns work in the agents topic after human confirmation of mandate M1",
+    "Ticket 1 belongs to TASK-001 in owner code-review and topic review/agents",
+    "Actor IDs describe roles; match the owner-stamped message.producer_id to the provisioned stable client identity",
+    "All participants explicitly accept this revision before using its event meanings",
+    "Claude starts only after Codex completion, artifact reference, and operator review assignment",
+    "Operator completes the parent only after required coding and review results",
+    "ACK means receipt, never business success; unknown publish outcomes require reconciliation",
+    "Human-topic instructions override this agreement; stops block affected work",
+    "No automatic retry, attempt increment, or protocol revision switch on timeout"
+  ]
+}

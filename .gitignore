@@ -1,0 +1,27 @@
+/target/
+**/target/
+/.local/
+*.pk8
+
+# Owner-local security snapshots, journal and lock files.
+*.security/
+
+# Python SDK build and interpreter artifacts.
+__pycache__/
+*.py[cod]
+*.egg-info/
+/sdks/python/build/
+/sdks/python/dist/
+
+# Java SDK build artifacts.
+/sdks/java/target/
+
+# Isolated CI environments, reports and candidate artifacts.
+/.ci-state/
+/.ci-tools/
+/reports/
+/dist/
+
+# Local optimization executables and PGO profiles; measured JSON/source snapshots stay private.
+/benchmarks/*/bin/
+/benchmarks/*/profiles/

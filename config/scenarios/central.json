@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "service": {
+    "id": "central",
+    "listen": "127.0.0.1:8081",
+    "tls": {
+      "certificate_file": "certs/central.crt",
+      "private_key_file": "certs/central.key",
+      "peer_ca_file": "certs/test-ca.crt"
+    }
+  },
+  "clients": [
+    {
+      "client_id": "client:ed25519:/8wY7RJc5IXV6zlzbT5b464j7V3n1Ju5GN4eqVY2NOs=",
+      "display_name": "test-client",
+      "keys": [
+        {
+          "algorithm": "ed25519",
+          "public_key": "S2jpXPMJ7W/D5OLir3LdNFHjZhfBAnDDWoeX4TqtH1k=",
+          "valid_until": "2030-01-01T00:00:00Z"
+        }
+      ]
+    }
+  ],
+  "limits": {
+    "client_requests_per_second": 100,
+    "client_burst": 200,
+    "source_auth_requests_per_second": 10,
+    "source_auth_burst": 20,
+    "max_connections": 1000,
+    "max_parallel_requests_per_client": 8,
+    "max_active_message_bytes": 16777216,
+    "poll_page_items": 20,
+    "poll_page_max_items": 100,
+    "max_payload_bytes": 4096,
+    "max_response_bytes": 131072,
+    "max_active_messages": 65536,
+    "max_connections_per_source": 32,
+    "auth_timeout_seconds": 5,
+    "request_timeout_seconds": 10,
+    "idle_timeout_seconds": 60
+  },
+  "rotation": {
+    "timeout_seconds": 30,
+    "attempts_per_client": 3,
+    "window_seconds": 300,
+    "key_validity_seconds": 2592000
+  },
+  "routing": {
+    "hop_limit": 8,
+    "learned_route_ttl_seconds": 30
+  },
+  "topics": [
+    {
+      "name": "team/events",
+      "owner_id": "central",
+      "policy": {
+        "default_ttl_seconds": 300,
+        "max_ttl_seconds": 3600
+      },
+      "acl": [
+        {
+          "client_id": "client:ed25519:/8wY7RJc5IXV6zlzbT5b464j7V3n1Ju5GN4eqVY2NOs=",
+          "allow": [
+            "publish",
+            "subscribe",
+            "inspect_own"
+          ]
+        }
+      ]
+    }
+  ],
+  "accepted_peers": [
+    {
+      "service_id": "edge",
+      "topics": [
+        "team/events"
+      ]
+    }
+  ]
+}

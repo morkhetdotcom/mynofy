@@ -1,0 +1,274 @@
+[
+  {
+    "connection": "codex",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "poll",
+      "id": "codex-poll-0",
+      "topic": "reviews/run-42/result"
+    }
+  },
+  {
+    "connection": "codex",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "messages",
+      "request_id": "codex-poll-0",
+      "items": [],
+      "next_cursor": "00000000",
+      "has_more": false
+    }
+  },
+  {
+    "connection": "codex",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "publish",
+      "id": "codex-pub",
+      "topic": "reviews/run-42/request",
+      "payload": {
+        "task": "review",
+        "repository": "mynofy",
+        "commit": "abc123"
+      },
+      "expires": {
+        "time": "2026-12-01T12:00:00Z"
+      }
+    }
+  },
+  {
+    "connection": "codex",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "result",
+      "request_id": "codex-pub",
+      "message_id": "msg-1",
+      "expires": {
+        "time": "2026-12-01T12:00:00Z"
+      }
+    }
+  },
+  {
+    "connection": "claude",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "poll",
+      "id": "claude-poll-1",
+      "topic": "reviews/run-42/request",
+      "limit": 20
+    }
+  },
+  {
+    "connection": "claude",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "messages",
+      "request_id": "claude-poll-1",
+      "items": [
+        {
+          "message": {
+            "id": "msg-1",
+            "topic": "reviews/run-42/request",
+            "payload": {
+              "task": "review",
+              "repository": "mynofy",
+              "commit": "abc123"
+            },
+            "expires": {
+              "time": "2026-12-01T12:00:00Z"
+            },
+            "producer_id": "client:ed25519:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+          }
+        }
+      ],
+      "next_cursor": "00000001",
+      "has_more": false
+    }
+  },
+  {
+    "connection": "claude",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "publish",
+      "id": "claude-pub",
+      "topic": "reviews/run-42/result",
+      "payload": {
+        "decision": "approved",
+        "summary": "Keine Einwände zum geprüften Commit."
+      },
+      "expires": {
+        "time": "2026-12-01T12:00:00Z"
+      }
+    }
+  },
+  {
+    "connection": "claude",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "result",
+      "request_id": "claude-pub",
+      "message_id": "msg-2",
+      "expires": {
+        "time": "2026-12-01T12:00:00Z"
+      }
+    }
+  },
+  {
+    "connection": "claude",
+    "direction": "client_to_service"
+  },
+  {
+    "connection": "claude",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "result",
+      "request_id": "claude-ack"
+    }
+  },
+  {
+    "connection": "codex",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "poll",
+      "id": "codex-poll-1",
+      "topic": "reviews/run-42/result",
+      "after": "00000000"
+    }
+  },
+  {
+    "connection": "codex",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "messages",
+      "request_id": "codex-poll-1",
+      "items": [
+        {
+          "message": {
+            "id": "msg-2",
+            "topic": "reviews/run-42/result",
+            "payload": {
+              "decision": "approved",
+              "summary": "Keine Einwände zum geprüften Commit."
+            },
+            "expires": {
+              "time": "2026-12-01T12:00:00Z"
+            },
+            "producer_id": "client:ed25519:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+          }
+        }
+      ],
+      "next_cursor": "00000001",
+      "has_more": false
+    }
+  },
+  {
+    "connection": "codex",
+    "direction": "client_to_service"
+  },
+  {
+    "connection": "codex",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "result",
+      "request_id": "codex-ack"
+    }
+  },
+  {
+    "connection": "codex",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "list_messages",
+      "id": "codex-list",
+      "topic": "reviews/run-42/request",
+      "limit": 20
+    }
+  },
+  {
+    "connection": "codex",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "messages_page",
+      "request_id": "codex-list",
+      "items": [
+        {
+          "id": "msg-1",
+          "topic": "reviews/run-42/request",
+          "created_at": "2026-11-11T10:00:00Z",
+          "expires": {
+            "time": "2026-12-01T12:00:00Z"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "connection": "codex",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "get_message",
+      "id": "codex-status",
+      "message_id": "msg-1"
+    }
+  },
+  {
+    "connection": "codex",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "message_status",
+      "request_id": "codex-status",
+      "message": {
+        "id": "msg-1",
+        "topic": "reviews/run-42/request",
+        "payload": {
+          "task": "review",
+          "repository": "mynofy",
+          "commit": "abc123"
+        },
+        "expires": {
+          "time": "2026-12-01T12:00:00Z"
+        },
+        "producer_id": "client:ed25519:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+      },
+      "created_at": "2026-11-11T10:00:00Z"
+    }
+  },
+  {
+    "connection": "claude",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "poll",
+      "id": "claude-poll-2",
+      "topic": "reviews/run-42/request",
+      "after": "00000001"
+    }
+  },
+  {
+    "connection": "claude",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "messages",
+      "request_id": "claude-poll-2",
+      "items": [],
+      "next_cursor": "00000001",
+      "has_more": false
+    }
+  }
+]

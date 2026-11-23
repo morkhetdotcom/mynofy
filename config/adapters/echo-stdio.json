@@ -1,0 +1,66 @@
+{
+  "name": "persistent-terminal-echo",
+  "revision": 1,
+  "profile": "mynofy-job-echo-v1",
+  "effect": "Echo one typed trigger through a local process",
+  "communication_topic": "workflow/4711/communication",
+  "status_topic": "workflow/4711/status",
+  "interpretation_topic": "workflow/4711/interpretations",
+  "trigger_topic": "workflow/4711/communication",
+  "trigger": {
+    "catalog": 1,
+    "catalog_version": 1,
+    "category": 12,
+    "action": 40,
+    "status": 7,
+    "parameters": [
+      {
+        "u64": 4711
+      }
+    ]
+  },
+  "started": {
+    "catalog": 1,
+    "catalog_version": 1,
+    "category": 12,
+    "action": 10,
+    "status": 2,
+    "parameters": [
+      {
+        "u64": 4711
+      }
+    ]
+  },
+  "success": {
+    "catalog": 1,
+    "catalog_version": 1,
+    "category": 12,
+    "action": 40,
+    "status": 2,
+    "parameters": [
+      {
+        "u64": 4711
+      }
+    ]
+  },
+  "failure": {
+    "catalog": 1,
+    "catalog_version": 1,
+    "category": 12,
+    "action": 40,
+    "status": 3,
+    "parameters": [
+      {
+        "u64": 4711
+      }
+    ]
+  },
+  "mode": "stdio_jsonl",
+  "program": "/bin/cat",
+  "args": [],
+  "poll_interval_ms": 250,
+  "renew_seconds": 10,
+  "announcement_ttl_seconds": 30,
+  "execution_timeout_seconds": 10,
+  "max_output_bytes": 4096
+}

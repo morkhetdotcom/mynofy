@@ -1,0 +1,181 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "mynofy v1 client authentication",
+  "description": "Token-Schl\u00fcsselpaar mit Challenge/Proof; Zustands-, ACL- und Signaturpr\u00fcfung zus\u00e4tzlich erforderlich.",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "type": {
+          "const": "auth_hello"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "token_id": {
+          "type": "string",
+          "pattern": "^ed25519:[A-Za-z0-9+/]{43}=$"
+        }
+      },
+      "required": [
+        "version",
+        "type",
+        "id",
+        "token_id"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "type": {
+          "const": "auth_challenge"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "service_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Zus\u00e4tzlich maximal 256 UTF-8-Bytes pr\u00fcfen."
+        },
+        "nonce": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{43}=$",
+          "description": "Kanonisches Standard-Base64 mit Padding, dekodiert exakt 32 Bytes."
+        }
+      },
+      "required": [
+        "version",
+        "type",
+        "request_id",
+        "service_id",
+        "nonce"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "type": {
+          "const": "auth_proof"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "auth_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{86}==$",
+          "description": "Kanonisches Standard-Base64 mit Padding, dekodiert exakt 64 Bytes."
+        }
+      },
+      "required": [
+        "version",
+        "type",
+        "id",
+        "auth_id",
+        "signature"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "type": {
+          "const": "auth_welcome"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "client_id": {
+          "type": "string",
+          "pattern": "^client:ed25519:[A-Za-z0-9+/]{43}=$",
+          "description": "Stabile Identit\u00e4t aus dem ersten Public Key, keine Kennung des jeweils aktuellen Schl\u00fcssels."
+        },
+        "service_id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Zus\u00e4tzlich maximal 256 UTF-8-Bytes pr\u00fcfen."
+        },
+        "restart_counter": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "version",
+        "type",
+        "request_id",
+        "client_id",
+        "service_id",
+        "restart_counter"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "type": {
+          "const": "error"
+        },
+        "request_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "code": {
+          "enum": [
+            "invalid_frame",
+            "unsupported_version",
+            "unauthorized",
+            "auth_timeout",
+            "resource_exhausted",
+            "internal_error",
+            "rate_limited"
+          ]
+        },
+        "detail": {
+          "type": "string",
+          "minLength": 1
+        },
+        "retry_after_ms": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Bei rate_limited erforderliche Wartezeit; in der Zustandsvalidierung pr\u00fcfen."
+        }
+      },
+      "required": [
+        "version",
+        "type",
+        "code",
+        "detail"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

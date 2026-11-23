@@ -1,0 +1,212 @@
+[
+  {
+    "version": 1,
+    "command": {
+      "op": "status"
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "clients_list",
+      "limit": 20
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "client_add",
+      "public_key": "S2jpXPMJ7W/D5OLir3LdNFHjZhfBAnDDWoeX4TqtH1k=",
+      "display_name": "review-agent"
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "acl_set",
+      "client": "client:ed25519:EXAMPLE",
+      "topic": "jobs/review",
+      "allow": [
+        "subscribe",
+        "publish"
+      ]
+    }
+  },
+  {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "updated": true
+    }
+  },
+  {
+    "version": 1,
+    "ok": false,
+    "error": {
+      "code": "conflict",
+      "detail": "Public key is already registered."
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "client_get",
+      "client": "client:ed25519:/8wY7RJc5IXV6zlzbT5b464j7V3n1Ju5GN4eqVY2NOs="
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "client_disable",
+      "client": "client:ed25519:/8wY7RJc5IXV6zlzbT5b464j7V3n1Ju5GN4eqVY2NOs=",
+      "disabled": true
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "key_add",
+      "client": "client:ed25519:/8wY7RJc5IXV6zlzbT5b464j7V3n1Ju5GN4eqVY2NOs=",
+      "public_key": "S2jpXPMJ7W/D5OLir3LdNFHjZhfBAnDDWoeX4TqtH1k="
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "key_revoke",
+      "token": "ed25519:/8wY7RJc5IXV6zlzbT5b464j7V3n1Ju5GN4eqVY2NOs="
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "acl_get",
+      "client": "client:ed25519:/8wY7RJc5IXV6zlzbT5b464j7V3n1Ju5GN4eqVY2NOs=",
+      "topic": "local/events"
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "export"
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "content_save"
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "content_save",
+      "topics": [
+        "local/events",
+        "jobs/status"
+      ]
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "topic_storage",
+      "topic": "local/events",
+      "storage": {
+        "mode": "manual",
+        "encrypted": false
+      }
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "topics_list",
+      "limit": 20
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "topic_get",
+      "topic": "jobs/review"
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "topic_create",
+      "topic": "jobs/review",
+      "policy": {
+        "default_ttl_seconds": 60,
+        "max_ttl_seconds": 300
+      }
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "topic_policy",
+      "topic": "jobs/review",
+      "policy": {
+        "default_ttl_seconds": 120,
+        "max_ttl_seconds": 600
+      }
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "topic_delete",
+      "topic": "jobs/review"
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "peers_list",
+      "limit": 20
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "peer_set",
+      "peer": {
+        "service_id": "edge",
+        "topics": [
+          "local/events"
+        ]
+      }
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "peer_disable",
+      "service_id": "edge",
+      "disabled": true
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "peer_delete",
+      "service_id": "edge"
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "peer_certificate_revoke",
+      "fingerprint": "sha256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "peer_certificates_list",
+      "limit": 20
+    }
+  }
+]

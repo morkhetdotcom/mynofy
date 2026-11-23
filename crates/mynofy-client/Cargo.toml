@@ -1,0 +1,18 @@
+[package]
+name = "mynofy-client"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Reusable authenticated mynofy client for WSS and Unix sockets"
+
+[dependencies]
+prost.workspace = true
+mynofy-protocol = { workspace = true, features = ["crypto", "transport"] }
+serde_json.workspace = true
+serde.workspace = true
+tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "process", "sync", "macros"] }
+tokio-rustls.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+zeroize.workspace = true

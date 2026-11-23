@@ -1,0 +1,1311 @@
+{
+  "catalog": {
+    "name": "mynofy",
+    "version": 1
+  },
+  "state": "semantic_draft",
+  "runtime_support": "typed_events_supported_workflow_profiles_are_semantic_drafts",
+  "use_cases": [
+    {
+      "id": "UC-01",
+      "group": "Aufträge",
+      "title": "Auftrag starten",
+      "actors": "Mensch/Anwendung → Worker",
+      "context": "Lauf, Versuch, Auftragsdefinition",
+      "request": [
+        "JOB",
+        "START",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "START",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "START",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Worker prüft Voraussetzungen, übernimmt nach Vergaberegel und meldet gestarteten Lauf",
+      "failure_rule": "Start fehlgeschlagen: keine Fertigstellung behaupten",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-02",
+      "group": "Aufträge",
+      "title": "Auftrag übernehmen",
+      "actors": "Worker ↔ Koordinator",
+      "context": "Lauf, Versuch, Kandidat, Vergabeinstanz",
+      "request": [
+        "JOB",
+        "ACQUIRE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "ACQUIRE",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "ACQUIRE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Nur bestätigter Inhaber beginnt exklusive Arbeit",
+      "failure_rule": "BUSY/CONFLICT: nicht arbeiten; Meldung allein vergibt keinen Job",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-03",
+      "group": "Aufträge",
+      "title": "Arbeitsschritt ausführen",
+      "actors": "Worker → Anwendung/Agent",
+      "context": "Lauf, Versuch, Schrittnummer, bekannte Eingaben",
+      "request": [
+        "JOB",
+        "EXECUTE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "EXECUTE",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "EXECUTE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Nachfolger wartet auf SUCCESS dieses Schritts und prüft weitere Voraussetzungen",
+      "failure_rule": "FAILED/PARTIAL: gesperrte Folgeschritte nicht starten",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-04",
+      "group": "Aufträge",
+      "title": "Auftrag abschließen",
+      "actors": "Worker → Auftraggeber",
+      "context": "Lauf, Versuch, Ergebnisstand",
+      "request": [
+        "JOB",
+        "COMPLETE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "COMPLETE",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "COMPLETE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Auftraggeber akzeptiert Ergebnis nur für aktuellen Versuch",
+      "failure_rule": "FAILED: Ergebnis nicht als verwendbar markieren",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-05",
+      "group": "Aufträge",
+      "title": "Auftrag abbrechen",
+      "actors": "Mensch/Anwendung → Worker",
+      "context": "Lauf, Versuch, Abbruchziel",
+      "request": [
+        "JOB",
+        "CANCEL",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "CANCEL",
+          "CANCELLED"
+        ],
+        [
+          "JOB",
+          "CANCEL",
+          "CONFLICT"
+        ]
+      ],
+      "receiver_rule": "Worker stoppt soweit möglich und meldet CANCELLED",
+      "failure_rule": "CONFLICT bei bereits abgeschlossenem Auftrag: Wirkung klären",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-06",
+      "group": "Aufträge",
+      "title": "Start zurückstellen",
+      "actors": "Worker → Auftraggeber",
+      "context": "Lauf, Versuch, fehlende Voraussetzung",
+      "request": [
+        "JOB",
+        "START",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "START",
+          "DEFERRED"
+        ],
+        [
+          "JOB",
+          "START",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "DEFERRED meldet Aufschub; Coordinator entscheidet über spätere Freigabe",
+      "failure_rule": "Kein stiller Timer oder automatischer Retry durch Broker",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-07",
+      "group": "Aufträge",
+      "title": "Auftrag einreihen",
+      "actors": "Anwendung → Scheduler",
+      "context": "Lauf, Versuch, Zielqueue",
+      "request": [
+        "JOB",
+        "QUEUE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "QUEUE",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "QUEUE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Scheduler meldet erst SUCCESS wenn tatsächlich eingereiht",
+      "failure_rule": "RESOURCE_EXHAUSTED: keine Annahme behaupten",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-08",
+      "group": "Aufträge",
+      "title": "Auftrag aus Queue nehmen",
+      "actors": "Scheduler → Worker",
+      "context": "Lauf, Versuch, Queue, Vergaberegel",
+      "request": [
+        "JOB",
+        "DEQUEUE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "DEQUEUE",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "DEQUEUE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS meldet Entnahme; exklusive Vergabe separat prüfen",
+      "failure_rule": "NOT_FOUND: nicht aus veraltetem Queue-Ereignis starten",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-09",
+      "group": "Aufträge",
+      "title": "Fortschritt melden",
+      "actors": "Worker → Mensch/Monitor",
+      "context": "Lauf, Versuch, processed/total mit festen Einheiten",
+      "request": null,
+      "reports": [
+        [
+          "JOB",
+          "UPDATE",
+          "PARTIAL"
+        ],
+        [
+          "JOB",
+          "UPDATE",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "UPDATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Empfänger aktualisiert Anzeige; startet keinen Folgeschritt",
+      "failure_rule": "PARTIAL ist kein Abschluss; total=0/ungültige Werte nach Profil behandeln",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-10",
+      "group": "Aufträge",
+      "title": "Auftrag erneut versuchen",
+      "actors": "Producer → Worker",
+      "context": "Gleicher fachlicher Lauf, neuer Versuch, neue Message-ID",
+      "request": [
+        "JOB",
+        "START",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "START",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "START",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Neuen Versuch nur nach expliziter Producer-Entscheidung und Duplikatprüfung starten",
+      "failure_rule": "Unklarer vorheriger Ausgang: keine automatische erneute Nebenwirkung",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-11",
+      "group": "AI",
+      "title": "Code erzeugen",
+      "actors": "Mensch/Planer → Coding-Agent",
+      "context": "Lauf, Versuch, Repository- und Eingabestand",
+      "request": [
+        "JOB",
+        "CREATE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "CREATE",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "CREATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Agent erzeugt Artefakt; CREATE/SUCCESS bedeutet erzeugt, nicht geprüft",
+      "failure_rule": "FAILED/PARTIAL: Review nur mit ausdrücklich verwendbarem Stand",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-12",
+      "group": "AI",
+      "title": "Code prüfen",
+      "actors": "Coding-Agent → Review-Agent",
+      "context": "Lauf, Versuch, unveränderlicher Artefaktstand, Reviewprofil",
+      "request": [
+        "JOB",
+        "VALIDATE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "VALIDATE",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "VALIDATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Review-Agent prüft; SUCCESS erfüllt genau dieses Reviewprofil",
+      "failure_rule": "FAILED erfüllt Freigabebedingung nicht; genaue Ursache separat zuordnen",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-13",
+      "group": "AI",
+      "title": "Änderungen nach Review",
+      "actors": "Review-Agent → Coding-Agent",
+      "context": "Lauf, neuer Artefaktstand, bekannte Reviewanforderungen",
+      "request": [
+        "JOB",
+        "UPDATE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "UPDATE",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "UPDATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Coding-Agent überarbeitet und fordert VALIDATE/PENDING für neuen Stand an",
+      "failure_rule": "Alte erfolgreiche Prüfung gilt nicht für geänderten Stand",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-14",
+      "group": "AI",
+      "title": "Tests ausführen",
+      "actors": "Coding-Agent → Test-Agent/CI",
+      "context": "Lauf, Artefaktstand, vereinbarte Testschritt-ID",
+      "request": [
+        "JOB",
+        "EXECUTE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "EXECUTE",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "EXECUTE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS dieses Testschritts kann definierte Qualitätsbedingung erfüllen",
+      "failure_rule": "Testfehler und fehlende Testausführung unterscheiden; beides keine Freigabe",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-15",
+      "group": "AI",
+      "title": "Information abrufen",
+      "actors": "Agent → Such-/Recherche-Agent",
+      "context": "Lauf, bekannte Frage/Quellenregeln, Ergebnisreferenz",
+      "request": [
+        "RESOURCE",
+        "QUERY",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "RESOURCE",
+          "QUERY",
+          "SUCCESS"
+        ],
+        [
+          "RESOURCE",
+          "QUERY",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Empfänger stellt Ergebnis extern oder als freie Payload bereit",
+      "failure_rule": "NOT_FOUND/UNAVAILABLE: keine Antwort erfinden",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-16",
+      "group": "AI",
+      "title": "Ergebnis vergleichen",
+      "actors": "Zwei Agenten → Vergleichs-Agent",
+      "context": "Lauf, zwei feste Ergebnisstände, Vergleichskriterium",
+      "request": [
+        "RESOURCE",
+        "COMPARE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "RESOURCE",
+          "COMPARE",
+          "SUCCESS"
+        ],
+        [
+          "RESOURCE",
+          "COMPARE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS besagt Vergleich ausgeführt; Gleichheit separat über MATCH/MISMATCH melden",
+      "failure_rule": "FAILED ist kein Beleg für unterschiedliche Inhalte",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-17",
+      "group": "AI",
+      "title": "Agentenübergabe",
+      "actors": "Planer-Agent → Fach-Agent",
+      "context": "Lauf, Versuch, bestätigter Übergabe-/Vergabestand",
+      "request": [
+        "JOB",
+        "ACQUIRE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "ACQUIRE",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "ACQUIRE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Neuer Agent arbeitet erst nach passender Vergabe; alter beendet exklusive Arbeit",
+      "failure_rule": "Verlorene Bestätigung: keine doppelte Übernahme unterstellen",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-18",
+      "group": "AI",
+      "title": "Tool-Zugriff prüfen",
+      "actors": "Agent → Policy-Anwendung",
+      "context": "Lauf, konkrete Operation/Ziel, Regelstand",
+      "request": [
+        "SECURITY",
+        "VALIDATE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "SECURITY",
+          "VALIDATE",
+          "SUCCESS"
+        ],
+        [
+          "SECURITY",
+          "VALIDATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Nur SUCCESS des autorisierten Prüfers und passende Ausführungsregeln erlauben Tool-Aufruf",
+      "failure_rule": "PERMISSION_DENIED: Operation unterlassen; Meldung ändert keine ACL",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-19",
+      "group": "Menschen",
+      "title": "Veröffentlichung freigeben",
+      "actors": "Anwendung → Mensch über UI",
+      "context": "Lauf, Artefaktstand, explizites menschliches Freigabeprofil",
+      "request": [
+        "JOB",
+        "VALIDATE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "VALIDATE",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "VALIDATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "UI meldet SUCCESS nur nach ausdrücklicher Freigabe; Anwendung prüft passendes Profil",
+      "failure_rule": "FAILED bedeutet nicht freigegeben; DEFERRED vertagt Entscheidung",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-20",
+      "group": "Menschen",
+      "title": "Kurznachricht senden",
+      "actors": "Mensch ↔ Mensch",
+      "context": "Exakte Topics, freie Kurztext-Payload, vereinbarte Antwortkonvention",
+      "request": [
+        "MESSAGE",
+        "SEND",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "MESSAGE",
+          "SEND",
+          "SUCCESS"
+        ],
+        [
+          "MESSAGE",
+          "SEND",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "UI zeigt Inhalt; freier Text startet keine Maschinenaktion",
+      "failure_rule": "Zustellung/ACK belegt weder Lesen noch Zustimmung",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-21",
+      "group": "Menschen",
+      "title": "Kenntnisnahme melden",
+      "actors": "Mensch über UI → Anwendung",
+      "context": "Lauf/Nachricht, explizites Kenntnisnahmeprofil",
+      "request": null,
+      "reports": [
+        [
+          "MESSAGE",
+          "RECEIVE",
+          "SUCCESS"
+        ],
+        [
+          "MESSAGE",
+          "RECEIVE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS darf UI-Kenntnisnahme dokumentieren, keine Freigabe",
+      "failure_rule": "Ohne explizite Benutzerhandlung nicht aus Poll oder ACK ableiten",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-22",
+      "group": "Menschen",
+      "title": "Wartung ankündigen",
+      "actors": "Betreiber → Menschen/Geräte",
+      "context": "Wartungslauf, Termin/Zeitzone, festgelegte Teilnehmer",
+      "request": [
+        "SYSTEM",
+        "SCHEDULE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "SYSTEM",
+          "SCHEDULE",
+          "SUCCESS"
+        ],
+        [
+          "SYSTEM",
+          "SCHEDULE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Empfänger informiert oder plant lokal; keine sofortige Abschaltung",
+      "failure_rule": "Ablauf der Nachricht führt keine Wartung aus",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-23",
+      "group": "Menschen",
+      "title": "Entscheidung zurückstellen",
+      "actors": "Mensch → wartender Agent",
+      "context": "Lauf, Artefaktstand, Freigabeprofil",
+      "request": [
+        "JOB",
+        "VALIDATE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "VALIDATE",
+          "DEFERRED"
+        ],
+        [
+          "JOB",
+          "VALIDATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "DEFERRED lässt den abhängigen Schritt gesperrt",
+      "failure_rule": "Ausbleibende Entscheidung ist keine Zustimmung",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-24",
+      "group": "Menschen",
+      "title": "An Betreiber eskalieren",
+      "actors": "Monitor/Agent → Mensch",
+      "context": "Lauf, Anlass, Eskalationsstufe, zuständige Person",
+      "request": null,
+      "reports": [
+        [
+          "EVENT",
+          "SEND",
+          "SUCCESS"
+        ],
+        [
+          "EVENT",
+          "SEND",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "UI informiert zuständige Person nach eigener Eskalationsregel",
+      "failure_rule": "Keine Garantie, dass jemand übernimmt; Antwort separat erforderlich",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-25",
+      "group": "Geräte",
+      "title": "Gerät einschalten",
+      "actors": "Mensch/Regel → Gerät",
+      "context": "Gerät im Topic, Lauf, gewünschter Zustand",
+      "request": [
+        "SYSTEM",
+        "START",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "SYSTEM",
+          "START",
+          "SUCCESS"
+        ],
+        [
+          "SYSTEM",
+          "START",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Gerät meldet SUCCESS nach tatsächlichem Start laut Profil",
+      "failure_rule": "BUSY/FAILED: Anzeige nicht als eingeschaltet setzen",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-26",
+      "group": "Geräte",
+      "title": "Gerät ausschalten",
+      "actors": "Mensch/Regel → Gerät",
+      "context": "Gerät, Lauf, gewünschter Zustand, Ausführungsregeln",
+      "request": [
+        "SYSTEM",
+        "STOP",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "SYSTEM",
+          "STOP",
+          "SUCCESS"
+        ],
+        [
+          "SYSTEM",
+          "STOP",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Gerät meldet erfolgreichen Stillstand",
+      "failure_rule": "TIMEOUT belegt keinen Stillstand; Istzustand abfragen",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-27",
+      "group": "Geräte",
+      "title": "Sollwert ändern",
+      "actors": "Regler/Mensch → Gerät",
+      "context": "Gerät/Eigenschaft im Topic, Lauf, Einheit, Sollwert",
+      "request": [
+        "RESOURCE",
+        "UPDATE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "RESOURCE",
+          "UPDATE",
+          "SUCCESS"
+        ],
+        [
+          "RESOURCE",
+          "UPDATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS erst wenn im Profil definierter Sollwert übernommen ist",
+      "failure_rule": "INVALID_ARGUMENT: Wert ablehnen, nicht still kürzen",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-28",
+      "group": "Geräte",
+      "title": "Temperatur beobachten",
+      "actors": "Sensor → Monitor/Regler",
+      "context": "Sensor im Topic, Einheit/Skalierung, Messwert, Messzeit",
+      "request": null,
+      "reports": [
+        [
+          "TELEMETRY",
+          "READ",
+          "SUCCESS"
+        ],
+        [
+          "TELEMETRY",
+          "READ",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "READ/SUCCESS berichtet Beobachtung; Regel prüft Alter und Grenzwerte",
+      "failure_rule": "Veraltete Messung nicht zur aktuellen Steuerung verwenden",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-29",
+      "group": "Geräte",
+      "title": "Zählerstand melden",
+      "actors": "Zähler → Anwendung",
+      "context": "Zähler im Topic, Einheit, absolut/delta, Sequenz/Zeitraum",
+      "request": null,
+      "reports": [
+        [
+          "METRICS",
+          "READ",
+          "SUCCESS"
+        ],
+        [
+          "METRICS",
+          "READ",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Anwendung interpretiert nach festem Messprofil",
+      "failure_rule": "Reset/Umlauf/Duplikate berücksichtigen, Delta nicht doppelt addieren",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-30",
+      "group": "Geräte",
+      "title": "Grenzwert melden",
+      "actors": "Sensor/Monitor → Mensch/Agent",
+      "context": "Überwachtes Objekt, Regel, Messstand, Schwellwertprofil",
+      "request": null,
+      "reports": [
+        [
+          "RESOURCE",
+          "VALIDATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "FAILED meldet verletzte Bedingung; Empfänger folgt vereinbarter Alarmregel",
+      "failure_rule": "FAILED allein definiert weder Priorität noch automatische Gegenmaßnahme",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-31",
+      "group": "Geräte",
+      "title": "Wieder normal",
+      "actors": "Sensor/Monitor → Mensch/Agent",
+      "context": "Dieselbe Regel/Instanz wie Grenzwertmeldung, neuer Messstand",
+      "request": null,
+      "reports": [
+        [
+          "RESOURCE",
+          "VALIDATE",
+          "SUCCESS"
+        ]
+      ],
+      "receiver_rule": "SUCCESS meldet wieder erfüllte Bedingung",
+      "failure_rule": "Unzugeordnete Normalmeldung darf keinen anderen Alarm schließen",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-32",
+      "group": "Geräte",
+      "title": "Gerät zurücksetzen",
+      "actors": "Betreiber/Automatisierung → Gerät",
+      "context": "Gerät, Lauf, Resetumfang und Berechtigung",
+      "request": [
+        "SYSTEM",
+        "RESET",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "SYSTEM",
+          "RESET",
+          "SUCCESS"
+        ],
+        [
+          "SYSTEM",
+          "RESET",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS meldet den definierten abgeschlossenen Reset",
+      "failure_rule": "Wiederholte Nachricht darf nicht unkontrolliert mehrfach resetten",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-33",
+      "group": "Betrieb",
+      "title": "Dienst starten",
+      "actors": "Supervisor → Dienst",
+      "context": "Dienst, Lauf, Start-/Bereitschaftsprofil",
+      "request": [
+        "SYSTEM",
+        "START",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "SYSTEM",
+          "START",
+          "SUCCESS"
+        ],
+        [
+          "SYSTEM",
+          "START",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS belegt nur den im Profil genannten Startzustand",
+      "failure_rule": "Prozessstart ist nicht automatisch Readiness",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-34",
+      "group": "Betrieb",
+      "title": "Dienst anhalten",
+      "actors": "Supervisor → Dienst",
+      "context": "Dienst, Lauf, Umfang des geordneten Stopps",
+      "request": [
+        "SYSTEM",
+        "SHUTDOWN",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "SYSTEM",
+          "SHUTDOWN",
+          "SUCCESS"
+        ],
+        [
+          "SYSTEM",
+          "SHUTDOWN",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS erst nach erfüllter Shutdown-Bedingung",
+      "failure_rule": "TIMEOUT/FAILED: verbleibende Arbeit und Zustand klären",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-35",
+      "group": "Betrieb",
+      "title": "Verbindung aufbauen",
+      "actors": "Anwendung → Connector",
+      "context": "Ziel, Verbindungslauf, Authentifizierungsregeln",
+      "request": [
+        "NETWORK",
+        "CONNECT",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "NETWORK",
+          "CONNECT",
+          "SUCCESS"
+        ],
+        [
+          "NETWORK",
+          "CONNECT",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS meldet aufgebaute geprüfte Verbindung",
+      "failure_rule": "UNAVAILABLE/TIMEOUT: keine sichere Verbindung behaupten",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-36",
+      "group": "Betrieb",
+      "title": "Verbindung verloren",
+      "actors": "Connector → Monitor",
+      "context": "Verbindungsinstanz, Beobachtungszeit",
+      "request": null,
+      "reports": [
+        [
+          "NETWORK",
+          "DISCONNECT",
+          "SUCCESS"
+        ],
+        [
+          "NETWORK",
+          "DISCONNECT",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS berichtet vollzogene Trennung; Monitor entscheidet über Reconnect",
+      "failure_rule": "Alte Trennung nicht mit neuer Verbindung verwechseln",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-37",
+      "group": "Betrieb",
+      "title": "Lebenszeichen",
+      "actors": "Dienst → Monitor",
+      "context": "Festes Heartbeatprofil, Instanz, Beobachtungszeit/Sequenz",
+      "request": null,
+      "reports": [
+        [
+          "SYSTEM",
+          "UPDATE",
+          "SUCCESS"
+        ],
+        [
+          "SYSTEM",
+          "UPDATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "UPDATE/SUCCESS ist nur nach vereinbartem Profil ein Lebenszeichen",
+      "failure_rule": "Monitor erzeugt TIMEOUT selbst; ausbleibende Message tut nichts im Broker",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-38",
+      "group": "Betrieb",
+      "title": "Bereitschaft prüfen",
+      "actors": "Monitor → Dienst",
+      "context": "Dienstinstanz, Bereitschaftsprofil, Prüfzeit",
+      "request": [
+        "SYSTEM",
+        "VALIDATE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "SYSTEM",
+          "VALIDATE",
+          "SUCCESS"
+        ],
+        [
+          "SYSTEM",
+          "VALIDATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS erfüllt konkrete Readiness-Bedingung",
+      "failure_rule": "FAILED/UNAVAILABLE: abhängige Starts gesperrt lassen",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-39",
+      "group": "Daten",
+      "title": "Backup speichern",
+      "actors": "Anwendung → Backup-Worker",
+      "context": "Lauf, Quellstand, Ziel und Sicherungsprofil",
+      "request": [
+        "STORAGE",
+        "SAVE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "STORAGE",
+          "SAVE",
+          "SUCCESS"
+        ],
+        [
+          "STORAGE",
+          "SAVE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS meldet gespeicherten Backupstand",
+      "failure_rule": "PARTIAL/FAILED: Backup nicht als vollständig verwendbar markieren",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-40",
+      "group": "Daten",
+      "title": "Backup wiederherstellen",
+      "actors": "Betreiber → Restore-Worker",
+      "context": "Lauf, unveränderliche Backupreferenz, Ziel",
+      "request": [
+        "STORAGE",
+        "LOAD",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "STORAGE",
+          "LOAD",
+          "SUCCESS"
+        ],
+        [
+          "STORAGE",
+          "LOAD",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS meldet nach Profil wiederhergestellten Zustand",
+      "failure_rule": "Teilergebnis ist kein Gesamterfolg; erneute Ausführung explizit prüfen",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-41",
+      "group": "Daten",
+      "title": "Cache invalidieren",
+      "actors": "Datenquelle → Cache-Anwendung",
+      "context": "Schlüssel/Objekt im Topic oder freie Payload, Revision",
+      "request": [
+        "CACHE",
+        "DELETE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "CACHE",
+          "DELETE",
+          "SUCCESS"
+        ],
+        [
+          "CACHE",
+          "DELETE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS meldet tatsächlich entfernten/invalidierten Eintrag",
+      "failure_rule": "Verpasste Revision über maßgeblichen Zustand erkennen",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-42",
+      "group": "Daten",
+      "title": "Konfiguration ändern",
+      "actors": "Betreiber → Anwendung",
+      "context": "Konfigurationsobjekt, Revision, validierter Inhalt",
+      "request": [
+        "RESOURCE",
+        "UPDATE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "RESOURCE",
+          "UPDATE",
+          "SUCCESS"
+        ],
+        [
+          "RESOURCE",
+          "UPDATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS meldet im Profil definierten angewendeten Stand",
+      "failure_rule": "Mynofy-Startkonfiguration wird dadurch nicht automatisch neu geladen",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-43",
+      "group": "Daten",
+      "title": "Artefakt bereit",
+      "actors": "Builddienst → Mensch/Agent",
+      "context": "Lauf, Artefaktstand, externe Referenz",
+      "request": null,
+      "reports": [
+        [
+          "RESOURCE",
+          "CREATE",
+          "SUCCESS"
+        ],
+        [
+          "RESOURCE",
+          "CREATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "CREATE/SUCCESS informiert über verfügbares Artefakt",
+      "failure_rule": "Geändertes oder fehlendes Artefakt erneut prüfen; kein Dateitransfer",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-44",
+      "group": "Daten",
+      "title": "Datensatz geändert",
+      "actors": "Anwendung → abhängiger Dienst",
+      "context": "Objekt, Revision, Schema-/Änderungsprofil",
+      "request": null,
+      "reports": [
+        [
+          "DATABASE",
+          "UPDATE",
+          "SUCCESS"
+        ],
+        [
+          "DATABASE",
+          "UPDATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "UPDATE/SUCCESS löst nur im passenden Profil ein Nachladen aus",
+      "failure_rule": "Keine atomare DB-Transaktion plus Publish garantiert",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-45",
+      "group": "Koordination",
+      "title": "Schlüssel prüfen",
+      "actors": "Betreiber/Agent → Policy-Dienst",
+      "context": "Schlüsselreferenz ohne Secret, Owner, Prüfzeit",
+      "request": [
+        "SECURITY",
+        "VALIDATE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "SECURITY",
+          "VALIDATE",
+          "SUCCESS"
+        ],
+        [
+          "SECURITY",
+          "VALIDATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS meldet positives Prüfergebnis",
+      "failure_rule": "Entzug/Ablauf kann danach eintreten; aktuelle Serviceprüfung bleibt maßgeblich",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-46",
+      "group": "Koordination",
+      "title": "Ressource reservieren",
+      "actors": "Worker ↔ Koordinator",
+      "context": "Ressource, Lauf, Inhaber und ggf. externe Leasegeneration",
+      "request": [
+        "RESOURCE",
+        "ACQUIRE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "RESOURCE",
+          "ACQUIRE",
+          "SUCCESS"
+        ],
+        [
+          "RESOURCE",
+          "ACQUIRE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS nur aus verlässlicher Vergabeinstanz als Reservation verwenden",
+      "failure_rule": "Broker bietet keine Lease; abgelaufene Reserve nicht benutzen",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-47",
+      "group": "Koordination",
+      "title": "Ressource freigeben",
+      "actors": "Inhaber → Koordinator",
+      "context": "Ressource, Lauf, gültige Vergabeinstanz/Generation",
+      "request": [
+        "RESOURCE",
+        "RELEASE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "RESOURCE",
+          "RELEASE",
+          "SUCCESS"
+        ],
+        [
+          "RESOURCE",
+          "RELEASE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "SUCCESS bestätigt Freigabe im externen Koordinator",
+      "failure_rule": "Veraltete Freigabe darf keine neue Reservation lösen",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-48",
+      "group": "Koordination",
+      "title": "Gruppe um Entscheidung bitten",
+      "actors": "Anwendung → mehrere Menschen/Agenten",
+      "context": "Lauf, Stand, Teilnehmermenge, Quorumregel",
+      "request": [
+        "JOB",
+        "VALIDATE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "VALIDATE",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "VALIDATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Koordinator sammelt passende Entscheidungen und entscheidet nach Regel",
+      "failure_rule": "Zustellzähler sind weder Teilnehmermenge noch Quorum",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-49",
+      "group": "Koordination",
+      "title": "Auf Ergebnis warten",
+      "actors": "Agent/Anwendung → Agent/Anwendung",
+      "context": "Lauf, Versuch, erforderliche Arbeitsschritte",
+      "request": [
+        "JOB",
+        "COMPLETE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "COMPLETE",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "COMPLETE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Nur passendes COMPLETE/SUCCESS entsperrt den vereinbarten Folgeschritt",
+      "failure_rule": "Timeout/Ablauf/Verbindungsverlust lässt Ausgang unklar",
+      "state": "semantic_draft"
+    },
+    {
+      "id": "UC-50",
+      "group": "Koordination",
+      "title": "Umgebungen verbinden",
+      "actors": "Gerät im LAN → lokaler Agent → zentraler Dienst → Mensch",
+      "context": "Owner je Topic, Lauf, Stand, Rollen und direkte Verbindungen",
+      "request": [
+        "JOB",
+        "VALIDATE",
+        "PENDING"
+      ],
+      "reports": [
+        [
+          "JOB",
+          "VALIDATE",
+          "SUCCESS"
+        ],
+        [
+          "JOB",
+          "VALIDATE",
+          "FAILED"
+        ]
+      ],
+      "receiver_rule": "Fachliche Semantik bleibt gleich; jeder Schritt prüft seinen Kontext",
+      "failure_rule": "Service-Tunnel bleiben Entwurf; derzeit direkte Owner-Verbindungen nötig",
+      "state": "semantic_draft"
+    }
+  ]
+}

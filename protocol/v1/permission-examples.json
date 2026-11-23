@@ -1,0 +1,51 @@
+[
+  {
+    "connection": "test-client",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "get_permissions",
+      "id": "rights-1",
+      "topic": "team/events"
+    }
+  },
+  {
+    "connection": "test-client",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "permissions",
+      "request_id": "rights-1",
+      "topic": "team/events",
+      "owner_id": "central",
+      "acl_revision": "acl-1",
+      "actions": [
+        "publish",
+        "subscribe",
+        "inspect_own"
+      ]
+    }
+  },
+  {
+    "connection": "test-client",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "poll",
+      "id": "rate-test",
+      "topic": "team/events"
+    }
+  },
+  {
+    "connection": "test-client",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "error",
+      "request_id": "rate-test",
+      "code": "rate_limited",
+      "detail": "Client rate limit exceeded.",
+      "retry_after_ms": 1000
+    }
+  }
+]

@@ -1,0 +1,514 @@
+{
+  "catalog_id": 1,
+  "name": "mynofy",
+  "version": 1,
+  "state": "draft",
+  "source": {
+    "project": "logging-engine",
+    "names": "morkhet_logging_engine/src/provider_strings.rs",
+    "numeric_ids": "morkhet_logging_engine/src/types.rs",
+    "provider_strings_sha256": "207daa48f876c225173179616bdec682e965d1ef08b1d7cd2c3f6c64207cf507",
+    "types_sha256": "071e4fb04d9ae1d3b6dc1d7b357bd0c2dc4b78e24bd04f059dc5f3229f25b0b2"
+  },
+  "reserved_invalid_id": 0,
+  "categories": [
+    {
+      "id": 1,
+      "name": "CORE"
+    },
+    {
+      "id": 2,
+      "name": "ENGINE"
+    },
+    {
+      "id": 3,
+      "name": "SYSTEM"
+    },
+    {
+      "id": 10,
+      "name": "MEMORY"
+    },
+    {
+      "id": 11,
+      "name": "THREAD"
+    },
+    {
+      "id": 12,
+      "name": "JOB"
+    },
+    {
+      "id": 13,
+      "name": "SCHEDULER"
+    },
+    {
+      "id": 20,
+      "name": "FILESYSTEM"
+    },
+    {
+      "id": 21,
+      "name": "STORAGE"
+    },
+    {
+      "id": 22,
+      "name": "DATABASE"
+    },
+    {
+      "id": 23,
+      "name": "CACHE"
+    },
+    {
+      "id": 30,
+      "name": "NETWORK"
+    },
+    {
+      "id": 31,
+      "name": "RPC"
+    },
+    {
+      "id": 32,
+      "name": "HTTP"
+    },
+    {
+      "id": 40,
+      "name": "LOCK"
+    },
+    {
+      "id": 41,
+      "name": "MUTEX"
+    },
+    {
+      "id": 42,
+      "name": "ATOMIC"
+    },
+    {
+      "id": 43,
+      "name": "ASSET"
+    },
+    {
+      "id": 44,
+      "name": "RESOURCE"
+    },
+    {
+      "id": 45,
+      "name": "BUNDLE"
+    },
+    {
+      "id": 46,
+      "name": "SERIALIZATION"
+    },
+    {
+      "id": 47,
+      "name": "DESERIALIZATION"
+    },
+    {
+      "id": 48,
+      "name": "RENDER"
+    },
+    {
+      "id": 49,
+      "name": "SHADER"
+    },
+    {
+      "id": 50,
+      "name": "TEXTURE"
+    },
+    {
+      "id": 51,
+      "name": "GPU"
+    },
+    {
+      "id": 52,
+      "name": "EVENT"
+    },
+    {
+      "id": 53,
+      "name": "MESSAGE"
+    },
+    {
+      "id": 54,
+      "name": "AUDIO"
+    },
+    {
+      "id": 55,
+      "name": "INPUT"
+    },
+    {
+      "id": 56,
+      "name": "ANIMATION"
+    },
+    {
+      "id": 57,
+      "name": "SCENE"
+    },
+    {
+      "id": 58,
+      "name": "ADDRESSABLES"
+    },
+    {
+      "id": 59,
+      "name": "STREAMING"
+    },
+    {
+      "id": 100,
+      "name": "GAMEPLAY"
+    },
+    {
+      "id": 101,
+      "name": "PLAYER"
+    },
+    {
+      "id": 102,
+      "name": "AI"
+    },
+    {
+      "id": 103,
+      "name": "PHYSICS"
+    },
+    {
+      "id": 300,
+      "name": "LOG"
+    },
+    {
+      "id": 301,
+      "name": "METRICS"
+    },
+    {
+      "id": 302,
+      "name": "TELEMETRY"
+    },
+    {
+      "id": 303,
+      "name": "DEBUG"
+    },
+    {
+      "id": 304,
+      "name": "SECURITY"
+    }
+  ],
+  "actions": [
+    {
+      "id": 1,
+      "name": "CREATE"
+    },
+    {
+      "id": 2,
+      "name": "DESTROY"
+    },
+    {
+      "id": 3,
+      "name": "LOAD"
+    },
+    {
+      "id": 4,
+      "name": "SAVE"
+    },
+    {
+      "id": 10,
+      "name": "START"
+    },
+    {
+      "id": 11,
+      "name": "STOP"
+    },
+    {
+      "id": 12,
+      "name": "INIT"
+    },
+    {
+      "id": 13,
+      "name": "SHUTDOWN"
+    },
+    {
+      "id": 14,
+      "name": "RESET"
+    },
+    {
+      "id": 20,
+      "name": "READ"
+    },
+    {
+      "id": 21,
+      "name": "WRITE"
+    },
+    {
+      "id": 22,
+      "name": "UPDATE"
+    },
+    {
+      "id": 23,
+      "name": "DELETE"
+    },
+    {
+      "id": 30,
+      "name": "COMPARE"
+    },
+    {
+      "id": 31,
+      "name": "MATCH"
+    },
+    {
+      "id": 32,
+      "name": "MISMATCH"
+    },
+    {
+      "id": 33,
+      "name": "VALIDATE"
+    },
+    {
+      "id": 40,
+      "name": "EXECUTE"
+    },
+    {
+      "id": 41,
+      "name": "SCHEDULE"
+    },
+    {
+      "id": 42,
+      "name": "COMPLETE"
+    },
+    {
+      "id": 43,
+      "name": "CANCEL"
+    },
+    {
+      "id": 50,
+      "name": "CONNECT"
+    },
+    {
+      "id": 51,
+      "name": "DISCONNECT"
+    },
+    {
+      "id": 52,
+      "name": "SEND"
+    },
+    {
+      "id": 53,
+      "name": "RECEIVE"
+    },
+    {
+      "id": 60,
+      "name": "ALLOCATE"
+    },
+    {
+      "id": 61,
+      "name": "FREE"
+    },
+    {
+      "id": 62,
+      "name": "MAP"
+    },
+    {
+      "id": 63,
+      "name": "UNMAP"
+    },
+    {
+      "id": 70,
+      "name": "LOCK"
+    },
+    {
+      "id": 71,
+      "name": "UNLOCK"
+    },
+    {
+      "id": 72,
+      "name": "ACQUIRE"
+    },
+    {
+      "id": 73,
+      "name": "RELEASE"
+    },
+    {
+      "id": 80,
+      "name": "QUEUE"
+    },
+    {
+      "id": 81,
+      "name": "DEQUEUE"
+    },
+    {
+      "id": 82,
+      "name": "WAKE"
+    },
+    {
+      "id": 83,
+      "name": "SLEEP"
+    },
+    {
+      "id": 90,
+      "name": "REGISTER"
+    },
+    {
+      "id": 91,
+      "name": "UNREGISTER"
+    },
+    {
+      "id": 92,
+      "name": "ATTACH"
+    },
+    {
+      "id": 93,
+      "name": "DETACH"
+    },
+    {
+      "id": 100,
+      "name": "OPEN"
+    },
+    {
+      "id": 101,
+      "name": "CLOSE"
+    },
+    {
+      "id": 102,
+      "name": "FLUSH"
+    },
+    {
+      "id": 103,
+      "name": "SYNC"
+    },
+    {
+      "id": 110,
+      "name": "COMMIT"
+    },
+    {
+      "id": 111,
+      "name": "ROLLBACK"
+    },
+    {
+      "id": 120,
+      "name": "QUERY"
+    },
+    {
+      "id": 121,
+      "name": "LOOKUP"
+    }
+  ],
+  "statuses": [
+    {
+      "id": 1,
+      "name": "UNSPECIFIED"
+    },
+    {
+      "id": 2,
+      "name": "SUCCESS"
+    },
+    {
+      "id": 3,
+      "name": "FAILED"
+    },
+    {
+      "id": 4,
+      "name": "TIMEOUT"
+    },
+    {
+      "id": 5,
+      "name": "CANCELLED"
+    },
+    {
+      "id": 6,
+      "name": "RETRY"
+    },
+    {
+      "id": 7,
+      "name": "PENDING"
+    },
+    {
+      "id": 8,
+      "name": "PARTIAL"
+    },
+    {
+      "id": 9,
+      "name": "INVALID_ARGUMENT"
+    },
+    {
+      "id": 10,
+      "name": "NOT_FOUND"
+    },
+    {
+      "id": 11,
+      "name": "ALREADY_EXISTS"
+    },
+    {
+      "id": 12,
+      "name": "BUSY"
+    },
+    {
+      "id": 13,
+      "name": "LOCKED"
+    },
+    {
+      "id": 14,
+      "name": "CONFLICT"
+    },
+    {
+      "id": 15,
+      "name": "UNAVAILABLE"
+    },
+    {
+      "id": 16,
+      "name": "RESOURCE_EXHAUSTED"
+    },
+    {
+      "id": 17,
+      "name": "PERMISSION_DENIED"
+    },
+    {
+      "id": 18,
+      "name": "NOT_IMPLEMENTED"
+    },
+    {
+      "id": 19,
+      "name": "SKIPPED"
+    },
+    {
+      "id": 20,
+      "name": "DEFERRED"
+    },
+    {
+      "id": 21,
+      "name": "CORRUPTED"
+    }
+  ],
+  "parameter_types": [
+    {
+      "id": 1,
+      "name": "U32",
+      "value_bytes": 4
+    },
+    {
+      "id": 2,
+      "name": "U64",
+      "value_bytes": 8
+    },
+    {
+      "id": 3,
+      "name": "I32",
+      "value_bytes": 4
+    },
+    {
+      "id": 4,
+      "name": "I64",
+      "value_bytes": 8
+    },
+    {
+      "id": 5,
+      "name": "F32",
+      "value_bytes": 4
+    },
+    {
+      "id": 6,
+      "name": "F64",
+      "value_bytes": 8
+    },
+    {
+      "id": 7,
+      "name": "BOOL",
+      "value_bytes": 1
+    }
+  ],
+  "limits": {
+    "max_parameters": 3,
+    "max_parameter_value_bytes": 24,
+    "max_opaque_payload_bytes": 4096
+  }
+}

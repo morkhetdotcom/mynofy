@@ -1,0 +1,161 @@
+[
+  {
+    "connection": "reader",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "poll",
+      "id": "page-1",
+      "topic": "events",
+      "limit": 1
+    }
+  },
+  {
+    "connection": "reader",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "messages",
+      "request_id": "page-1",
+      "items": [
+        {
+          "message": {
+            "id": "msg-1",
+            "topic": "events",
+            "payload": {
+              "value": 1
+            },
+            "expires": {
+              "time": "2026-12-01T12:00:00Z"
+            },
+            "producer_id": "client:ed25519:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+          }
+        }
+      ],
+      "next_cursor": "00000001",
+      "has_more": true
+    }
+  },
+  {
+    "connection": "reader",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "poll",
+      "id": "page-2",
+      "topic": "events",
+      "limit": 1,
+      "after": "00000001"
+    }
+  },
+  {
+    "connection": "reader",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "messages",
+      "request_id": "page-2",
+      "items": [
+        {
+          "message": {
+            "id": "msg-2",
+            "topic": "events",
+            "payload": {
+              "value": 2
+            },
+            "expires": {
+              "time": "2026-12-01T12:00:00Z"
+            },
+            "producer_id": "client:ed25519:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+          }
+        }
+      ],
+      "next_cursor": "00000002",
+      "has_more": false
+    }
+  },
+  {
+    "connection": "reader",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "poll",
+      "id": "empty-1",
+      "topic": "events",
+      "after": "00000002"
+    }
+  },
+  {
+    "connection": "reader",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "messages",
+      "request_id": "empty-1",
+      "items": [],
+      "next_cursor": "00000002",
+      "has_more": false
+    }
+  },
+  {
+    "connection": "reader",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "poll",
+      "id": "expired-anchor",
+      "topic": "events",
+      "after": "00000002"
+    }
+  },
+  {
+    "connection": "reader",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "messages",
+      "request_id": "expired-anchor",
+      "items": [],
+      "next_cursor": "00000003",
+      "has_more": false
+    },
+    "note": "Die Nachrichten bis Position 3 sind abgelaufen; der Cursor benötigt keinen Zugriff auf deren Payload oder Message-ID."
+  },
+  {
+    "connection": "reader",
+    "direction": "client_to_service",
+    "frame": {
+      "version": 1,
+      "type": "poll",
+      "id": "new-1",
+      "topic": "events",
+      "after": "00000003"
+    }
+  },
+  {
+    "connection": "reader",
+    "direction": "service_to_client",
+    "frame": {
+      "version": 1,
+      "type": "messages",
+      "request_id": "new-1",
+      "items": [
+        {
+          "message": {
+            "id": "msg-4",
+            "topic": "events",
+            "payload": {
+              "value": 4
+            },
+            "expires": {
+              "time": "2026-12-01T12:00:00Z"
+            },
+            "producer_id": "client:ed25519:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+          }
+        }
+      ],
+      "next_cursor": "00000004",
+      "has_more": false
+    }
+  }
+]

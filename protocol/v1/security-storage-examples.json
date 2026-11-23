@@ -1,0 +1,16 @@
+[
+  {
+    "version": 1,
+    "type": "error",
+    "request_id": "commit",
+    "code": "security_storage_busy",
+    "detail": "Security write queue is full; retry later."
+  },
+  {
+    "version": 1,
+    "type": "error",
+    "request_id": "commit",
+    "code": "security_storage_unavailable",
+    "detail": "Security writer is unavailable."
+  }
+]

@@ -1,0 +1,31 @@
+[
+  {
+    "connection": "edge -> central",
+    "direction": "initiator_to_acceptor",
+    "frame": {
+      "version": 1,
+      "type": "route_query",
+      "id": "route-1",
+      "topic": "team/events",
+      "visited": [
+        "edge"
+      ],
+      "hop_limit": 8
+    }
+  },
+  {
+    "connection": "edge -> central",
+    "direction": "acceptor_to_initiator",
+    "frame": {
+      "version": 1,
+      "type": "route_info",
+      "request_id": "route-1",
+      "topic": "team/events",
+      "owner_id": "central",
+      "path": [
+        "central"
+      ],
+      "expires_at": "2026-12-01T12:00:00Z"
+    }
+  }
+]

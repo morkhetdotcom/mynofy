@@ -1,0 +1,52 @@
+[package]
+name = "mynofy-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "mynofy RAM topic owner and server transports"
+
+[dependencies]
+aws-lc-rs.workspace = true
+saphyr-parser.workspace = true
+bytes.workspace = true
+prost.workspace = true
+mynofy-protocol = { workspace = true, features = ["crypto", "transport"] }
+serde.workspace = true
+serde_json.workspace = true
+tokio = { workspace = true, features = ["rt", "net", "io-util", "time", "sync", "macros"] }
+tokio-rustls.workspace = true
+tokio-tungstenite.workspace = true
+futures-util.workspace = true
+zeroize.workspace = true
+
+[[bench]]
+name = "core"
+harness = false
+
+[[bench]]
+name = "codec"
+harness = false
+
+[[bench]]
+name = "state"
+harness = false
+
+[[bench]]
+name = "cleanup"
+harness = false
+
+[target.'cfg(unix)'.dependencies]
+rustix = { workspace = true, features = ["process", "fs"] }
+
+[[bench]]
+name = "persistence"
+harness = false
+
+[[bench]]
+name = "operations"
+harness = false
+
+[[bench]]
+name = "contention"
+harness = false

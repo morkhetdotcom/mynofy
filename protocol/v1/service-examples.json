@@ -1,0 +1,22 @@
+[
+  {
+    "connection": "workstation-a -> office-hub",
+    "direction": "initiator_to_acceptor",
+    "frame": {
+      "version": 1,
+      "type": "service_hello",
+      "id": "hello-1",
+      "service_id": "workstation-a"
+    }
+  },
+  {
+    "connection": "workstation-a -> office-hub",
+    "direction": "acceptor_to_initiator",
+    "frame": {
+      "version": 1,
+      "type": "service_welcome",
+      "request_id": "hello-1",
+      "service_id": "office-hub"
+    }
+  }
+]

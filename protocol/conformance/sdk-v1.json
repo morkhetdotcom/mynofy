@@ -1,0 +1,366 @@
+{
+  "auth": [
+    {
+      "client_id": "client:ed25519:Yw3NKWbEM2aRElRIu7JbT/QSpJxzLbLIq8G4WBvXEN0=",
+      "nonce": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+      "owner": "owner",
+      "public_key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "token_id": "ed25519:Yw3NKWbEM2aRElRIu7JbT/QSpJxzLbLIq8G4WBvXEN0=",
+      "transcript_base64": "bXlub2Z5LWNsaWVudC1hdXRoLXYxAAcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8AAAAFb3duZXI="
+    },
+    {
+      "client_id": "client:ed25519:Yw3NKWbEM2aRElRIu7JbT/QSpJxzLbLIq8G4WBvXEN0=",
+      "nonce": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+      "owner": "mynofy-ä",
+      "public_key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+      "token_id": "ed25519:Yw3NKWbEM2aRElRIu7JbT/QSpJxzLbLIq8G4WBvXEN0=",
+      "transcript_base64": "bXlub2Z5LWNsaWVudC1hdXRoLXYxAAcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHAAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8AAAAJbXlub2Z5LcOk"
+    }
+  ],
+  "frames": [
+    {
+      "json": {
+        "id": "bytes",
+        "payload": {
+          "content_type": "application/octet-stream",
+          "data": "AP9oZWxsbw==",
+          "kind": "bytes"
+        },
+        "topic": "sdk/events",
+        "type": "publish",
+        "version": 1
+      },
+      "protobuf_base64": "CAFiOAoFYnl0ZXMSCnNkay9ldmVudHMaIwoYYXBwbGljYXRpb24vb2N0ZXQtc3RyZWFtEgcA/2hlbGxv"
+    },
+    {
+      "json": {
+        "id": "event",
+        "payload": {
+          "action": 42,
+          "catalog": 1,
+          "catalog_version": 1,
+          "category": 12,
+          "kind": "event",
+          "parameters": [
+            {
+              "u64": 18446744073709551615
+            },
+            {
+              "i64": -9223372036854775808
+            },
+            {
+              "bool": false
+            }
+          ],
+          "status": 2
+        },
+        "topic": "sdk/events",
+        "type": "publish",
+        "version": 1
+      },
+      "protobuf_base64": "CAFiPwoFZXZlbnQSCnNkay9ldmVudHMaKhooCAEQARgMICooAjILEP///////////wEyCyD///////////8BMgI4AA=="
+    },
+    {
+      "json": {
+        "after": "0000000Z",
+        "id": "poll",
+        "limit": 100,
+        "topic": "sdk/events",
+        "type": "poll",
+        "version": 1
+      },
+      "protobuf_base64": "CAFSHgoEcG9sbBIKc2RrL2V2ZW50cxoIMDAwMDAwMFogZA=="
+    },
+    {
+      "json": {
+        "id": "own",
+        "limit": 10,
+        "topic": "sdk/events",
+        "type": "list_messages",
+        "version": 1
+      },
+      "protobuf_base64": "CAGCARMKA293bhIKc2RrL2V2ZW50cxgK"
+    },
+    {
+      "json": {
+        "id": "get",
+        "message_id": "00000001",
+        "type": "get_message",
+        "version": 1
+      },
+      "protobuf_base64": "CAGSAQ8KA2dldBIIMDAwMDAwMDE="
+    },
+    {
+      "json": {
+        "id": "acl",
+        "topic": "sdk/events",
+        "type": "get_permissions",
+        "version": 1
+      },
+      "protobuf_base64": "CAGqAREKA2FjbBIKc2RrL2V2ZW50cw=="
+    },
+    {
+      "json": {
+        "catalog_version": 1,
+        "id": "catalog",
+        "name": "mynofy",
+        "type": "get_catalog",
+        "version": 1
+      },
+      "protobuf_base64": "CAHqARMKB2NhdGFsb2cSBm15bm9meRgB"
+    },
+    {
+      "json": {
+        "has_more": false,
+        "items": [],
+        "next_cursor": "0000000Z",
+        "request_id": "poll",
+        "type": "messages",
+        "version": 1
+      },
+      "protobuf_base64": "CAFaEgoEcG9sbBoIMDAwMDAwMFogAA=="
+    },
+    {
+      "json": {
+        "code": "rate_limited",
+        "detail": "wait",
+        "request_id": "pub",
+        "retry_after_ms": 123,
+        "type": "error",
+        "version": 1
+      },
+      "protobuf_base64": "CAGiARsKA3B1YhIMcmF0ZV9saW1pdGVkGgR3YWl0IHs="
+    }
+  ],
+  "rotation": {
+    "aad_base64": "WyJteW5vZnktcm90YXRpb24tdjEiLCJvd25lciIsImNsaWVudDpmaXh0dXJlIiwicm90YXRpb246MSIsImVkMjU1MTk6b2xkIiwxODkzNDU2MDAwMTIzXQ==",
+    "challenge": "BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=",
+    "client_id": "client:fixture",
+    "old_token": "ed25519:old",
+    "owner": "owner",
+    "proof_base64": "bXlub2Z5LXJvdGF0aW9uLXByb29mLXYxAFsibXlub2Z5LXJvdGF0aW9uLXYxIiwib3duZXIiLCJjbGllbnQ6Zml4dHVyZSIsInJvdGF0aW9uOjEiLCJlZDI1NTE5Om9sZCIsMTg5MzQ1NjAwMDEyM10AAQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcH",
+    "public_key": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+    "rotation_id": "rotation:1",
+    "until_ms": 1893456000123
+  },
+  "version": 1,
+  "payload_validation": [
+    {
+      "name": "event",
+      "valid": true,
+      "payload": {
+        "event": {
+          "catalog": 1,
+          "catalog_version": 1,
+          "category": 12,
+          "action": 42,
+          "status": 2
+        }
+      }
+    },
+    {
+      "name": "event-with-content-type",
+      "valid": false,
+      "payload": {
+        "event": {
+          "catalog": 1,
+          "catalog_version": 1,
+          "category": 12,
+          "action": 42,
+          "status": 2
+        },
+        "content_type": "application/json"
+      }
+    },
+    {
+      "name": "event-with-empty-content-type",
+      "valid": false,
+      "payload": {
+        "event": {
+          "catalog": 1,
+          "catalog_version": 1,
+          "category": 12,
+          "action": 42,
+          "status": 2
+        },
+        "content_type": ""
+      }
+    },
+    {
+      "name": "bytes-with-content-type",
+      "valid": true,
+      "payload": {
+        "data": "eA==",
+        "content_type": "application/octet-stream"
+      }
+    },
+    {
+      "name": "bytes-with-empty-content-type",
+      "valid": false,
+      "payload": {
+        "data": "eA==",
+        "content_type": ""
+      }
+    }
+  ],
+  "reply_validation": [
+    {
+      "name": "publish-complete",
+      "valid": true,
+      "mutation": true,
+      "request_base64": "CAFiIgoKc2VtYW50aWMtMRIMbG9jYWwvZXZlbnRzGgYSBG9uY2U=",
+      "response_base64": "CAFqLgoKc2VtYW50aWMtMRIIMDAwMDAwMDEaFgoUMjAzMC0wMS0wMVQwMDowMDowMFo=",
+      "request": {
+        "version": 1,
+        "type": "publish",
+        "id": "semantic-1",
+        "topic": "local/events",
+        "payload": {
+          "kind": "bytes",
+          "data": "b25jZQ=="
+        }
+      },
+      "response": {
+        "version": 1,
+        "type": "result",
+        "request_id": "semantic-1",
+        "message_id": "00000001",
+        "expires": {
+          "time": "2030-01-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "publish-missing-id",
+      "valid": false,
+      "mutation": true,
+      "request_base64": "CAFiIgoKc2VtYW50aWMtMRIMbG9jYWwvZXZlbnRzGgYSBG9uY2U=",
+      "response_base64": "CAFqJAoKc2VtYW50aWMtMRoWChQyMDMwLTAxLTAxVDAwOjAwOjAwWg==",
+      "request": {
+        "version": 1,
+        "type": "publish",
+        "id": "semantic-1",
+        "topic": "local/events",
+        "payload": {
+          "kind": "bytes",
+          "data": "b25jZQ=="
+        }
+      },
+      "response": {
+        "version": 1,
+        "type": "result",
+        "request_id": "semantic-1",
+        "expires": {
+          "time": "2030-01-01T00:00:00Z"
+        }
+      }
+    },
+    {
+      "name": "publish-missing-expiry",
+      "valid": false,
+      "mutation": true,
+      "request_base64": "CAFiIgoKc2VtYW50aWMtMRIMbG9jYWwvZXZlbnRzGgYSBG9uY2U=",
+      "response_base64": "CAFqFgoKc2VtYW50aWMtMRIIMDAwMDAwMDE=",
+      "request": {
+        "version": 1,
+        "type": "publish",
+        "id": "semantic-1",
+        "topic": "local/events",
+        "payload": {
+          "kind": "bytes",
+          "data": "b25jZQ=="
+        }
+      },
+      "response": {
+        "version": 1,
+        "type": "result",
+        "request_id": "semantic-1",
+        "message_id": "00000001"
+      }
+    },
+    {
+      "name": "publish-missing-both",
+      "valid": false,
+      "mutation": true,
+      "request_base64": "CAFiIgoKc2VtYW50aWMtMRIMbG9jYWwvZXZlbnRzGgYSBG9uY2U=",
+      "response_base64": "CAFqDAoKc2VtYW50aWMtMQ==",
+      "request": {
+        "version": 1,
+        "type": "publish",
+        "id": "semantic-1",
+        "topic": "local/events",
+        "payload": {
+          "kind": "bytes",
+          "data": "b25jZQ=="
+        }
+      },
+      "response": {
+        "version": 1,
+        "type": "result",
+        "request_id": "semantic-1"
+      }
+    },
+    {
+      "name": "get-correct",
+      "valid": true,
+      "mutation": false,
+      "request_base64": "CAGSARYKCnNlbWFudGljLTESCDAwMDAwMDAx",
+      "response_base64": "CAGaAXoKCnNlbWFudGljLTESVgoIMDAwMDAwMDESDGxvY2FsL2V2ZW50cxoIEgZyZXN1bHQiFgoUMjAzMC0wMS0wMVQwMDowMDowMFoqGmNsaWVudDpvd25lci1hdXRoZW50aWNhdGVkGhQyMDI5LTAxLTAxVDAwOjAwOjAwWg==",
+      "request": {
+        "version": 1,
+        "type": "get_message",
+        "id": "semantic-1",
+        "message_id": "00000001"
+      },
+      "response": {
+        "version": 1,
+        "type": "message_status",
+        "request_id": "semantic-1",
+        "created_at": "2029-01-01T00:00:00Z",
+        "message": {
+          "id": "00000001",
+          "topic": "local/events",
+          "producer_id": "client:owner-authenticated",
+          "payload": {
+            "kind": "bytes",
+            "data": "cmVzdWx0"
+          },
+          "expires": {
+            "time": "2030-01-01T00:00:00Z"
+          }
+        }
+      }
+    },
+    {
+      "name": "get-wrong-id",
+      "valid": false,
+      "mutation": false,
+      "request_base64": "CAGSARYKCnNlbWFudGljLTESCDAwMDAwMDAx",
+      "response_base64": "CAGaAXoKCnNlbWFudGljLTESVgoIMDAwMDAwMDISDGxvY2FsL2V2ZW50cxoIEgZyZXN1bHQiFgoUMjAzMC0wMS0wMVQwMDowMDowMFoqGmNsaWVudDpvd25lci1hdXRoZW50aWNhdGVkGhQyMDI5LTAxLTAxVDAwOjAwOjAwWg==",
+      "request": {
+        "version": 1,
+        "type": "get_message",
+        "id": "semantic-1",
+        "message_id": "00000001"
+      },
+      "response": {
+        "version": 1,
+        "type": "message_status",
+        "request_id": "semantic-1",
+        "created_at": "2029-01-01T00:00:00Z",
+        "message": {
+          "id": "00000002",
+          "topic": "local/events",
+          "producer_id": "client:owner-authenticated",
+          "payload": {
+            "kind": "bytes",
+            "data": "cmVzdWx0"
+          },
+          "expires": {
+            "time": "2030-01-01T00:00:00Z"
+          }
+        }
+      }
+    }
+  ]
+}

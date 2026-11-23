@@ -1,0 +1,46 @@
+{
+  "description": "Öffentliche Testdaten; privater Beispielschlüssel verworfen. Kein produktives Credential. Die Nonce ist nur für diese Testtranskription gültig.",
+  "public_key": "S2jpXPMJ7W/D5OLir3LdNFHjZhfBAnDDWoeX4TqtH1k=",
+  "frames": [
+    {
+      "direction": "client_to_service",
+      "frame": {
+        "version": 1,
+        "type": "auth_hello",
+        "id": "hello-1",
+        "token_id": "ed25519:/8wY7RJc5IXV6zlzbT5b464j7V3n1Ju5GN4eqVY2NOs="
+      }
+    },
+    {
+      "direction": "service_to_client",
+      "frame": {
+        "version": 1,
+        "type": "auth_challenge",
+        "request_id": "hello-1",
+        "service_id": "office-hub",
+        "nonce": "A+sN1AdNTCMwtADmHrr09+oPzG/Qap9MCP5cn7amFag="
+      }
+    },
+    {
+      "direction": "client_to_service",
+      "frame": {
+        "version": 1,
+        "type": "auth_proof",
+        "id": "proof-1",
+        "auth_id": "hello-1",
+        "signature": "PwJNdVohaZIuQ+YsNRoCn+O3bYTCWaUJS9J6bFLjYb+bKC8UD+8ghvBPUEsunCFszAqKcFFgcs7Lx+xsMDbfBw=="
+      }
+    },
+    {
+      "direction": "service_to_client",
+      "frame": {
+        "version": 1,
+        "type": "auth_welcome",
+        "request_id": "proof-1",
+        "client_id": "client:ed25519:/8wY7RJc5IXV6zlzbT5b464j7V3n1Ju5GN4eqVY2NOs=",
+        "service_id": "office-hub",
+        "restart_counter": 1
+      }
+    }
+  ]
+}
