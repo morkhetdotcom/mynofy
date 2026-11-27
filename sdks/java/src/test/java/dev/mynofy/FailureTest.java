@@ -27,6 +27,45 @@ import org.junit.jupiter.api.Timeout;
 
 @Timeout(30)
 class FailureTest {
+  @Test
+  void receiveBudgetCountsBytesAndEmptyFragmentsBeforeAggregation() throws Exception {
+    var draft = new Transport.BoundedDraft();
+    var binary = org.java_websocket.enums.Opcode.BINARY;
+    var continuation = org.java_websocket.enums.Opcode.CONTINUOUS;
+    var ping = org.java_websocket.enums.Opcode.PING;
+    draft.account(binary, Transport.MAX_FRAME, false);
+    draft.account(ping, 1, true);
+    assertThrows(org.java_websocket.exceptions.LimitExceededException.class,
+        () -> draft.account(continuation, 1, true));
+    draft.reset();
+    draft.account(binary, 0, false);
+    for (int i = 1; i < Transport.BoundedDraft.MAX_FRAGMENTS; i++) {
+      draft.account(continuation, 0, false);
+    }
+    assertThrows(org.java_websocket.exceptions.LimitExceededException.class,
+        () -> draft.account(continuation, 0, true));
+    draft.reset();
+    draft.account(binary, 1, false);
+    draft.account(continuation, 1, true);
+    draft.account(binary, Transport.MAX_FRAME, true);
+    assertInstanceOf(Transport.BoundedDraft.class, draft.copyInstance());
+  }
+
+  @Test
+  void upgradeBudgetRejectsOversizedHeadersAndPreservesFrameBytes() throws Exception {
+    var draft = new Transport.BoundedDraft();
+    draft.setParseMode(org.java_websocket.enums.Role.CLIENT);
+    var oversized = ByteBuffer.allocate(Transport.BoundedDraft.MAX_UPGRADE_HEADERS);
+    assertThrows(org.java_websocket.exceptions.InvalidHandshakeException.class,
+        () -> draft.translateHandshake(oversized));
+    var response = ByteBuffer.wrap(
+        "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n\r\nFRAME"
+            .getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+    draft.translateHandshake(response);
+    assertEquals('F', response.get());
+    assertEquals(4, response.remaining());
+  }
+
   static final class Peer extends WebSocketAdapter implements AutoCloseable {
     final SSLServerSocket server;
     final Thread worker;
@@ -35,6 +74,7 @@ class FailureTest {
     final CompletableFuture<Wire.Frame> received = new CompletableFuture<>();
     final AtomicInteger publishes = new AtomicInteger();
     final AtomicInteger commands = new AtomicInteger();
+    final CountDownLatch releasePoll = new CountDownLatch(1);
     final Fixture fixture;
     final String mode;
 
@@ -206,6 +246,13 @@ class FailureTest {
             response.getResultBuilder().setRequestId(frame.getPublish().getId());
           else response.getMessageStatusBuilder().setRequestId(frame.getGetMessage().getId());
           send(conn, response.build());
+          return;
+        }
+        if (mode.equals("invalid-poll") && frame.hasPoll()) {
+          if (!releasePoll.await(3, TimeUnit.SECONDS)) throw new IOException("poll test timed out");
+          send(conn, Wire.Frame.newBuilder().setVersion(1)
+              .setMessages(Wire.Messages.newBuilder().setRequestId(frame.getPoll().getId())
+                  .setNextCursor("broken").setHasMore(false)).build());
           return;
         }
         if (frame.hasPublish()) publishes.incrementAndGet();
@@ -428,4 +475,26 @@ class FailureTest {
       }
     }
   }
+  @Test
+  void malformedPollClosesBeforeAnotherCommandCanSend() throws Exception {
+    try (var fixture = new Fixture("wss");
+         var peer = new Peer(fixture, "invalid-poll");
+         var client = Client.connect(peer.config(Duration.ofSeconds(3)))) {
+      var pool = Executors.newSingleThreadExecutor();
+      try {
+        var result = pool.submit(() -> client.poll("local/events", null, 20));
+        peer.received.get(3, TimeUnit.SECONDS);
+        assertThrows(Client.BusyException.class, () -> client.poll("local/events", null, 20));
+        peer.releasePoll.countDown();
+        var failure = assertThrows(ExecutionException.class, () -> result.get(3, TimeUnit.SECONDS));
+        assertInstanceOf(Client.TransportException.class, failure.getCause());
+        assertThrows(IOException.class, () -> client.poll("local/events", null, 20));
+        assertEquals(1, peer.commands.get());
+      } finally {
+        peer.releasePoll.countDown();
+        pool.shutdownNow();
+      }
+    }
+  }
+
 }

@@ -100,6 +100,8 @@ void mynofy_key_free(mynofy_key *key);
 
 int32_t mynofy_connect(const mynofy_config *config, mynofy_client **out, mynofy_error *error);
 int32_t mynofy_client_info(const mynofy_client *client, mynofy_connection_info *out, mynofy_error *error);
+/* Borrowed for the lifetime of client. Empty if the owner predates boot identities. */
+int32_t mynofy_client_boot_id(const mynofy_client *client, mynofy_str *out, mynofy_error *error);
 /* close may run concurrently with an operation: permanent cancellation, no retry.
  * free requires all calls on that handle to have returned. It also closes it. */
 void mynofy_client_close(const mynofy_client *client);

@@ -25,10 +25,12 @@ thread_local! {
 }
 
 struct Topic {
+    active_bytes: usize,
     slot: u16,
     head: u64,
     messages: OrderedIndex,
     policy: Policy,
+    storage: crate::config::TopicStorage,
 }
 struct Credential {
     client: String,
@@ -90,6 +92,9 @@ impl Bucket {
     }
 }
 struct ClientState {
+    key_tokens: Vec<String>,
+    session_ids: std::collections::BTreeSet<u64>,
+    active_bytes: usize,
     disabled: bool,
     display_name: Option<String>,
     request_slots: std::sync::Arc<tokio::sync::Semaphore>,
@@ -153,7 +158,7 @@ pub struct CleanupProgress {
     pub rotations: usize,
     pub more: bool,
 }
-type PollEntry = (u64, u32);
+type PollEntry = (u64, u32, crate::storage::PolledLengths);
 
 pub struct Engine {
     poll_scratch: Vec<PollEntry>,
@@ -161,6 +166,9 @@ pub struct Engine {
     content: Option<crate::content::ContentRuntime>,
     security: Option<crate::security::Journal>,
     pub config: Config,
+    topic_owners: HashMap<String, String>,
+    shutting_down: bool,
+    pub(crate) egress: Option<std::sync::Arc<crate::transport::Egress>>,
     generation: String,
     codec: CursorCodec,
     keys: HashMap<String, Credential>,
@@ -194,6 +202,24 @@ impl Engine {
     pub fn restart_counter(&self) -> u32 {
         self.restart_counter
     }
+    pub(crate) fn begin_shutdown(
+        &mut self,
+    ) -> (
+        Option<crate::content::ContentRuntime>,
+        Option<crate::security::Journal>,
+    ) {
+        self.shutting_down = true;
+        self.sessions.clear();
+        for client in self.clients.values_mut() {
+            client.session_ids.clear();
+        }
+        (self.content.take(), self.security.take())
+    }
+
+    pub(crate) fn topic_owner(&self, topic: &str) -> Option<&str> {
+        self.topic_owners.get(topic).map(String::as_str)
+    }
+
     pub fn new(config: Config, now: u64) -> Result<Self> {
         Self::new_with_content_secret(config, now, None)
     }
@@ -206,25 +232,29 @@ impl Engine {
         config.validate().map_err(|_| ApiError::invalid())?;
         let mut startup =
             crate::content::Startup::open(&config, secret, now).map_err(content_error)?;
-        let configured_topics: std::collections::HashSet<_> =
-            config.topics.iter().map(|t| t.name.clone()).collect();
+        if let Some(startup) = &startup {
+            startup
+                .validate_storage_encryption(&config)
+                .map_err(content_error)?;
+        }
         let checkpoint = startup.as_mut().and_then(|startup| startup.loaded.take());
         if let Some(checkpoint) = &checkpoint {
             checkpoint
                 .prepare_topics(&mut config)
                 .map_err(content_error)?;
             if let Some(startup) = &startup {
-                startup.apply_storages(&mut config, &configured_topics);
+                startup.apply_storages(&mut config);
             }
         }
 
-        let security = crate::security::Journal::open(&mut config).map_err(|error| {
+        let security_error = |error: crate::BoxError| {
             eprintln!("mynofy: security recovery failed: {error}");
             ApiError::new(
                 "security_storage_error",
                 "Security state could not be safely loaded; see service stderr.",
             )
-        })?;
+        };
+        let security = crate::security::Startup::open(&mut config).map_err(security_error)?;
         if let Some(checkpoint) = &checkpoint {
             checkpoint
                 .order_clients(&mut config)
@@ -239,6 +269,9 @@ impl Engine {
             clients.insert(
                 c.client_id.clone(),
                 ClientState {
+                    key_tokens: Vec::with_capacity(c.keys.len()),
+                    session_ids: Default::default(),
+                    active_bytes: 0,
                     disabled: c.disabled,
                     display_name: c.display_name.clone(),
                     request_slots: std::sync::Arc::new(tokio::sync::Semaphore::new(
@@ -254,8 +287,14 @@ impl Engine {
             own.insert(c.client_id.clone(), OrderedIndex::new());
             for key in &c.keys {
                 let (public, until) = crate::config::read_public(key)?;
+                let token = crypto::token_id(&public);
+                clients
+                    .get_mut(&c.client_id)
+                    .unwrap()
+                    .key_tokens
+                    .push(token.clone());
                 keys.insert(
-                    crypto::token_id(&public),
+                    token,
                     Credential {
                         client: c.client_id.clone(),
                         public,
@@ -280,10 +319,12 @@ impl Engine {
                     (
                         t.name.clone(),
                         Topic {
+                            active_bytes: 0,
                             slot: slot as u16,
                             head: 0,
                             messages: OrderedIndex::new(),
                             policy: p,
+                            storage: t.storage.clone(),
                         },
                     )
                 })
@@ -298,14 +339,21 @@ impl Engine {
                 }
             }
         }
-        let restart_counter = security
-            .as_ref()
-            .map_or(0, |journal| journal.restart_counter());
         let mut engine = Self {
             poll_scratch: Vec::new(),
-            restart_counter,
+            restart_counter: 0,
             content: None,
-            security,
+            security: None,
+            shutting_down: false,
+            egress: config
+                .limits
+                .max_egress_bytes
+                .map(|bytes| std::sync::Arc::new(crate::transport::Egress::new(bytes))),
+            topic_owners: config
+                .topics
+                .iter()
+                .map(|topic| (topic.name.clone(), topic.owner_id.clone()))
+                .collect(),
             config,
             generation: crypto::encode(&crypto::random::<16>()?),
             codec: CursorCodec::new(crypto::random()?),
@@ -343,6 +391,11 @@ impl Engine {
             .map_or(0, |checkpoint| checkpoint.revision);
         if let Some(checkpoint) = checkpoint {
             engine.restore_content(checkpoint, now)?;
+        }
+        if let Some(security) = security {
+            let journal = security.start(&engine.config).map_err(security_error)?;
+            engine.restart_counter = journal.restart_counter();
+            engine.security = Some(journal);
         }
         if let Some(startup) = startup {
             engine.content = Some(
@@ -446,7 +499,7 @@ impl Engine {
             .as_mut()
             .map_or_else(Vec::new, |content| content.due());
         if !due.is_empty()
-            && let Err(error) = self.save_content_topics(Some(&due))
+            && let Err(error) = self.queue_content_save(due, true)
         {
             eprintln!("mynofy: content autosave could not be queued: {error}");
         }
@@ -516,18 +569,39 @@ impl Engine {
         if let Some(state) = self.sessions.get(&session) {
             state.invalidated.send_replace(true);
         }
-        if let Some(client) = self
-            .sessions
-            .remove(&session)
-            .and_then(|s| s.auth.map(|a| a.client))
-            && self
+        if let Some(auth) = self.sessions.remove(&session).and_then(|s| s.auth) {
+            if let Some(client) = self.clients.get_mut(&auth.client) {
+                client.session_ids.remove(&session);
+            }
+            if self
                 .rotations
-                .get(&client)
+                .get(&auth.client)
                 .is_some_and(|r| r.session == session)
-        {
-            self.take_rotation(&client);
+            {
+                self.take_rotation(&auth.client);
+            }
         }
     }
+
+    fn insert_credential(&mut self, token: String, key: Credential) {
+        self.clients
+            .get_mut(&key.client)
+            .expect("registered credential owner")
+            .key_tokens
+            .push(token.clone());
+        self.keys.insert(token, key);
+    }
+
+    fn remove_credential(&mut self, token: &str) {
+        if let Some(key) = self.keys.remove(token) {
+            self.clients
+                .get_mut(&key.client)
+                .expect("registered credential owner")
+                .key_tokens
+                .retain(|item| item != token);
+        }
+    }
+
     pub fn charge(&mut self, session: u64, now: u64) -> Result<()> {
         let slot = self.identity_slot(session, now)?;
         self.charge_slot(slot, now)
@@ -661,7 +735,7 @@ impl Engine {
         let mut candidate = self.security_client(&client)?;
         candidate.keys.retain(|key| key.public_key != public_key);
         self.security_check(&crate::security::Change::Client { value: candidate })?;
-        self.keys.remove(token);
+        self.remove_credential(token);
         for session in self.sessions.values_mut() {
             if session
                 .challenge
@@ -739,15 +813,20 @@ impl Engine {
                 break;
             }
             if let Some(stored) = self.records.remove(slot) {
+                let charge = stored.charge(&self.content_types, &self.payloads);
                 if let Some(name) = self.topic_names.get(stored.topic() as usize)
                     && let Some(topic) = self.topics.get_mut(name)
                 {
                     topic.messages.remove(&stored.seq());
+                    topic.active_bytes -= charge;
                 }
                 self.index.remove(&stored.id());
-                self.active_bytes = self
-                    .active_bytes
-                    .saturating_sub(stored.charge(&self.content_types, &self.payloads));
+                self.active_bytes -= charge;
+                if let Some(name) = self.client_names.get(stored.producer_slot())
+                    && let Some(client) = self.clients.get_mut(name)
+                {
+                    client.active_bytes -= charge;
+                }
                 stored
                     .payload()
                     .release(&mut self.content_types, &mut self.payloads);
@@ -814,7 +893,19 @@ impl Engine {
     }
     /// Binary protobuf hot path: native application operations avoid JSON request/response trees.
     pub fn handle_protobuf(&mut self, session: u64, raw: &[u8], now: u64) -> pb::Frame {
-        self.handle_protobuf_inner(session, raw, now, None)
+        let maximum = self.config.limits.max_response_bytes;
+        self.handle_protobuf_inner(
+            session,
+            || {
+                (raw.len() <= maximum)
+                    .then(|| pb::Frame::decode(raw).ok())
+                    .flatten()
+            },
+            now,
+            None,
+            None,
+            false,
+        )
     }
     /// Binary transport entry point. Poll payloads encode directly from the record arena.
     pub fn handle_protobuf_into(
@@ -824,8 +915,42 @@ impl Engine {
         now: u64,
         out: &mut bytes::BytesMut,
     ) -> &'static str {
+        self.handle_protobuf_scoped(session, raw, now, out, None)
+    }
+    pub(crate) fn handle_protobuf_scoped(
+        &mut self,
+        session: u64,
+        raw: &[u8],
+        now: u64,
+        out: &mut bytes::BytesMut,
+        tunnel_topic: Option<&str>,
+    ) -> &'static str {
+        let maximum = self.config.limits.max_response_bytes;
+        self.write_protobuf_response(
+            session,
+            || {
+                (raw.len() <= maximum)
+                    .then(|| pb::Frame::decode(raw).ok())
+                    .flatten()
+            },
+            now,
+            out,
+            tunnel_topic,
+            false,
+        )
+    }
+    pub(crate) fn write_protobuf_response(
+        &mut self,
+        session: u64,
+        decode: impl FnOnce() -> Option<pb::Frame>,
+        now: u64,
+        out: &mut bytes::BytesMut,
+        tunnel_topic: Option<&str>,
+        precharged: bool,
+    ) -> &'static str {
         out.clear();
-        let frame = self.handle_protobuf_inner(session, raw, now, Some(out));
+        let frame =
+            self.handle_protobuf_inner(session, decode, now, Some(out), tunnel_topic, precharged);
         if out.is_empty() {
             out.reserve(frame.encoded_len());
             frame.encode_raw(out);
@@ -835,23 +960,26 @@ impl Engine {
     fn handle_protobuf_inner(
         &mut self,
         session: u64,
-        raw: &[u8],
+        decode: impl FnOnce() -> Option<pb::Frame>,
         now: u64,
         mut output: Option<&mut bytes::BytesMut>,
+        tunnel_topic: Option<&str>,
+        precharged: bool,
     ) -> pb::Frame {
         let now = now.max(self.last_cleanup_now);
         self.sweep(now);
         let client_slot = self.identity_slot(session, now).ok();
-        if let Some(slot) = client_slot
+        if precharged && client_slot.is_none() {
+            return pb::Frame::error(ApiError::unauthorized(), None);
+        }
+        if !precharged
+            && let Some(slot) = client_slot
             && let Err(e) = self.charge_slot(slot, now)
         {
             return pb::Frame::error(e, None);
         }
-        if raw.len() > self.config.limits.max_response_bytes {
-            return pb::Frame::error(ApiError::invalid(), None);
-        }
-        let frame = match pb::Frame::decode(raw) {
-            Ok(f) if f.version == 1 => f,
+        let mut frame = match decode() {
+            Some(f) if f.version == 1 => f,
             _ => return pb::Frame::error(ApiError::invalid(), None),
         };
         let id = frame.request_id().map(str::to_owned);
@@ -860,6 +988,45 @@ impl Engine {
             .is_some_and(|id| id.is_empty() || id.len() > 128)
         {
             return pb::Frame::error(ApiError::invalid(), None);
+        }
+        if client_slot.is_none()
+            && !matches!(
+                frame.body,
+                Some(pb::Body::AuthHello(_) | pb::Body::AuthProof(_))
+            )
+        {
+            return pb::Frame::error(ApiError::unauthorized(), id);
+        }
+        if let Some(topic) = tunnel_topic {
+            let denied = match frame.body.as_mut() {
+                Some(pb::Body::Publish(x)) => x.topic != topic,
+                Some(pb::Body::Poll(x)) => x.topic != topic,
+                Some(pb::Body::GetPermissions(x)) => x.topic != topic,
+                Some(pb::Body::ListMessages(x)) => match &x.topic {
+                    Some(requested) => requested != topic,
+                    None => {
+                        x.topic = Some(topic.to_owned());
+                        false
+                    }
+                },
+                Some(pb::Body::GetMessage(x)) => {
+                    let out_of_scope = Id::parse(&x.message_id)
+                        .and_then(|id| self.index.get(&id))
+                        .and_then(|&slot| self.records.get(slot))
+                        .is_some_and(|record| self.topic_names[record.topic() as usize] != topic);
+                    if out_of_scope {
+                        return pb::Frame::error(not_found(), id);
+                    }
+                    false
+                }
+                _ => false,
+            };
+            if denied {
+                return pb::Frame::error(
+                    ApiError::new("forbidden", "Topic is outside the tunnel scope."),
+                    id,
+                );
+            }
         }
         let response = (|| -> Result<pb::Frame> {
             let body = match frame.body {
@@ -905,6 +1072,12 @@ impl Engine {
         _client_slot: Option<u16>,
     ) -> Result<pb::Frame> {
         let body = match frame.body {
+            Some(pb::Body::RotationConfirm(mut x)) => {
+                let secret = Zeroizing::new(std::mem::take(&mut x.shared_secret));
+                let response =
+                    self.rotation_confirm(session, &x.id, &x.rotation_id, &secret, now)?;
+                return pb::Frame::from_json(response);
+            }
             Some(pb::Body::GetMessage(x)) => {
                 let (client, _, _) = self.identity_ref(session, now)?;
                 pb::Body::MessageStatus(self.get_typed(client, &x.id, &x.message_id, now)?)
@@ -1169,13 +1342,18 @@ impl Engine {
             &crypto::auth_bytes(&c.nonce, &key.public, &self.config.service.id),
             &crypto::decode(&signature).map_err(|_| ApiError::unauthorized())?,
         )?;
+        self.clients
+            .get_mut(&key.client)
+            .ok_or_else(ApiError::internal)?
+            .session_ids
+            .insert(session);
         s.auth = Some(Auth {
             client: key.client.clone(),
             token: c.token,
             revision: c.revision,
         });
         Ok(
-            json!({"version":1,"type":"auth_welcome","request_id":id,"client_id":key.client,"service_id":self.config.service.id,"restart_counter":self.restart_counter}),
+            json!({"version":1,"type":"auth_welcome","request_id":id,"client_id":key.client,"service_id":self.config.service.id,"restart_counter":self.restart_counter,"boot_id":self.generation}),
         )
     }
     fn publish(
@@ -1213,7 +1391,7 @@ impl Engine {
         now: u64,
     ) -> Result<pb::Result> {
         let now = now.max(self.last_cleanup_now);
-        let t = self.topics.get(topic).ok_or_else(|| {
+        let t = self.topics.get_mut(topic).ok_or_else(|| {
             ApiError::new(
                 "owner_unavailable",
                 "Topic is not owned by this local service.",
@@ -1251,6 +1429,26 @@ impl Engine {
         {
             return Err(ApiError::exhausted());
         }
+        let client = self
+            .client_names
+            .get(usize::from(client_slot))
+            .ok_or_else(ApiError::internal)?;
+        let publisher = self
+            .clients
+            .get_mut(client)
+            .ok_or_else(ApiError::internal)?;
+        let own = self.own.get_mut(client).ok_or_else(ApiError::internal)?;
+        let l = &self.config.limits;
+        let default_bytes = l.max_active_message_bytes.div_ceil(2).max(charge);
+        let default_count = l.max_active_messages.div_ceil(2);
+        if t.active_bytes.saturating_add(charge) > l.max_topic_active_bytes.unwrap_or(default_bytes)
+            || t.messages.len() >= l.max_topic_active_messages.unwrap_or(default_count)
+            || publisher.active_bytes.saturating_add(charge)
+                > l.max_publisher_active_bytes.unwrap_or(default_bytes)
+            || own.len() >= l.max_publisher_active_messages.unwrap_or(default_count)
+        {
+            return Err(ApiError::exhausted());
+        }
         let global = self
             .next_message
             .checked_add(1)
@@ -1270,17 +1468,9 @@ impl Engine {
             message_id: Some(mid.to_string()),
             expires: Some(expiry),
         };
-        let client = self
-            .client_names
-            .get(usize::from(client_slot))
-            .ok_or_else(ApiError::internal)?
-            .as_str();
         let producer = client_slot;
         let topic_slot = t.slot;
-        let own_pos = self
-            .clients
-            .get(client)
-            .ok_or_else(ApiError::internal)?
+        let own_pos = publisher
             .produced
             .checked_add(1)
             .ok_or_else(ApiError::exhausted)?;
@@ -1306,24 +1496,19 @@ impl Engine {
                 return Err(ApiError::exhausted());
             }
         };
-        let t = self.topics.get_mut(topic).ok_or_else(ApiError::internal)?;
         t.head = seq;
         t.messages.insert(seq, slot);
+        t.active_bytes += charge;
         self.next_message = global;
-        self.clients
-            .get_mut(client)
-            .ok_or_else(ApiError::internal)?
-            .produced = own_pos;
+        publisher.produced = own_pos;
+        publisher.active_bytes += charge;
         self.active_bytes += charge;
         if let Some(content) = &mut self.content {
             content.changed(t.slot);
         }
         self.expiry.insert((until, slot));
         self.index.insert(mid, slot);
-        self.own
-            .get_mut(client)
-            .ok_or_else(ApiError::internal)?
-            .insert(own_pos, slot);
+        own.insert(own_pos, slot);
         Ok(result)
     }
     fn poll(
@@ -1452,6 +1637,9 @@ impl Engine {
                 break;
             };
             let s = self.records.get(slot).ok_or_else(ApiError::internal)?;
+            if s.topic() != t.slot || s.seq() != seq {
+                return Err(ApiError::internal());
+            }
             scanned += 1;
             if s.until() <= now {
                 iter.next();
@@ -1482,16 +1670,17 @@ impl Engine {
             } else {
                 None
             };
-            let polled_len = if binary {
-                s.polled_len(
+            let lengths = if binary {
+                s.polled_lengths(
                     (topic, producer),
                     &self.content_types,
                     &self.payloads,
                     expiry,
                 )
             } else {
-                0
+                crate::storage::PolledLengths::default()
             };
+            let polled_len = if binary { lengths.item_len() } else { 0 };
             let size = if binary {
                 polled_len + 8
             } else {
@@ -1507,7 +1696,7 @@ impl Engine {
             used += size;
             position = seq;
 
-            selected.push((s.until(), slot));
+            selected.push((s.until(), slot, lengths));
             encoded_items_len += crate::direct::field_len(2, polled_len);
             if let Some(item) = item {
                 items.push(item);
@@ -1551,7 +1740,7 @@ impl Engine {
             crate::direct::header(11, len, out);
             crate::direct::data(1, id.as_bytes(), out);
             cached_expiry = None;
-            for (until, slot) in selected.iter() {
+            for (until, slot, lengths) in selected.iter() {
                 if cached_expiry.as_ref().is_none_or(|(time, _)| time != until) {
                     cached_expiry = Some((*until, protocol::Timestamp::new(*until)?));
                 }
@@ -1562,21 +1751,13 @@ impl Engine {
                     .get(record.producer_slot())
                     .ok_or_else(ApiError::internal)?
                     .as_str();
-                crate::direct::header(
-                    2,
-                    record.polled_len(
-                        (topic, producer),
-                        &self.content_types,
-                        &self.payloads,
-                        expiry,
-                    ),
-                    out,
-                );
+                crate::direct::header(2, lengths.item_len(), out);
                 record.encode_polled(
                     (topic, producer),
                     &self.content_types,
                     &self.payloads,
                     expiry,
+                    *lengths,
                     out,
                 );
             }
@@ -1684,7 +1865,7 @@ impl Engine {
             return Err(ApiError::invalid());
         }
         let limit = self.limit(limit)?;
-        let (start, watermark, until) = if let Some(text) = cursor {
+        let (start, watermark) = if let Some(text) = cursor {
             let c: Cursor = self.codec.open(&text)?;
             if c.kind != "list"
                 || c.generation != self.generation
@@ -1696,11 +1877,7 @@ impl Engine {
             {
                 return Err(bad_cursor());
             }
-            (
-                c.pos,
-                c.watermark.ok_or_else(bad_cursor)?,
-                c.until.ok_or_else(bad_cursor)?,
-            )
+            (c.pos, c.watermark.ok_or_else(bad_cursor)?)
         } else {
             (
                 0,
@@ -1708,7 +1885,6 @@ impl Engine {
                     .get(client)
                     .ok_or_else(ApiError::unauthorized)?
                     .produced,
-                now.saturating_add(60_000),
             )
         };
         let mut items = Vec::new();
@@ -1783,7 +1959,7 @@ impl Engine {
                 pos,
                 limit: Some(limit),
                 watermark: Some(watermark),
-                until: Some(until),
+                until: Some(now.saturating_add(60_000)),
                 revision: Some(revision),
             })?);
         }
@@ -1874,7 +2050,7 @@ impl Engine {
                     "Rotation is absent, expired or in the wrong phase.",
                 )
             })?;
-        let secret = Zeroizing::new(crypto::decode::<32>(shared_secret)?);
+        let secret = crypto::decode_rotation_secret(shared_secret)?;
         let aad = rotation_aad(
             &self.config.service.id,
             client,
@@ -1963,8 +2139,8 @@ impl Engine {
             self.disconnect(old);
         }
         // No await or external call between the final old-credential check and replacement.
-        self.keys.remove(&r.old_token);
-        self.keys.insert(
+        self.remove_credential(&r.old_token);
+        self.insert_credential(
             token.clone(),
             Credential {
                 client: client.into(),

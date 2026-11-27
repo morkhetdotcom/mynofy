@@ -35,6 +35,24 @@ pub(super) fn prepare(
         derived,
     }))
 }
+pub(super) fn prepare_source(
+    secret: Option<&ContentSecret>,
+    envelope: &[u8],
+) -> std::result::Result<Option<ContentSecret>, BoxError> {
+    let password = match secret {
+        Some(ContentSecret::Password(password)) => password,
+        Some(ContentSecret::PreparedPassword(prepared))
+            if envelope.len() >= HEADER
+                && &envelope[..8] == b"MYNENC01"
+                && envelope[9] == 1
+                && envelope[16..32] != prepared.salt =>
+        {
+            &prepared.password
+        }
+        _ => return Ok(None),
+    };
+    prepare(ContentSecret::Password(password.clone()), Some(envelope)).map(Some)
+}
 fn key(
     secret: &ContentSecret,
     salt: &[u8],
@@ -351,6 +369,32 @@ mod functional {
 #[cfg(test)]
 mod prepared_tests {
     use super::*;
+    #[test]
+    fn prepared_destination_password_derives_backup_key_once() {
+        let password = || ContentSecret::Password(Zeroizing::new(b"shared password".to_vec()));
+        let target = prepare(password(), None).unwrap();
+        let source = prepare(password(), None).unwrap();
+        let plain = || Zeroizing::new(vec![7; 128]);
+        let files: Vec<_> = (0..3)
+            .map(|_| encode(plain(), ContentEncryption::PasswordStdin, Some(&source)).unwrap())
+            .collect();
+        KDF_CALLS.with(|n| n.set(0));
+        let prepared = prepare_source(Some(&target), &files[0]).unwrap().unwrap();
+        for file in files {
+            assert_eq!(
+                *decode(
+                    file,
+                    ContentEncryption::PasswordStdin,
+                    Some(&prepared),
+                    1024
+                )
+                .unwrap(),
+                *plain()
+            );
+        }
+        KDF_CALLS.with(|n| assert_eq!(n.get(), 1));
+    }
+
     #[test]
     fn prepared_store_derives_once_reuses_key_with_distinct_nonces_and_reads_legacy() {
         KDF_CALLS.with(|count| count.set(0));

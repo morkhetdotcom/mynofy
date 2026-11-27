@@ -21,15 +21,9 @@ impl Engine {
     }
     pub(super) fn admin_topic(&self, name: &str, now: u64) -> Result<Value> {
         let topic = self.topics.get(name).ok_or_else(topic_not_found)?;
-        let configured = self
-            .config
-            .topics
-            .iter()
-            .find(|t| t.name == name)
-            .ok_or_else(ApiError::internal)?;
         let active = self.topic_active_count(topic, now)?;
         Ok(
-            json!({"topic":name,"owner_id":self.config.service.id,"policy":topic.policy,"storage":configured.storage,"active_messages":active,"resident_messages":topic.messages.len()}),
+            json!({"topic":name,"owner_id":self.config.service.id,"policy":topic.policy,"storage":topic.storage,"active_messages":active,"resident_messages":topic.messages.len()}),
         )
     }
     pub(super) fn admin_topics_list(
@@ -50,39 +44,35 @@ impl Engine {
         let mut names = self
             .topics
             .range::<str, _>((start, Unbounded))
-            .map(|(name, _)| name)
             .take(limit + 1);
         let selected: Vec<_> = names.by_ref().take(limit).collect();
         let next = if names.next().is_some() {
-            selected.last().copied()
+            selected.last().map(|(name, _)| *name)
         } else {
             None
         };
         if selected.is_empty() {
             return Ok(json!({"items":[],"next_after":null}));
         }
-        let selected_records: usize = selected
-            .iter()
-            .map(|name| self.topics[*name].messages.len())
-            .sum();
-        let active = if selected_records.saturating_mul(8) >= self.records.len() {
-            // Broad pages retain one sequential pass, rather than many index lookups.
-            let mut counts = vec![0usize; self.topic_names.len()];
-            for record in self.records.iter().filter(|r| r.until() > now) {
-                counts[record.topic() as usize] += 1;
-            }
-            Some(counts)
-        } else {
-            None
-        };
-        let items = selected.iter().map(|name| {
-            let topic = &self.topics[*name];
-            let configured = self.config.topics.iter().find(|t| t.name.as_str() == name.as_str()).ok_or_else(ApiError::internal)?;
+        let selected_records: usize = selected.iter().map(|(_, topic)| topic.messages.len()).sum();
+        let active =
+            if selected_records != 0 && selected_records.saturating_mul(8) >= self.records.len() {
+                // Broad pages retain one sequential pass, rather than many index lookups.
+                let mut counts = vec![0usize; self.topic_names.len()];
+                for record in self.records.iter().filter(|r| r.until() > now) {
+                    counts[record.topic() as usize] += 1;
+                }
+                Some(counts)
+            } else {
+                None
+            };
+        let items = selected.iter().map(|(name, topic)| {
             let count = match &active {
                 Some(counts) => counts[topic.slot as usize],
+                None if topic.messages.is_empty() => 0,
                 None => self.topic_active_count(topic, now)?,
             };
-            Ok(json!({"topic":name,"owner_id":self.config.service.id,"policy":topic.policy,"storage":configured.storage,"active_messages":count,"resident_messages":topic.messages.len()}))
+            Ok(json!({"topic":name,"owner_id":self.config.service.id,"policy":topic.policy,"storage":topic.storage,"active_messages":count,"resident_messages":topic.messages.len()}))
         }).collect::<Result<Vec<_>>>()?;
         Ok(json!({"items":items,"next_after":next}))
     }
@@ -99,7 +89,7 @@ impl Engine {
         now: u64,
     ) -> Result<Value> {
         self.topics_idle()?;
-        if self.config.topics.iter().any(|t| t.name == name) {
+        if self.topic_owners.contains_key(&name) {
             return Err(ApiError::new("conflict", "Topic already exists."));
         }
         if self.config.topics.len() >= 10_000 {
@@ -124,10 +114,12 @@ impl Engine {
         self.topics.insert(
             name.clone(),
             Topic {
+                active_bytes: 0,
                 slot,
                 head: self.next_message,
                 messages: OrderedIndex::new(),
                 policy,
+                storage: TopicStorage::default(),
             },
         );
         self.topic_names.push(name.clone());
@@ -135,6 +127,8 @@ impl Engine {
             content.add_ram_topic(name.clone());
         }
         self.config = candidate;
+        self.topic_owners
+            .insert(name.clone(), self.config.service.id.clone());
         self.security_submit(
             permit,
             crate::security::Change::TopicReset {
@@ -187,13 +181,7 @@ impl Engine {
             ));
         }
 
-        let configured = self
-            .config
-            .topics
-            .iter()
-            .find(|t| t.name == name)
-            .ok_or_else(ApiError::internal)?;
-        if configured.storage.persistent() {
+        if topic.storage.persistent() {
             return Err(ApiError::new(
                 "storage_transition_forbidden",
                 "Return stored topics to RAM offline before deleting them.",
@@ -238,6 +226,7 @@ impl Engine {
             content.remove_ram_topic(slot as usize);
         }
         self.config.topics.retain(|t| t.name != name);
+        self.topic_owners.remove(&name);
         for client in &affected {
             self.clients
                 .get_mut(client)

@@ -1,10 +1,12 @@
 //! Per-connection protobuf output storage. Sent Bytes retain ownership until the sink releases them.
 use bytes::{Bytes, BytesMut};
+use zeroize::Zeroize;
 
 pub struct ResponseBuffer {
     bytes: BytesMut,
     retain: usize,
     sent_capacity: usize,
+    sent_len: usize,
 }
 impl ResponseBuffer {
     pub fn new(max_response_bytes: usize) -> Self {
@@ -12,24 +14,40 @@ impl ResponseBuffer {
             bytes: BytesMut::new(),
             retain: max_response_bytes.min(64 * 1024),
             sent_capacity: 0,
+            sent_len: 0,
         }
     }
+    pub fn without_retention() -> Self {
+        Self::new(0)
+    }
     pub fn prepare(&mut self) -> &mut BytesMut {
+        self.bytes.as_mut().zeroize();
         self.bytes.clear();
         &mut self.bytes
     }
     pub fn take(&mut self) -> Bytes {
         self.sent_capacity = self.bytes.capacity();
+        self.sent_len = self.bytes.len();
         self.bytes.split().freeze()
     }
     /// Call only after sending/flushing. Failed reclaim never overwrites outstanding data.
     pub fn sent(&mut self) {
+        if self.sent_len != 0 && self.bytes.try_reclaim(self.sent_capacity) {
+            self.bytes.resize(self.sent_len, 0);
+            self.bytes.as_mut().zeroize();
+            self.bytes.clear();
+        }
         if self.sent_capacity > self.retain {
             self.bytes = BytesMut::new();
-        } else {
-            let _ = self.bytes.try_reclaim(self.sent_capacity);
         }
         self.sent_capacity = 0;
+        self.sent_len = 0;
+    }
+}
+impl Drop for ResponseBuffer {
+    fn drop(&mut self) {
+        self.sent();
+        self.bytes.as_mut().zeroize();
     }
 }
 #[cfg(test)]

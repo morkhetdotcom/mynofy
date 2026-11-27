@@ -119,6 +119,11 @@
           "maxLength": 256,
           "description": "Zus\u00e4tzlich maximal 256 UTF-8-Bytes pr\u00fcfen."
         },
+        "boot_id": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{21}[AQgw]==$",
+          "description": "Optional owner boot identity for cursor continuity."
+        },
         "restart_counter": {
           "type": "integer",
           "minimum": 0,

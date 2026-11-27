@@ -98,7 +98,9 @@ async fn run(n: usize, size: usize, operation: String) -> Result<(), BoxError> {
         .map(|name| {
             let mut t = base.clone();
             t.name = name.into();
-            t.storage = if name.ends_with("bulk") {
+            t.storage = if name.ends_with("bulk")
+                || matches!(operation.as_str(), "save-selective" | "save-broad")
+            {
                 TopicStorage::Manual { encrypted: false }
             } else {
                 TopicStorage::Ram {}
@@ -115,22 +117,44 @@ async fn run(n: usize, size: usize, operation: String) -> Result<(), BoxError> {
             t
         })
         .collect();
+    if operation == "save-many" {
+        for index in 0..1000 {
+            let mut topic = base.clone();
+            topic.name = format!("load/empty-{index}");
+            topic.acl = Some(Vec::new());
+            topic.storage = TopicStorage::Manual { encrypted: false };
+            cfg.topics.push(topic);
+        }
+    }
+    let many_topics: Vec<_> = cfg
+        .topics
+        .iter()
+        .filter(|topic| topic.storage.persistent())
+        .map(|topic| topic.name.clone())
+        .collect();
     cfg.security_storage = Some(SecurityStorage {
+        minimum_sequence: None,
         sync: false,
         directory: directory.0.join("security"),
         queue_capacity: 128,
         compact_after_records: 4096,
     });
     cfg.content_storage = Some(ContentStorage {
+        store_id: None,
         directory: directory.0.join("content"),
         encryption: ContentEncryption::None,
         max_snapshot_bytes: 512 * 1024 * 1024,
+        autosave_retry: Default::default(),
     });
     cfg.limits.max_content_working_bytes = 1024 * 1024 * 1024;
     cfg.limits.client_burst = 1_000_000;
     cfg.limits.client_requests_per_second = 1_000_000;
     cfg.limits.max_active_messages = 3 * n;
+    cfg.limits.max_topic_active_messages = Some(cfg.limits.max_active_messages);
+    cfg.limits.max_publisher_active_messages = Some(cfg.limits.max_active_messages);
     cfg.limits.max_active_message_bytes = 3 * n * (size + 4096);
+    cfg.limits.max_topic_active_bytes = Some(cfg.limits.max_active_message_bytes);
+    cfg.limits.max_publisher_active_bytes = Some(cfg.limits.max_active_message_bytes);
     cfg.limits.max_response_bytes = 512 * 1024;
     let mut e = Engine::new(cfg, NOW)?;
     e.start_id_allocator();
@@ -230,6 +254,7 @@ async fn run(n: usize, size: usize, operation: String) -> Result<(), BoxError> {
     let mut admin = Vec::new();
     let mut observations = Vec::new();
     for iteration in 0..5 {
+        let requested = (operation == "save-many").then(|| many_topics.clone());
         let ready = ns(epoch);
         let now = NOW + if operation == "reclaim" { 1000 } else { 0 };
         let (start, end, records, result) = {
@@ -255,7 +280,17 @@ async fn run(n: usize, size: usize, operation: String) -> Result<(), BoxError> {
                     },
                     now,
                 ),
-                "save" => data(&mut guard, Command::ContentSave { topics: None }, now),
+                "save-many" => data(&mut guard, Command::ContentSave { topics: requested }, now),
+                "save-selective" => data(
+                    &mut guard,
+                    Command::ContentSave {
+                        topics: Some(vec!["load/live".into()]),
+                    },
+                    now,
+                ),
+                "save" | "save-broad" => {
+                    data(&mut guard, Command::ContentSave { topics: None }, now)
+                }
                 "reclaim" => serde_json::to_value(guard.maintenance(now))?,
                 _ => return Err("Unknown operation".into()),
             };
@@ -263,7 +298,10 @@ async fn run(n: usize, size: usize, operation: String) -> Result<(), BoxError> {
             (start, end, records, result)
         };
         admin.push(json!({"iteration":iteration,"start_ns":start,"end_ns":end,"wait_ns":start-ready,"hold_us":(end-start) as f64/1000.,"records_before_expiry_cleanup":records}));
-        if operation == "save" {
+        if matches!(
+            operation.as_str(),
+            "save" | "save-selective" | "save-broad" | "save-many"
+        ) {
             let deadline = Instant::now() + Duration::from_secs(10);
             loop {
                 let (start, end, status) = {
@@ -276,6 +314,8 @@ async fn run(n: usize, size: usize, operation: String) -> Result<(), BoxError> {
                     json!({"start_ns":start,"end_ns":end,"hold_us":(end-start) as f64/1000.}),
                 );
                 if status["content_storage"]["save_in_progress"] == false {
+                    admin.last_mut().unwrap()["writer_duration_us"] =
+                        status["content_storage"]["last_writer_duration_us"].clone();
                     assert!(
                         status["content_storage"]["last_error"].is_null(),
                         "{status}"

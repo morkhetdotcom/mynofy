@@ -55,10 +55,18 @@ impl ProgressFile {
         Ok((Self { path, _lock: lock }, state))
     }
     pub fn save(&self, state: &ClientProgress) -> Result<(), BoxError> {
+        self.save_encoded(&Self::encode(state)?)
+    }
+
+    pub fn encode(state: &ClientProgress) -> Result<Vec<u8>, BoxError> {
         let bytes = serde_json::to_vec(state)?;
         if bytes.len() > 4 * 1024 * 1024 {
             return Err("Progress file exceeds size limit".into());
         }
+        Ok(bytes)
+    }
+
+    pub fn save_encoded(&self, bytes: &[u8]) -> Result<(), BoxError> {
         let parent = self.path.parent().ok_or("Missing progress parent")?;
         // Never open/truncate a pre-existing staging file, even if it is private.
         let (mut file, mut temporary) = (0..16)
@@ -87,7 +95,7 @@ impl ProgressFile {
             })
             .ok_or("Could not allocate a unique progress staging file")??;
         private(&file)?;
-        file.write_all(&bytes)?;
+        file.write_all(bytes)?;
         file.sync_all()?;
         std::fs::rename(
             temporary

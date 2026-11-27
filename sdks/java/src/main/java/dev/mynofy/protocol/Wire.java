@@ -29150,6 +29150,23 @@ public final class Wire extends com.google.protobuf.GeneratedFile {
      * @return The restartCounter.
      */
     int getRestartCounter();
+
+    /**
+     * <code>optional string boot_id = 5;</code>
+     * @return Whether the bootId field is set.
+     */
+    boolean hasBootId();
+    /**
+     * <code>optional string boot_id = 5;</code>
+     * @return The bootId.
+     */
+    java.lang.String getBootId();
+    /**
+     * <code>optional string boot_id = 5;</code>
+     * @return The bytes for bootId.
+     */
+    com.google.protobuf.ByteString
+        getBootIdBytes();
   }
   /**
    * Protobuf type {@code mynofy.v1.AuthWelcome}
@@ -29176,6 +29193,7 @@ public final class Wire extends com.google.protobuf.GeneratedFile {
       requestId_ = "";
       clientId_ = "";
       serviceId_ = "";
+      bootId_ = "";
     }
 
     public static final com.google.protobuf.Descriptors.Descriptor
@@ -29363,6 +29381,55 @@ public final class Wire extends com.google.protobuf.GeneratedFile {
       return restartCounter_;
     }
 
+    public static final int BOOT_ID_FIELD_NUMBER = 5;
+    @SuppressWarnings("serial")
+    private volatile java.lang.Object bootId_ = "";
+    /**
+     * <code>optional string boot_id = 5;</code>
+     * @return Whether the bootId field is set.
+     */
+    @java.lang.Override
+    public boolean hasBootId() {
+      return ((bitField0_ & 0x00000010) != 0);
+    }
+    /**
+     * <code>optional string boot_id = 5;</code>
+     * @return The bootId.
+     */
+    @java.lang.Override
+    public java.lang.String getBootId() {
+      java.lang.Object ref = bootId_;
+      if (ref instanceof java.lang.String) {
+        return (java.lang.String) ref;
+      } else {
+        com.google.protobuf.ByteString bs = 
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        if (bs.isValidUtf8()) {
+          bootId_ = s;
+        }
+        return s;
+      }
+    }
+    /**
+     * <code>optional string boot_id = 5;</code>
+     * @return The bytes for bootId.
+     */
+    @java.lang.Override
+    public com.google.protobuf.ByteString
+        getBootIdBytes() {
+      java.lang.Object ref = bootId_;
+      if (ref instanceof java.lang.String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        bootId_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+
     private byte memoizedIsInitialized = -1;
     @java.lang.Override
     public final boolean isInitialized() {
@@ -29401,6 +29468,9 @@ public final class Wire extends com.google.protobuf.GeneratedFile {
       if (((bitField0_ & 0x00000008) != 0)) {
         output.writeUInt32(4, restartCounter_);
       }
+      if (((bitField0_ & 0x00000010) != 0)) {
+        com.google.protobuf.GeneratedMessage.writeString(output, 5, bootId_);
+      }
       getUnknownFields().writeTo(output);
     }
     private int computeSerializedSize_0() {
@@ -29417,6 +29487,9 @@ public final class Wire extends com.google.protobuf.GeneratedFile {
       if (((bitField0_ & 0x00000008) != 0)) {
         size += com.google.protobuf.CodedOutputStream
           .computeUInt32Size(4, restartCounter_);
+      }
+      if (((bitField0_ & 0x00000010) != 0)) {
+        size += com.google.protobuf.GeneratedMessage.computeStringSize(5, bootId_);
       }
       return size;
     }
@@ -29462,6 +29535,11 @@ public final class Wire extends com.google.protobuf.GeneratedFile {
         if (getRestartCounter()
             != other.getRestartCounter()) return false;
       }
+      if (hasBootId() != other.hasBootId()) return false;
+      if (hasBootId()) {
+        if (!getBootId()
+            .equals(other.getBootId())) return false;
+      }
       if (!getUnknownFields().equals(other.getUnknownFields())) return false;
       return true;
     }
@@ -29488,6 +29566,10 @@ public final class Wire extends com.google.protobuf.GeneratedFile {
       if (hasRestartCounter()) {
         hash = (37 * hash) + RESTART_COUNTER_FIELD_NUMBER;
         hash = (53 * hash) + getRestartCounter();
+      }
+      if (hasBootId()) {
+        hash = (37 * hash) + BOOT_ID_FIELD_NUMBER;
+        hash = (53 * hash) + getBootId().hashCode();
       }
       hash = (29 * hash) + getUnknownFields().hashCode();
       memoizedHashCode = hash;
@@ -29624,6 +29706,7 @@ public final class Wire extends com.google.protobuf.GeneratedFile {
         clientId_ = "";
         serviceId_ = "";
         restartCounter_ = 0;
+        bootId_ = "";
         return this;
       }
 
@@ -29674,6 +29757,10 @@ public final class Wire extends com.google.protobuf.GeneratedFile {
           result.restartCounter_ = restartCounter_;
           to_bitField0_ |= 0x00000008;
         }
+        if (((from_bitField0_ & 0x00000010) != 0)) {
+          result.bootId_ = bootId_;
+          to_bitField0_ |= 0x00000010;
+        }
         result.bitField0_ |= to_bitField0_;
       }
 
@@ -29706,6 +29793,11 @@ public final class Wire extends com.google.protobuf.GeneratedFile {
         }
         if (other.hasRestartCounter()) {
           setRestartCounter(other.getRestartCounter());
+        }
+        if (other.hasBootId()) {
+          bootId_ = other.bootId_;
+          bitField0_ |= 0x00000010;
+          onChanged();
         }
         this.mergeUnknownFields(other.getUnknownFields());
         onChanged();
@@ -29760,6 +29852,11 @@ public final class Wire extends com.google.protobuf.GeneratedFile {
                 bitField0_ |= 0x00000008;
                 break;
               } // case 32
+              case 42: {
+                bootId_ = input.readBytes();
+                bitField0_ |= 0x00000010;
+                break;
+              } // case 42
               default: {
                 if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                   done = true; // was an endgroup tag
@@ -30053,6 +30150,86 @@ public final class Wire extends com.google.protobuf.GeneratedFile {
       public Builder clearRestartCounter() {
         bitField0_ = (bitField0_ & ~0x00000008);
         restartCounter_ = 0;
+        onChanged();
+        return this;
+      }
+
+      private java.lang.Object bootId_ = "";
+      /**
+       * <code>optional string boot_id = 5;</code>
+       * @return Whether the bootId field is set.
+       */
+      public boolean hasBootId() {
+        return ((bitField0_ & 0x00000010) != 0);
+      }
+      /**
+       * <code>optional string boot_id = 5;</code>
+       * @return The bootId.
+       */
+      public java.lang.String getBootId() {
+        java.lang.Object ref = bootId_;
+        if (!(ref instanceof java.lang.String)) {
+          com.google.protobuf.ByteString bs =
+              (com.google.protobuf.ByteString) ref;
+          java.lang.String s = bs.toStringUtf8();
+          if (bs.isValidUtf8()) {
+            bootId_ = s;
+          }
+          return s;
+        } else {
+          return (java.lang.String) ref;
+        }
+      }
+      /**
+       * <code>optional string boot_id = 5;</code>
+       * @return The bytes for bootId.
+       */
+      public com.google.protobuf.ByteString
+          getBootIdBytes() {
+        java.lang.Object ref = bootId_;
+        if (ref instanceof String) {
+          com.google.protobuf.ByteString b = 
+              com.google.protobuf.ByteString.copyFromUtf8(
+                  (java.lang.String) ref);
+          bootId_ = b;
+          return b;
+        } else {
+          return (com.google.protobuf.ByteString) ref;
+        }
+      }
+      /**
+       * <code>optional string boot_id = 5;</code>
+       * @param value The bootId to set.
+       * @return This builder for chaining.
+       */
+      public Builder setBootId(
+          java.lang.String value) {
+        java.util.Objects.requireNonNull(value);
+        bootId_ = value;
+        bitField0_ |= 0x00000010;
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>optional string boot_id = 5;</code>
+       * @return This builder for chaining.
+       */
+      public Builder clearBootId() {
+        bootId_ = getDefaultInstance().getBootId();
+        bitField0_ = (bitField0_ & ~0x00000010);
+        onChanged();
+        return this;
+      }
+      /**
+       * <code>optional string boot_id = 5;</code>
+       * @param value The bytes for bootId to set.
+       * @return This builder for chaining.
+       */
+      public Builder setBootIdBytes(
+          com.google.protobuf.ByteString value) {
+        java.util.Objects.requireNonNull(value);
+        bootId_ = value;
+        bitField0_ |= 0x00000010;
         onChanged();
         return this;
       }
@@ -36226,38 +36403,39 @@ public final class Wire extends com.google.protobuf.GeneratedFile {
       "\"F\n\rAuthChallenge\022\022\n\nrequest_id\030\001 \002(\t\022\022\n" +
       "\nservice_id\030\002 \002(\t\022\r\n\005nonce\030\003 \002(\t\";\n\tAuth" +
       "Proof\022\n\n\002id\030\001 \002(\t\022\017\n\007auth_id\030\002 \002(\t\022\021\n\tsi" +
-      "gnature\030\003 \002(\t\"a\n\013AuthWelcome\022\022\n\nrequest_" +
+      "gnature\030\003 \002(\t\"r\n\013AuthWelcome\022\022\n\nrequest_" +
       "id\030\001 \002(\t\022\021\n\tclient_id\030\002 \002(\t\022\022\n\nservice_i" +
-      "d\030\003 \002(\t\022\027\n\017restart_counter\030\004 \001(\r\"\345\010\n\005Fra" +
-      "me\022\017\n\007version\030\001 \002(\r\022\037\n\004poll\030\n \001(\0132\017.myno" +
-      "fy.v1.PollH\000\022\'\n\010messages\030\013 \001(\0132\023.mynofy." +
-      "v1.MessagesH\000\022%\n\007publish\030\014 \001(\0132\022.mynofy." +
-      "v1.PublishH\000\022#\n\006result\030\r \001(\0132\021.mynofy.v1" +
-      ".ResultH\000\0220\n\rlist_messages\030\020 \001(\0132\027.mynof" +
-      "y.v1.ListMessagesH\000\0220\n\rmessages_page\030\021 \001" +
-      "(\0132\027.mynofy.v1.MessagesPageH\000\022,\n\013get_mes" +
-      "sage\030\022 \001(\0132\025.mynofy.v1.GetMessageH\000\0222\n\016m" +
-      "essage_status\030\023 \001(\0132\030.mynofy.v1.MessageS" +
-      "tatusH\000\022!\n\005error\030\024 \001(\0132\020.mynofy.v1.Error" +
-      "H\000\0224\n\017get_permissions\030\025 \001(\0132\031.mynofy.v1." +
-      "GetPermissionsH\000\022-\n\013permissions\030\026 \001(\0132\026." +
-      "mynofy.v1.PermissionsH\000\0222\n\016rotation_star" +
-      "t\030\027 \001(\0132\030.mynofy.v1.RotationStartH\000\0222\n\016r" +
-      "otation_offer\030\030 \001(\0132\030.mynofy.v1.Rotation" +
-      "OfferH\000\0226\n\020rotation_confirm\030\031 \001(\0132\032.myno" +
-      "fy.v1.RotationConfirmH\000\0222\n\016rotation_read" +
-      "y\030\032 \001(\0132\030.mynofy.v1.RotationReadyH\000\0224\n\017r" +
-      "otation_commit\030\033 \001(\0132\031.mynofy.v1.Rotatio" +
-      "nCommitH\000\0228\n\021rotation_complete\030\034 \001(\0132\033.m" +
-      "ynofy.v1.RotationCompleteH\000\022,\n\013get_catal" +
-      "og\030\035 \001(\0132\025.mynofy.v1.GetCatalogH\000\022%\n\007cat" +
-      "alog\030\036 \001(\0132\022.mynofy.v1.CatalogH\000\022*\n\nauth" +
-      "_hello\030\037 \001(\0132\024.mynofy.v1.AuthHelloH\000\0222\n\016" +
-      "auth_challenge\030  \001(\0132\030.mynofy.v1.AuthCha" +
-      "llengeH\000\022*\n\nauth_proof\030! \001(\0132\024.mynofy.v1" +
-      ".AuthProofH\000\022.\n\014auth_welcome\030\" \001(\0132\026.myn" +
-      "ofy.v1.AuthWelcomeH\000B\006\n\004bodyJ\004\010\016\020\017J\004\010\017\020\020" +
-      "B\033\n\023dev.mynofy.protocolB\004Wire"
+      "d\030\003 \002(\t\022\027\n\017restart_counter\030\004 \001(\r\022\017\n\007boot" +
+      "_id\030\005 \001(\t\"\345\010\n\005Frame\022\017\n\007version\030\001 \002(\r\022\037\n\004" +
+      "poll\030\n \001(\0132\017.mynofy.v1.PollH\000\022\'\n\010message" +
+      "s\030\013 \001(\0132\023.mynofy.v1.MessagesH\000\022%\n\007publis" +
+      "h\030\014 \001(\0132\022.mynofy.v1.PublishH\000\022#\n\006result\030" +
+      "\r \001(\0132\021.mynofy.v1.ResultH\000\0220\n\rlist_messa" +
+      "ges\030\020 \001(\0132\027.mynofy.v1.ListMessagesH\000\0220\n\r" +
+      "messages_page\030\021 \001(\0132\027.mynofy.v1.Messages" +
+      "PageH\000\022,\n\013get_message\030\022 \001(\0132\025.mynofy.v1." +
+      "GetMessageH\000\0222\n\016message_status\030\023 \001(\0132\030.m" +
+      "ynofy.v1.MessageStatusH\000\022!\n\005error\030\024 \001(\0132" +
+      "\020.mynofy.v1.ErrorH\000\0224\n\017get_permissions\030\025" +
+      " \001(\0132\031.mynofy.v1.GetPermissionsH\000\022-\n\013per" +
+      "missions\030\026 \001(\0132\026.mynofy.v1.PermissionsH\000" +
+      "\0222\n\016rotation_start\030\027 \001(\0132\030.mynofy.v1.Rot" +
+      "ationStartH\000\0222\n\016rotation_offer\030\030 \001(\0132\030.m" +
+      "ynofy.v1.RotationOfferH\000\0226\n\020rotation_con" +
+      "firm\030\031 \001(\0132\032.mynofy.v1.RotationConfirmH\000" +
+      "\0222\n\016rotation_ready\030\032 \001(\0132\030.mynofy.v1.Rot" +
+      "ationReadyH\000\0224\n\017rotation_commit\030\033 \001(\0132\031." +
+      "mynofy.v1.RotationCommitH\000\0228\n\021rotation_c" +
+      "omplete\030\034 \001(\0132\033.mynofy.v1.RotationComple" +
+      "teH\000\022,\n\013get_catalog\030\035 \001(\0132\025.mynofy.v1.Ge" +
+      "tCatalogH\000\022%\n\007catalog\030\036 \001(\0132\022.mynofy.v1." +
+      "CatalogH\000\022*\n\nauth_hello\030\037 \001(\0132\024.mynofy.v" +
+      "1.AuthHelloH\000\0222\n\016auth_challenge\030  \001(\0132\030." +
+      "mynofy.v1.AuthChallengeH\000\022*\n\nauth_proof\030" +
+      "! \001(\0132\024.mynofy.v1.AuthProofH\000\022.\n\014auth_we" +
+      "lcome\030\" \001(\0132\026.mynofy.v1.AuthWelcomeH\000B\006\n" +
+      "\004bodyJ\004\010\016\020\017J\004\010\017\020\020B\033\n\023dev.mynofy.protocol" +
+      "B\004Wire"
     };
     descriptor = com.google.protobuf.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,
@@ -36442,7 +36620,7 @@ public final class Wire extends com.google.protobuf.GeneratedFile {
     internal_static_mynofy_v1_AuthWelcome_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_mynofy_v1_AuthWelcome_descriptor,
-        new java.lang.String[] { "RequestId", "ClientId", "ServiceId", "RestartCounter", });
+        new java.lang.String[] { "RequestId", "ClientId", "ServiceId", "RestartCounter", "BootId", });
     internal_static_mynofy_v1_Frame_descriptor =
       getDescriptor().getMessageType(30);
     internal_static_mynofy_v1_Frame_fieldAccessorTable = new

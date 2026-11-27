@@ -148,7 +148,7 @@ async fn mcp_cli_exposes_existing_client_operations_and_preserves_poll_and_acl_s
     let f = fixture();
     let bound = transport::bind_unix(&f.socket).unwrap();
     let cfg = f.config.clone();
-    let server = tokio::spawn(async move { transport::run_unix(bound, cfg).await });
+    let server = tokio::spawn(async move { support::run_unix_fixture(bound, cfg).await });
     let mut m = Mcp::start(&f);
     m.initialize().await;
     let tools = m.request(2, "tools/list", json!({}), false).await;
@@ -527,7 +527,7 @@ int fsync(int fd) {
         String::from_utf8_lossy(&compiled.stderr)
     );
     let bound = transport::bind_unix(&f.socket).unwrap();
-    let server = tokio::spawn(transport::run_unix(bound, f.config.clone()));
+    let server = tokio::spawn(support::run_unix_fixture(bound, f.config.clone()));
     let old = std::fs::read(&f.key).unwrap();
     let client_id = crypto::initial_client_id(&crypto::public_key(&old).unwrap());
     for failure in ["file", "directory"] {
@@ -548,17 +548,27 @@ int fsync(int fd) {
             !output.status.success(),
             "{failure} sync failure must prevent commit"
         );
-        let prepared = std::fs::read(f.dir.join(&name)).unwrap();
+        let path = f.dir.join(&name);
+        if failure == "file" {
+            assert!(
+                !path.exists(),
+                "failed file sync must not publish the candidate key"
+            );
+        }
+
         let mut old_session =
             mynofy_client::connect_unix_client(&f.socket, &old, "local", Some(&client_id))
                 .await
                 .unwrap();
         old_session.close(None).await.unwrap();
-        assert!(
-            mynofy_client::connect_unix_client(&f.socket, &prepared, "local", Some(&client_id))
-                .await
-                .is_err()
-        );
+        if failure == "directory" {
+            let prepared = std::fs::read(path).unwrap();
+            assert!(
+                mynofy_client::connect_unix_client(&f.socket, &prepared, "local", Some(&client_id))
+                    .await
+                    .is_err()
+            );
+        }
     }
     server.abort();
     let _ = server.await;
@@ -572,7 +582,7 @@ async fn mcp_preserves_event_shaped_legacy_bytes() {
     use mynofy_protocol::{payload::Payload, pb};
     let f = fixture();
     let bound = transport::bind_unix(&f.socket).unwrap();
-    let server = tokio::spawn(transport::run_unix(bound, f.config.clone()));
+    let server = tokio::spawn(support::run_unix_fixture(bound, f.config.clone()));
     let opaque =
         json!({"kind":"event","catalog":999,"parameters":[{"u64":7}],"note":"opaque legacy JSON"});
     let key = std::fs::read(&f.key).unwrap();

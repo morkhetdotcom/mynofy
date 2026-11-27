@@ -11,7 +11,7 @@ automatischen Schnittstellenwechsel oder einen zweiten Publish.
 ## Einstieg und verfügbare Operationen
 
 `mynofy_connection_info` liefert unter `structuredContent` Owner, stabile
-Client-ID und Neustartzähler. Vergleiche diese Zuordnung mit dem vorgesehenen
+Client-ID, Neustartzähler und die Boot-ID (`boot_id`), sofern der Owner sie liefert. Vergleiche diese Zuordnung mit dem vorgesehenen
 Arbeitskontext. Die Daten einer bereits geladenen Sitzung sind kein eigener
 Liveness-Nachweis. Zugangsdaten und Owner-TLS-Prüfung sind im MCP-Prozess
 konfiguriert; übergib weder Schlüssel noch eine frei behauptete Client-ID als
@@ -27,7 +27,7 @@ Tool-Argumente.
 | Eigene ursprüngliche Nachricht lesen | `mynofy_get_message` mit `message_id` |
 
 Broker-Antworten stehen unter `structuredContent.response`; Owner, Client-ID und
-Neustartzähler daneben. Falls der Host nur Textcontent liefert, ist derselbe
+Neustartzähler und gegebenenfalls Boot-ID daneben. Falls der Host nur Textcontent liefert, ist derselbe
 Umschlag dort als JSON enthalten. Ein `isError`-Ergebnis ist keine erfolgreiche
 fachliche Aktion. Brokerfehler und Rate-Limits auswerten, nicht durch andere
 Tools oder erfundene Rechte umgehen. Es gibt keine Admin-Tools.
@@ -40,8 +40,8 @@ Höchstens eine Owner-Operation pro Prozess ist gleichzeitig möglich; fachliche
 Calls daher nacheinander ausführen. `busy` bedeutet, dass kein zweiter Aufruf
 eingereiht wurde. Es entsteht dadurch kein neuer Arbeitsversuch.
 
-Halte den gelieferten `next_cursor` je Owner und Topic fest und verwende ihn beim
-nächsten Poll als `after`. Cursor ersetzen keinen gespeicherten Ticketfortschritt. Der Adapter verlängert keine Interpretation; diese Aufgabe bleibt beim Agenten/Treiber.
+Halte den gelieferten `next_cursor` mit der Boot-ID je Owner und Topic fest und verwende ihn beim
+nächsten Poll derselben Boot-ID als `after`. Cursor ersetzen keinen gespeicherten Ticketfortschritt. Der Adapter verlängert keine Interpretation; diese Aufgabe bleibt beim Agenten/Treiber.
 
 The broker has no ACK/NACK tools or delivery IDs. Report business acceptance and rejection by publishing an agreed event. Typed event parameters
 `u64`/`i64` können ebenfalls als exakte Dezimalstrings geliefert und bei Publish
@@ -56,9 +56,14 @@ Nachrichten, gegebenenfalls deren Inhalte und den fachlichen Arbeitsstand.
 Fehlende oder abgelaufene Nachrichten beweisen keine Nichtausführung.
 
 Nach einem Transportfehler kann ein späterer expliziter Call neu verbinden.
-Prüfe dann Owner-/Client-Zuordnung und Neustartzähler; nach bekanntem
-Owner-Neustart den Cursor entsprechend den Neustartregeln verwerfen und erneut
-abgleichen, ohne bekannte Fachschritte nochmals auszuführen. Ein MCP-Abbruch
+Prüfe dann Owner-/Client-Zuordnung und vergleiche `boot_id` vor dem nächsten
+Poll mit dem Wert am gespeicherten Cursor. Bei einem Wechsel oder beim
+Übergang von oder zu einer fehlenden Boot-ID verwirf den Cursor und
+beginne ohne `after`. Bei älteren Ownern ohne Feld gilt der
+Neustartzähler. Nach einem bekannten Restore beginne dort ebenfalls ohne
+`after`. Prüfe den Owner-Kontext in Poll-Antworten. Wechselt er erst mit
+einer Antwort, wiederhole die lesende Abfrage ohne den alten Cursor.
+Gleiche bekannte Fachschritte ab, bevor du sie erneut ausführst. Ein MCP-Abbruch
 kann bereits erfolgte Broker- oder Fachwirkungen nicht rückgängig machen.
 
 Die Regeln zu Rollen, menschlichen Aufträgen, Tickets, Interpretation und Stopp

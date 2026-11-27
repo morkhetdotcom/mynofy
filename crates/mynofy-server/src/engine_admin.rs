@@ -6,7 +6,9 @@ use crate::{
 };
 impl Engine {
     pub fn admin(&mut self, command: AdminCommand, now: u64) -> Result<ResultBody> {
-        self.sweep(now);
+        if !matches!(command, AdminCommand::Health {}) {
+            self.sweep(now);
+        }
         let now = now.max(self.last_cleanup_now);
         let changed_client = match &command {
             AdminCommand::ClientAdd { public_key, .. } => Some(crypto::initial_client_id(
@@ -99,22 +101,20 @@ impl Engine {
                 }
                 let selected =
                     &self.client_names[start..self.client_names.len().min(start + limit)];
-                let mut key_counts: HashMap<&str, usize> =
-                    selected.iter().map(|name| (name.as_str(), 0)).collect();
-                let mut session_counts = key_counts.clone();
-                for key in self.keys.values() {
-                    if let Some(count) = key_counts.get_mut(key.client.as_str()) {
-                        *count += 1;
-                    }
-                }
-                for session in self.sessions.keys() {
-                    if let Ok((client, _, _)) = self.identity_ref(*session, now)
-                        && let Some(count) = session_counts.get_mut(client)
-                    {
-                        *count += 1;
-                    }
-                }
-                let items:Vec<_>=selected.iter().map(|name|{let state=&self.clients[name];json!({"client_id":name,"display_name":state.display_name,"disabled":state.disabled,"acl_revision":state.revision,"registered_keys":key_counts[name.as_str()],"active_sessions":session_counts[name.as_str()]})}).collect();
+                let items: Vec<_> = selected
+                    .iter()
+                    .map(|name| {
+                        let state = &self.clients[name];
+                        let active_sessions = state
+                            .session_ids
+                            .iter()
+                            .filter(|id| self.authenticated(**id, now))
+                            .count();
+                        json!({"client_id":name,"display_name":state.display_name,
+                        "disabled":state.disabled,"acl_revision":state.revision,
+                        "registered_keys":state.key_tokens.len(),"active_sessions":active_sessions})
+                    })
+                    .collect();
                 let next = if start + selected.len() < self.client_names.len() {
                     Some((start + selected.len() - 1) as u16)
                 } else {
@@ -143,6 +143,9 @@ impl Engine {
                 self.clients.insert(
                     client.clone(),
                     ClientState {
+                        key_tokens: Vec::new(),
+                        session_ids: Default::default(),
+                        active_bytes: 0,
                         slot,
                         disabled: false,
                         display_name,
@@ -157,7 +160,7 @@ impl Engine {
                 );
                 self.client_names.push(client.clone());
                 self.own.insert(client.clone(), OrderedIndex::new());
-                self.keys.insert(
+                self.insert_credential(
                     token,
                     Credential {
                         client: client.clone(),
@@ -198,17 +201,11 @@ impl Engine {
                 if !self.clients.contains_key(&client) {
                     return Err(admin_not_found());
                 }
-                if self
-                    .keys
-                    .values()
-                    .filter(|key| key.client == client)
-                    .count()
-                    >= 8
-                {
+                if self.clients[&client].key_tokens.len() >= 8 {
                     return Err(ApiError::exhausted());
                 }
                 let (public, until, token) = self.admin_key(&public_key, valid_until, now)?;
-                self.keys.insert(
+                self.insert_credential(
                     token,
                     Credential {
                         client: client.clone(),
@@ -265,8 +262,19 @@ impl Engine {
                 let revision = self.save_content_topics(topics.as_deref())?;
                 json!({"queued":true,"revision":revision})
             }
+            AdminCommand::Health {} => json!({
+                "service_id": self.config.service.id,
+                "restart_counter": self.restart_counter,
+                "ready": !self.shutting_down
+            }),
+            AdminCommand::ContentTopicStatus { topic } => json!(
+                self.topics
+                    .get(&topic)
+                    .and_then(|entry| self.content.as_ref()?.topic_status(&topic, entry.slot))
+                    .ok_or_else(admin_not_found)?
+            ),
             AdminCommand::Status {} => {
-                json!({"service_id":self.config.service.id,"restart_counter":self.restart_counter,"clients":self.clients.len(),"registered_keys":self.keys.len(),"sessions":self.sessions.keys().filter(|id|self.authenticated(**id,now)).count(),"topics":self.topics.len(),"resident_messages":self.records.len(),"message_bytes_charged":self.active_bytes,"cleanup_pending":self.cleanup_record.is_some()||self.cleanup_batch.is_some()||self.expiry.has_due(now)||self.records.needs_reclaim()||self.rotation_expiry.first().is_some_and(|entry|entry.0<=now),"limits":self.config.limits,"security_storage":self.security_status(),"content_storage":self.content_status(),"service_links":self.link_status.lock().map_err(|_|ApiError::internal())?.clone()})
+                json!({"service_id":self.config.service.id,"restart_counter":self.restart_counter,"clients":self.clients.len(),"registered_keys":self.keys.len(),"sessions":self.sessions.keys().filter(|id|self.authenticated(**id,now)).count(),"topics":self.topics.len(),"resident_messages":self.records.len(),"message_bytes_charged":self.active_bytes,"cleanup_pending":self.cleanup_record.is_some()||self.cleanup_batch.is_some()||self.expiry.has_due(now)||self.records.needs_reclaim()||self.rotation_expiry.first().is_some_and(|entry|entry.0<=now),"limits":self.config.limits,"security_storage":self.security_status(),"content_storage":self.content_status(),"egress_rejections":self.egress.as_ref().map_or(0, |egress| egress.rejected.load(std::sync::atomic::Ordering::Relaxed)),"service_links":self.link_status.lock().map_err(|_|ApiError::internal())?.clone()})
             }
             AdminCommand::StorageStats {} => json!(self.storage_stats()),
             AdminCommand::Export {} => {
@@ -307,22 +315,23 @@ impl Engine {
     }
     fn admin_client(&self, client: &str, now: u64) -> Result<Value> {
         let state = self.clients.get(client).ok_or_else(admin_not_found)?;
-        let mut keys:Vec<_>=self.keys.iter().filter(|(_,key)|key.client==client).map(|(token,key)|Ok(json!({"token_id":token,"algorithm":"ed25519","public_key":crypto::encode(&key.public),"valid_until":protocol::timestamp(key.until)?,"expired":key.until<=now}))).collect::<Result<_>>()?;
+        let mut keys = state.key_tokens.iter().map(|token| {
+            let key = &self.keys[token];
+            Ok(json!({"token_id":token,"algorithm":"ed25519",
+                "public_key":crypto::encode(&key.public),"valid_until":protocol::timestamp(key.until)?,
+                "expired":key.until<=now}))
+        }).collect::<Result<Vec<_>>>()?;
         keys.sort_by(|a, b| a["token_id"].as_str().cmp(&b["token_id"].as_str()));
         let mut sessions = Vec::new();
         let mut count = 0;
-        for id in self.sessions.keys() {
-            if self
-                .identity_ref(*id, now)
-                .is_ok_and(|(name, _, _)| name == client)
-            {
+        for &id in &state.session_ids {
+            if self.authenticated(id, now) {
                 count += 1;
                 if sessions.len() < 100 {
-                    sessions.push(*id);
+                    sessions.push(id);
                 }
             }
         }
-        sessions.sort_unstable();
         Ok(
             json!({"client_id":client,"display_name":state.display_name,"disabled":state.disabled,"acl_revision":state.revision,"keys":keys,"active_sessions":count,"session_ids":sessions,"sessions_truncated":count>100}),
         )

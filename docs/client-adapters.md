@@ -106,3 +106,9 @@ Nach erfolgreichem Prozessstart wird das konfigurierte `started`-Ereignis gemeld
 Die Interpretation wird vor dem ersten Poll, danach regelmäßig mit derselben Revision und neuer endlicher TTL publiziert. Sie enthält eine neue zufällige Teilnahmeinstanz pro Adapterstart, den gemeldeten Teilnehmer, Wirkung, Trigger, Statusmapping, Profil und Revision; keine lokalen Programmpfade/Argumente oder Secrets. Standardbeispiel: Erneuerung nach 10 Sekunden, Gültigkeit 30 Sekunden. Es gibt weiterhin keine Ersetzung alter Messages oder Broker-Registry.
 
 ACK und Cursorfortschritt werden nach Lesen und vor Prozessausführung vorgenommen; sie bedeuten keine Fertigstellung. Der Fortschritt ist RAM-Zustand. Neustart kann noch aktive Trigger erneut lesen und damit ein Programm erneut ausführen. Es gibt keine Exactly-once-Wirkung oder automatische Protokollaushandlung. SIGINT/SIGTERM beendet den Adapter. Abbruch/Timeout beendet den direkten Kindprozess; beliebige separat gestartete Nachkommen werden nicht als Prozessgruppe verwaltet. Für Werkzeuge mit eigenen Prozessbäumen bleibt entsprechende Host-/Supervisor-Verwaltung nötig.
+
+On Unix, the adapter starts configured programs in their own process group.
+Timeout and adapter shutdown terminate that group while the child is still
+tracked. Programs that detach into another group require a separate
+supervisor if their descendants must be bounded. Workflow authorization and
+deduplication remain deployment decisions.

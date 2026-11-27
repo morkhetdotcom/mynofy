@@ -24,16 +24,16 @@ Application-message sizes; transport headers excluded.
 
 | Measurement | Recorded result | Workload |
 | --- | ---: | --- |
-| Publish | **0.92 million messages/s** | 100,000 messages, 256-byte payloads |
-| Batched poll | **5.83 million message reads/s** | 100,000 messages, 256-byte payloads, one reader; pages of 100 |
+| Publish | **0.94 million messages/s** | 100,000 messages, 256-byte payloads |
+| Batched poll | **6.40 million message reads/s** | 100,000 messages, 256-byte payloads, one reader; pages of 100 |
 | Active-event RSS growth | **103 bytes/event** | 20,000 parameterless events, including indexes and allocator effects |
 | Active process RSS | **7.90 MiB** | 20,000 parameterless events; core plus benchmark driver |
 
-Measured 23 November 2026: Linux x86-64, AMD Ryzen 5 5500U, Rust 1.99.1;
-medians of seven optimized core runs, excluding network/TLS and disk I/O. Request
-preparation is outside operation timers. RSS growth is measured above the
-initialized benchmark baseline; active process RSS includes the driver. Results
-are workload-dependent. Reproduce with `cargo bench --locked -p mynofy-server --bench core -- --messages 100000 --payload-bytes 256`.
+Throughput is the median of five optimized Core runs on 26 November 2026
+(Linux x86-64, AMD Ryzen 5 5500U, Rust 1.100.0). Memory figures are from the
+23 November campaign on the same host with Rust 1.99.1. Core timings exclude
+network, TLS, disk I/O and request preparation. RSS growth is relative to the
+initialized benchmark baseline, and active RSS includes the driver. Reproduce with `cargo bench --locked -p mynofy-server --bench core -- --messages 100000 --payload-bytes 256`.
 
 [Get started](docs/getting-started.md) · [Networking](docs/networking.md) ·
 [Security](docs/security.md) · [Examples](examples/code-review/README.md) ·

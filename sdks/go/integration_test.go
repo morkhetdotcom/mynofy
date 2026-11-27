@@ -48,6 +48,9 @@ func startFixture(t *testing.T, mode string) *fixture {
 		t.Fatal("run real service integration tests under a normal UID")
 	}
 	f := &fixture{dir: t.TempDir(), binary: rustBinary(t)}
+	if err := os.Chmod(f.dir, 0700); err != nil {
+		t.Fatal(err)
+	}
 	keypath := filepath.Join(f.dir, "rust.pk8")
 	if data, err := exec.Command(f.binary, "keygen", "--out", keypath).CombinedOutput(); err != nil {
 		t.Fatalf("Rust keygen: %v %s", err, data)
@@ -106,6 +109,7 @@ func startFixture(t *testing.T, mode string) *fixture {
 	limits := cfg["limits"].(map[string]any)
 	limits["client_burst"] = 1000
 	limits["client_requests_per_second"] = 1000
+	cfg["security_storage"] = map[string]any{"directory": "security"}
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -113,6 +117,9 @@ func startFixture(t *testing.T, mode string) *fixture {
 	file := filepath.Join(f.dir, "config.json")
 	if err = os.WriteFile(file, data, 0600); err != nil {
 		t.Fatal(err)
+	}
+	if output, err := exec.Command(f.binary, "security-init", "--config", file).CombinedOutput(); err != nil {
+		t.Fatalf("initialize security: %v %s", err, output)
 	}
 	cmd := exec.Command(f.binary, "serve", "--config", file)
 	var stderr bytes.Buffer
@@ -188,6 +195,9 @@ func TestNativeRoundtrip(t *testing.T) {
 			f := startFixture(t, mode)
 			ctx := context.Background()
 			c := mustDial(t, f.cfg)
+			if c.Info().BootID == "" {
+				t.Fatal("missing boot identity")
+			}
 			if c.Info().ClientID != f.key.ClientID() {
 				t.Fatal("identity mismatch")
 			}

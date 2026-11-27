@@ -12,12 +12,76 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.*;
 import javax.net.SocketFactory;
 import javax.net.ssl.*;
+import org.java_websocket.WebSocketImpl;
 import org.java_websocket.client.WebSocketClient;
 import org.java_websocket.drafts.Draft_6455;
+import org.java_websocket.enums.Opcode;
+import org.java_websocket.exceptions.InvalidDataException;
+import org.java_websocket.exceptions.LimitExceededException;
+import org.java_websocket.framing.Framedata;
+import org.java_websocket.handshake.Handshakedata;
 import org.java_websocket.handshake.ServerHandshake;
+import org.java_websocket.exceptions.InvalidHandshakeException;
 
 final class Transport implements AutoCloseable {
   static final int MAX_FRAME = 4 * 1024 * 1024;
+  // Draft_6455 processes each decoded frame before retaining it in the message.
+  // Keep the limits here until the maintained dependency enforces both itself.
+  static final class BoundedDraft extends Draft_6455 {
+    static final int MAX_FRAGMENTS = 1024;
+    private int fragments;
+    private int payloadBytes;
+
+    BoundedDraft() {
+      super(List.of(), MAX_FRAME);
+    }
+
+    @Override
+    public Draft_6455 copyInstance() {
+      return new BoundedDraft();
+    }
+
+    @Override
+    public void reset() {
+      super.reset();
+      fragments = 0;
+      payloadBytes = 0;
+    }
+
+    static final int MAX_UPGRADE_HEADERS = 16 * 1024;
+
+    @Override
+    public Handshakedata translateHandshake(ByteBuffer bytes) throws InvalidHandshakeException {
+      int start = bytes.position();
+      int budget = Math.min(bytes.remaining(), MAX_UPGRADE_HEADERS);
+      for (int i = 3; i < budget; i++) {
+        int end = start + i;
+        if (bytes.get(end - 3) == '\r' && bytes.get(end - 2) == '\n'
+            && bytes.get(end - 1) == '\r' && bytes.get(end) == '\n') {
+          return super.translateHandshake(bytes);
+        }
+      }
+      if (budget == MAX_UPGRADE_HEADERS) {
+        throw new InvalidHandshakeException("WebSocket upgrade headers exceed 16 KiB");
+      }
+      return super.translateHandshake(bytes);
+    }
+
+    void account(Opcode opcode, int bytes, boolean fin) throws LimitExceededException {
+      if (opcode != Opcode.BINARY && opcode != Opcode.TEXT && opcode != Opcode.CONTINUOUS) return;
+      if (bytes > MAX_FRAME - payloadBytes || fragments == MAX_FRAGMENTS) {
+        throw new LimitExceededException("WebSocket message exceeds receive limits");
+      }
+      payloadBytes = fin ? 0 : payloadBytes + bytes;
+      fragments = fin ? 0 : fragments + 1;
+    }
+
+    @Override
+    public void processFrame(WebSocketImpl connection, Framedata frame) throws InvalidDataException {
+      account(frame.getOpcode(), frame.getPayloadData().remaining(), frame.isFin());
+      super.processFrame(connection, frame);
+    }
+  }
   private final AtomicBoolean closed = new AtomicBoolean();
   private final AtomicReference<Socket> network = new AtomicReference<>();
   private final AtomicReference<CompletableFuture<byte[]>> pending = new AtomicReference<>();
@@ -28,7 +92,7 @@ final class Transport implements AutoCloseable {
     URI uri = cfg.socket() != null ? URI.create("ws://localhost/") : cfg.url();
     SSLContext tls = cfg.socket() == null ? tlsContext(cfg.caFile()) : null;
     ws =
-        new WebSocketClient(uri, new Draft_6455(List.of(), MAX_FRAME)) {
+        new WebSocketClient(uri, new BoundedDraft()) {
           @Override
           public void onOpen(ServerHandshake handshake) {
             opened.complete(null);

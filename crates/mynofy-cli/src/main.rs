@@ -26,7 +26,21 @@ fn bootstrap() -> Result<(), BoxError> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    let result = runtime.block_on(run_with_startup_signals(args));
+    let drain = if args.first().is_some_and(|arg| arg == "serve") {
+        let (started, monitor) = std::sync::mpsc::sync_channel(1);
+        std::thread::Builder::new().name("mynofy-drain-watch".into()).spawn(move || {
+            if monitor.recv().is_ok()
+                && matches!(monitor.recv_timeout(std::time::Duration::from_secs(10)),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout))
+            {
+                eprintln!("mynofy: shutdown is still draining; the process retains store ownership while waiting for I/O");
+            }
+        })?;
+        Some(started)
+    } else {
+        None
+    };
+    let result = runtime.block_on(run_with_startup_signals(args, drain.as_ref()));
     // Tokio stdin uses a blocking OS read that cannot be aborted by dropping its
     // async task. All command cleanup runs above; bound leftover runtime shutdown.
     runtime.shutdown_timeout(std::time::Duration::from_millis(250));
@@ -35,9 +49,20 @@ fn bootstrap() -> Result<(), BoxError> {
 // Tokio signal handlers remain installed after a prompt receiver is dropped.
 // Keep receivers for the whole startup/offline command so later signals cannot
 // disappear between secret prompts, store preparation and the serving loop.
-async fn run_with_startup_signals(args: Vec<String>) -> Result<(), BoxError> {
+type DrainSignal = std::sync::mpsc::SyncSender<()>;
+
+fn start_drain(drain: Option<&DrainSignal>) {
+    if let Some(drain) = drain {
+        let _ = drain.try_send(());
+    }
+}
+
+async fn run_with_startup_signals(
+    args: Vec<String>,
+    drain: Option<&DrainSignal>,
+) -> Result<(), BoxError> {
     #[cfg(unix)]
-    if matches!(args.first().map(String::as_str), Some("serve" | "storage")) {
+    if matches!(args.first().map(String::as_str), Some("storage")) {
         let mut interrupt =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?;
         let mut terminate =
@@ -45,14 +70,14 @@ async fn run_with_startup_signals(args: Vec<String>) -> Result<(), BoxError> {
         return tokio::select! {
             biased;
             // Existing prompt/service handlers get their normal cleanup/exit first.
-            result = run(args) => result,
-            _ = interrupt.recv() => Err("Command interrupted by SIGINT".into()),
-            _ = terminate.recv() => Err("Command interrupted by SIGTERM".into()),
+            result = run(args, drain) => result,
+            _ = interrupt.recv() => { start_drain(drain); Err("Command interrupted by SIGINT".into()) },
+            _ = terminate.recv() => { start_drain(drain); Err("Command interrupted by SIGTERM".into()) },
         };
     }
-    run(args).await
+    run(args, drain).await
 }
-async fn run(args: Vec<String>) -> Result<(), BoxError> {
+async fn run(args: Vec<String>, drain: Option<&DrainSignal>) -> Result<(), BoxError> {
     let mut args = args.into_iter();
     let cmd = args.next().unwrap_or_else(|| "help".into());
     if cmd == "storage" {
@@ -76,7 +101,7 @@ async fn run(args: Vec<String>) -> Result<(), BoxError> {
         flags.insert(flag, value);
     }
     let allowed: &[&str] = match cmd.as_str() {
-        "serve" | "check-config" => &["--config"],
+        "serve" | "check-config" | "security-init" | "content-init" => &["--config"],
         "config-convert" => &["--config", "--out"],
         "keygen" => &["--out"],
         "adapter" => &[
@@ -139,11 +164,20 @@ async fn run(args: Vec<String>) -> Result<(), BoxError> {
     };
     match cmd.as_str() {
         "mcp" => mcp::run(&flags).await?,
+        "security-init" => {
+            let config = Config::load_explicit_security(Path::new(required("--config")?))?;
+            mynofy_server::initialize_security(&config)?;
+        }
+        "content-init" => {
+            let config = Config::load_explicit_security(Path::new(required("--config")?))?;
+            mynofy_server::content::initialize(&config)?;
+        }
         "serve" => {
-            let config = Config::load(Path::new(required("--config")?))?;
-            config.require_local_owner()?;
+            let shutdown = shutdown_and_drain(drain)?;
+            let config = load_serve_config(Path::new(required("--config")?))?;
             let secret = content_secret::read(&config).await?;
-            let prepared = server::prepare(config.clone(), secret)?;
+            let mut prepared = server::prepare(config.clone(), secret)?;
+            prepared.bind_admin()?;
             if let Some(address) = config.service.listen {
                 let listener = tokio::net::TcpListener::bind(address).await?;
                 eprintln!(
@@ -151,7 +185,7 @@ async fn run(args: Vec<String>) -> Result<(), BoxError> {
                     config.service.id,
                     listener.local_addr()?
                 );
-                tokio::select! {result=server::run_prepared(listener,prepared)=>result?,result=shutdown()=>result?,}
+                server::run_prepared_until(listener, prepared, shutdown).await?;
             } else {
                 #[cfg(unix)]
                 {
@@ -166,16 +200,17 @@ async fn run(args: Vec<String>) -> Result<(), BoxError> {
                         config.service.id,
                         path.display()
                     );
-                    tokio::select! {result=server::run_unix_prepared(bound,prepared)=>result?,result=shutdown()=>result?,}
+                    server::run_unix_prepared_until(bound, prepared, shutdown).await?;
                 }
                 #[cfg(not(unix))]
                 return Err("Unix sockets are unavailable on this platform".into());
             }
         }
         "check-config" => {
-            let config = Config::load(Path::new(required("--config")?))?;
+            let config = load_serve_config(Path::new(required("--config")?))
+                .map_err(|error| format!("Static serve check failed: {error}"))?;
             println!(
-                "Valid configuration: {} ({} topics, {} clients)",
+                "Valid static serve configuration: {} ({} topics, {} clients)",
                 config.service.id,
                 config.topics.len(),
                 config.clients.len()
@@ -184,12 +219,9 @@ async fn run(args: Vec<String>) -> Result<(), BoxError> {
         "config-convert" => {
             let config = Config::load(Path::new(required("--config")?))?;
             let path = Path::new(required("--out")?);
-            let data = if mynofy_server::config::is_yaml(path) {
-                config.to_yaml()?
-            } else {
-                format!("{}\n", serde_json::to_string_pretty(&config)?)
-            };
-            write_private_file(path, data.as_bytes())?;
+            let value = serde_json::to_value(config)?;
+            let data = config_output(path, &value, Config::MAX_INPUT_BYTES)?;
+            write_private_file(path, &data)?;
         }
         "keygen" => {
             let path = Path::new(required("--out")?);
@@ -272,7 +304,7 @@ async fn run(args: Vec<String>) -> Result<(), BoxError> {
             }
         }
         "help" | "--help" => println!(
-            "Global Unix options: --run-as-uid UID --run-as-gid GID (required when privileged)\nmynofy admin help\nmynofy storage help\nmynofy serve --config FILE\nmynofy check-config --config FILE\nmynofy config-convert --config FILE --out NEW.yaml\nmynofy keygen --out CLIENT.pk8\nmynofy mcp --socket PATH --key CLIENT.pk8 --owner ID\nmynofy mcp --url wss://HOST:PORT --ca CA.pem --key CLIENT.pk8 --owner ID\nmynofy client --url wss://HOST:PORT --ca CA.pem --key CLIENT.pk8 --owner ID [--client-id STABLE_ID] [--progress FILE]\nmynofy rotate --url wss://HOST:PORT --ca CA.pem --key OLD.pk8 --new-key NEW.pk8 --owner ID [--client-id STABLE_ID]\nmynofy client --socket PATH --key CLIENT.pk8 --owner ID [--client-id STABLE_ID] [--progress FILE]\nmynofy rotate --socket PATH --key OLD.pk8 --new-key NEW.pk8 --owner ID [--client-id STABLE_ID]\nFor remote owners add --via-topic TOPIC --owner-ca OWNER_CA.pem [--owner-name OWNER_DNS]; --ca verifies the proxy, --owner-ca the end-to-end owner.\nThe client reads JSONL requests from stdin and writes JSONL responses to stdout."
+            "Global Unix options: --run-as-uid UID --run-as-gid GID (required when privileged)\nmynofy admin help\nmynofy storage help\nmynofy security-init --config FILE\nmynofy content-init --config FILE\nmynofy serve --config FILE\nmynofy check-config --config FILE\nmynofy config-convert --config FILE --out NEW.yaml\nmynofy keygen --out CLIENT.pk8\nmynofy mcp --socket PATH --key CLIENT.pk8 --owner ID\nmynofy mcp --url wss://HOST:PORT --ca CA.pem --key CLIENT.pk8 --owner ID\nmynofy client --url wss://HOST:PORT --ca CA.pem --key CLIENT.pk8 --owner ID [--client-id STABLE_ID] [--progress FILE]\nmynofy rotate --url wss://HOST:PORT --ca CA.pem --key OLD.pk8 --new-key NEW.pk8 --owner ID [--client-id STABLE_ID]\nmynofy client --socket PATH --key CLIENT.pk8 --owner ID [--client-id STABLE_ID] [--progress FILE]\nmynofy rotate --socket PATH --key OLD.pk8 --new-key NEW.pk8 --owner ID [--client-id STABLE_ID]\nFor remote owners add --via-topic TOPIC --owner-ca OWNER_CA.pem [--owner-name OWNER_DNS]; --ca verifies the proxy, --owner-ca the end-to-end owner.\nThe client reads JSONL requests from stdin and writes JSONL responses to stdout."
         ),
         _ => return Err("Unknown command; run mynofy help".into()),
     }
@@ -318,8 +350,10 @@ async fn client_command<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>
         #[cfg(unix)]
         if let Some(path) = flags.get("--progress") {
             let (file, progress) = progress_file::ProgressFile::open(Path::new(path))?;
-            let mut tracked = client::progress::RestartClient::new(ws, welcome, progress)?;
-            file.save(tracked.progress())?;
+            let mut tracked = client::progress::RestartClient::new(ws, welcome, progress.clone())?;
+            if tracked.progress() != &progress {
+                file.save(tracked.progress())?;
+            }
             let mut lines = tokio::io::BufReader::new(tokio::io::stdin());
             let mut out = tokio::io::stdout();
             while let Some(line) = client_line(&mut lines).await? {
@@ -328,11 +362,17 @@ async fn client_command<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>
                 }
                 let request = mynofy_protocol::strict_json(&line)?;
                 let response = tracked.exchange(&request).await?;
+                let changed = tracked
+                    .take_cursor_change()
+                    .then(|| progress_file::ProgressFile::encode(tracked.progress()))
+                    .transpose()?;
                 out.write_all(serde_json::to_string(&response)?.as_bytes())
                     .await?;
                 out.write_all(b"\n").await?;
                 out.flush().await?;
-                file.save(tracked.progress())?;
+                if let Some(bytes) = changed {
+                    file.save_encoded(&bytes)?;
+                }
             }
             let (mut socket, _) = tracked.into_parts();
             socket.close(None).await?;
@@ -341,6 +381,25 @@ async fn client_command<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>
         client_stdio(ws).await?;
     }
     Ok(())
+}
+
+fn shutdown_and_drain(
+    drain: Option<&DrainSignal>,
+) -> std::io::Result<impl std::future::Future<Output = std::io::Result<()>> + '_> {
+    #[cfg(unix)]
+    let (mut interrupt, mut terminate) = (
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt())?,
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?,
+    );
+    Ok(async move {
+        #[cfg(unix)]
+        let result =
+            tokio::select! { _ = interrupt.recv() => Ok(()), _ = terminate.recv() => Ok(()) };
+        #[cfg(not(unix))]
+        let result = shutdown().await;
+        start_drain(drain);
+        result
+    })
 }
 
 async fn shutdown() -> std::io::Result<()> {
@@ -403,23 +462,91 @@ async fn client_stdio<S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin>(
     Ok(())
 }
 
+fn load_serve_config(path: &Path) -> Result<Config, BoxError> {
+    let config = Config::load_explicit_security(path)?;
+    config.require_content_store_id()?;
+    Ok(config)
+}
+
 fn write_private_file(path: &Path, bytes: &[u8]) -> std::result::Result<(), BoxError> {
-    let mut options = std::fs::OpenOptions::new();
+    use std::{
+        fs,
+        io::{ErrorKind, Write},
+    };
+    let parent = path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
-    let mut file = options.open(path)?;
-    std::io::Write::write_all(&mut file, bytes)?;
+
+    struct Staging(Option<std::path::PathBuf>);
+    impl Drop for Staging {
+        fn drop(&mut self) {
+            if let Some(path) = &self.0 {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+
+    let (mut file, mut stage) = (0..16)
+        .find_map(|_| -> Option<Result<_, BoxError>> {
+            let suffix = match crypto::random() {
+                Ok(random) => u128::from_be_bytes(random),
+                Err(error) => return Some(Err(error.into())),
+            };
+            let staged = parent.join(format!(".mynofy-output-{suffix:032x}.tmp"));
+            match options.open(&staged) {
+                Ok(file) => Some(Ok((file, Staging(Some(staged))))),
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => None,
+                Err(error) => Some(Err(error.into())),
+            }
+        })
+        .ok_or("Could not allocate an output staging file")??;
+    file.write_all(bytes)?;
     file.sync_all()?;
-    let parent = path
-        .parent()
-        .filter(|path| !path.as_os_str().is_empty())
-        .unwrap_or_else(|| Path::new("."));
-    std::fs::File::open(parent)?.sync_all()?;
+    drop(file);
+    // The same-directory link publishes atomically and refuses any existing target.
+    let temporary = stage.0.as_ref().ok_or("Missing output staging path")?;
+    fs::hard_link(temporary, path)?;
+    fs::remove_file(temporary)
+        .map(|()| stage.0 = None)
+        .and_then(|()| fs::File::open(parent)?.sync_all())
+        .map_err(|error| {
+            format!(
+                "Output published at {} but directory finalization failed: {error}",
+                path.display()
+            )
+        })?;
     Ok(())
+}
+
+fn config_output(
+    path: &Path,
+    value: &serde_json::Value,
+    maximum: usize,
+) -> Result<Vec<u8>, BoxError> {
+    use mynofy_server::config::{Config, is_yaml};
+    let data = if is_yaml(path) {
+        let config: Config = serde_json::from_value(value.clone())?;
+        config.to_yaml()?.into_bytes()
+    } else {
+        let mut data = serde_json::to_vec_pretty(value)?;
+        if data.len() >= maximum {
+            data = serde_json::to_vec(value)?;
+        } else {
+            data.push(b'\n');
+        }
+        data
+    };
+    Config::parse(path, std::str::from_utf8(&data)?)
+        .map_err(|error| format!("Output cannot be loaded as a service configuration: {error}"))?;
+    Ok(data)
 }
 
 #[cfg(test)]

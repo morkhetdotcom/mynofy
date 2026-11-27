@@ -79,12 +79,13 @@ pub(super) async fn read_label(
         );
         io::stderr().flush()?;
     }
-    let mut secret = Zeroizing::new(Vec::new());
+    const INPUT_LIMIT: usize = 4099;
+    let mut secret = Zeroizing::new(Vec::with_capacity(INPUT_LIMIT));
     let input = async {
         let mut input = tokio::io::stdin();
         // Do not read ahead: offline rekey/restore can consume several separate lines.
         let mut byte = Zeroizing::new([0u8; 1]);
-        while secret.len() < 4099 && input.read(byte.as_mut()).await? != 0 {
+        while secret.len() < INPUT_LIMIT && input.read(byte.as_mut()).await? != 0 {
             secret.push(byte[0]);
             if byte[0] == b'\n' {
                 break;

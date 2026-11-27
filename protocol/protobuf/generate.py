@@ -32,7 +32,7 @@ types={
 'AuthHello':'id:string token_id:string',
 'AuthChallenge':'request_id:string service_id:string nonce:string',
 'AuthProof':'id:string auth_id:string signature:string',
-'AuthWelcome':'request_id:string client_id:string service_id:string restart_counter:uint32?',
+'AuthWelcome':'request_id:string client_id:string service_id:string restart_counter:uint32? boot_id:string?',
 }
 frames=list(types)[4:]
 frame_tags={name:tag for tag,name in enumerate(['Poll','Messages','Publish','Result','Ack','Nack','ListMessages','MessagesPage','GetMessage','MessageStatus','Error','GetPermissions','Permissions','RotationStart','RotationOffer','RotationConfirm','RotationReady','RotationCommit','RotationComplete','GetCatalog','Catalog','AuthHello','AuthChallenge','AuthProof','AuthWelcome'],10)}

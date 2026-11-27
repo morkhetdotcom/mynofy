@@ -4,6 +4,7 @@
     "direction": "initiator_to_acceptor",
     "frame": {
       "version": 1,
+      "link_version": 2,
       "type": "service_hello",
       "id": "hello-1",
       "service_id": "workstation-a"
@@ -14,6 +15,7 @@
     "direction": "acceptor_to_initiator",
     "frame": {
       "version": 1,
+      "link_version": 2,
       "type": "service_welcome",
       "request_id": "hello-1",
       "service_id": "office-hub"

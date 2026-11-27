@@ -1989,6 +1989,7 @@ type AuthWelcome struct {
 	ClientId       *string                `protobuf:"bytes,2,req,name=client_id,json=clientId" json:"client_id,omitempty"`
 	ServiceId      *string                `protobuf:"bytes,3,req,name=service_id,json=serviceId" json:"service_id,omitempty"`
 	RestartCounter *uint32                `protobuf:"varint,4,opt,name=restart_counter,json=restartCounter" json:"restart_counter,omitempty"`
+	BootId         *string                `protobuf:"bytes,5,opt,name=boot_id,json=bootId" json:"boot_id,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -2049,6 +2050,13 @@ func (x *AuthWelcome) GetRestartCounter() uint32 {
 		return *x.RestartCounter
 	}
 	return 0
+}
+
+func (x *AuthWelcome) GetBootId() string {
+	if x != nil && x.BootId != nil {
+		return *x.BootId
+	}
+	return ""
 }
 
 type Frame struct {
@@ -2647,14 +2655,15 @@ const file_mynofy_proto_rawDesc = "" +
 	"\tAuthProof\x12\x0e\n" +
 	"\x02id\x18\x01 \x02(\tR\x02id\x12\x17\n" +
 	"\aauth_id\x18\x02 \x02(\tR\x06authId\x12\x1c\n" +
-	"\tsignature\x18\x03 \x02(\tR\tsignature\"\x91\x01\n" +
+	"\tsignature\x18\x03 \x02(\tR\tsignature\"\xaa\x01\n" +
 	"\vAuthWelcome\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x02(\tR\trequestId\x12\x1b\n" +
 	"\tclient_id\x18\x02 \x02(\tR\bclientId\x12\x1d\n" +
 	"\n" +
 	"service_id\x18\x03 \x02(\tR\tserviceId\x12'\n" +
-	"\x0frestart_counter\x18\x04 \x01(\rR\x0erestartCounter\"\x91\v\n" +
+	"\x0frestart_counter\x18\x04 \x01(\rR\x0erestartCounter\x12\x17\n" +
+	"\aboot_id\x18\x05 \x01(\tR\x06bootId\"\x91\v\n" +
 	"\x05Frame\x12\x18\n" +
 	"\aversion\x18\x01 \x02(\rR\aversion\x12%\n" +
 	"\x04poll\x18\n" +

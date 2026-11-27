@@ -115,13 +115,16 @@ struct Pipes {
 }
 impl Pipes {
     fn start(config: &AdapterConfig) -> Result<Self, BoxError> {
-        let mut child = Command::new(&config.program)
+        let mut command = Command::new(&config.program);
+        command
             .args(&config.args)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()?;
+            .kill_on_drop(true);
+        #[cfg(unix)]
+        command.process_group(0);
+        let mut child = command.spawn()?;
         let stdin = child.stdin.take().ok_or("No stdin pipe")?;
         let stdout = BufReader::new(child.stdout.take().ok_or("No stdout pipe")?);
         Ok(Self {
@@ -129,6 +132,59 @@ impl Pipes {
             stdin: Some(stdin),
             stdout,
         })
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn exited(child: &Child) -> std::io::Result<bool> {
+        use rustix::process::{Pid, WaitId, WaitIdOptions, waitid};
+        let Some(pid) = child
+            .id()
+            .and_then(|id| i32::try_from(id).ok())
+            .and_then(Pid::from_raw)
+        else {
+            return Ok(true);
+        };
+        // WNOWAIT leaves the exit status pending, pinning the group leader's PID.
+        match waitid(
+            WaitId::Pid(pid),
+            WaitIdOptions::EXITED | WaitIdOptions::NOHANG | WaitIdOptions::NOWAIT,
+        ) {
+            Ok(status) => Ok(status.is_some()),
+            Err(rustix::io::Errno::INTR) => Ok(false),
+            Err(error) => Err(error.into()),
+        }
+    }
+
+    fn running(&mut self) -> std::io::Result<bool> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            if !Self::exited(&self.child)? {
+                return Ok(true);
+            }
+            self.stop_group();
+        }
+        Ok(self.child.try_wait()?.is_none())
+    }
+
+    fn stop_group(&mut self) {
+        #[cfg(unix)]
+        signal_group(self.child.id().and_then(|id| i32::try_from(id).ok()));
+    }
+}
+
+#[cfg(unix)]
+fn signal_group(id: Option<i32>) {
+    if let Some(id) = id {
+        // The caller still owns the unreaped child, so its group ID cannot be reused.
+        let _ = nix::sys::signal::killpg(
+            nix::unistd::Pid::from_raw(id),
+            nix::sys::signal::Signal::SIGKILL,
+        );
+    }
+}
+
+impl Drop for Pipes {
+    fn drop(&mut self) {
+        self.stop_group();
     }
 }
 async fn line_bounded(
@@ -220,6 +276,35 @@ fn work(config: AdapterConfig, pipes: Option<Pipes>) -> Work {
                         }
                         Ok::<_, BoxError>(out)
                     };
+                    #[cfg(any(target_os = "linux", target_os = "macos"))]
+                    let (_, output) = {
+                        let io = async { tokio::try_join!(input_future, output_future) };
+                        tokio::pin!(io);
+                        let child = &pipes.child;
+                        let result = tokio::select! {
+                            result = &mut io => Some(result),
+                            exited = async {
+                                while !Pipes::exited(child)? {
+                                    tokio::time::sleep(Duration::from_millis(5)).await;
+                                }
+                                Ok::<_, std::io::Error>(())
+                            } => { exited?; None }
+                        };
+                        // The I/O future only borrows stdin and stdout.
+                        let id = child.id().and_then(|id| i32::try_from(id).ok());
+                        if let Some(result) = result {
+                            let output = result?;
+                            while !Pipes::exited(child)? {
+                                tokio::time::sleep(Duration::from_millis(5)).await;
+                            }
+                            signal_group(id);
+                            output
+                        } else {
+                            signal_group(id);
+                            io.await?
+                        }
+                    };
+                    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
                     let (_, output) = tokio::try_join!(input_future, output_future)?;
                     if !pipes.child.wait().await?.success() {
                         return Err("Process returned a nonzero exit code".into());
@@ -237,6 +322,7 @@ fn work(config: AdapterConfig, pipes: Option<Pipes>) -> Work {
                 Err(_) => Err("Process execution timed out".into()),
             };
             if result.is_err() || config.mode == Mode::Once {
+                pipes.stop_group();
                 let _ = pipes.child.kill().await;
                 let _ = pipes.child.wait().await;
                 (None, result)
@@ -321,7 +407,7 @@ pub async fn run<S: AsyncRead + AsyncWrite + Unpin>(
                     let matches=matches!(&item.message.payload.body,Some(Body::Event(e)) if *e==config.trigger);
                     if matches {
                         let pipes=if let Some(mut pipes)=idle_pipes.take(){
-                            if pipes.child.try_wait()?.is_none(){Ok(pipes)}else{Pipes::start(&config)}
+                            if pipes.running()?{Ok(pipes)}else{Pipes::start(&config)}
                         }else{Pipes::start(&config)};
                         match pipes {
                             Ok(pipes)=>{
@@ -400,6 +486,81 @@ mod tests {
         bad.max_output_bytes = 4097;
         assert!(bad.validate().is_err());
     }
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn shutdown_and_timeout_kill_the_adapter_process_group() {
+        let dir = std::env::temp_dir().join(format!(
+            "mynofy-adapter-{}",
+            crate::crypto::encode(&crate::crypto::random::<8>().unwrap()).replace('/', "_")
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let marker = dir.join("survived");
+        let mut c = valid_config();
+        c.program = "/bin/sh".into();
+        c.args = vec![
+            "-c".into(),
+            r#"(sleep 0.8; printf done > "$1") & printf 'started\n'; wait"#.into(),
+            "mynofy-test".into(),
+            marker.to_string_lossy().into_owned(),
+        ];
+        let mut pipes = Pipes::start(&c).unwrap();
+        let line =
+            tokio::time::timeout(Duration::from_secs(1), line_bounded(&mut pipes.stdout, 100))
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(line, b"started");
+        drop(pipes);
+        tokio::time::sleep(Duration::from_millis(1000)).await;
+        assert!(!marker.exists());
+        c.args[1] = r#"(sleep 1.6; printf done > "$1") & wait"#.into();
+        let (pipes, result) = work(c, None).await;
+        assert!(pipes.is_none());
+        assert!(result.unwrap_err().to_string().contains("timed out"));
+        tokio::time::sleep(Duration::from_millis(800)).await;
+        assert!(!marker.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[tokio::test]
+    async fn normal_adapter_exit_cleans_group_before_reaping() {
+        let dir = std::env::temp_dir().join(format!(
+            "mynofy-adapter-exit-{:x}",
+            u64::from_le_bytes(crate::crypto::random().unwrap())
+        ));
+        std::fs::create_dir(&dir).unwrap();
+        let marker = dir.join("survived");
+        let mut config = valid_config();
+        config.program = "/bin/sh".into();
+        config.args = vec![
+            "-c".into(),
+            r#"cat >/dev/null; (sleep 0.5; printf leaked > "$1") & printf 'done'; exit 0"#.into(),
+            "mynofy-test".into(),
+            marker.to_string_lossy().into_owned(),
+        ];
+        let (pipes, output) = work(config.clone(), None).await;
+        assert!(pipes.is_none());
+        assert_eq!(output.unwrap(), b"done");
+
+        config.mode = Mode::StdioJsonl;
+        config.args[1] = r#"read -r entry; (sleep 0.5; printf leaked > "$1") & printf '{}
+'; exit 0"#
+            .into();
+        let (pipes, output) = work(config, None).await;
+        assert!(output.is_ok());
+        let mut pipes = pipes.unwrap();
+        tokio::time::timeout(Duration::from_millis(300), async {
+            while pipes.running().unwrap() {
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(600)).await;
+        assert!(!marker.exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[cfg(unix)]
     #[tokio::test]
     async fn once_and_persistent_jsonl_processes_follow_framing() {

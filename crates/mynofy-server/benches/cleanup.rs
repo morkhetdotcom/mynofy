@@ -57,7 +57,11 @@ async fn run(messages: usize, clients: usize) -> Result<(), BoxError> {
     cfg.limits.client_burst = 1_000_000;
     cfg.limits.client_requests_per_second = 1_000_000;
     cfg.limits.max_active_messages = messages + 1;
+    cfg.limits.max_topic_active_messages = Some(cfg.limits.max_active_messages);
+    cfg.limits.max_publisher_active_messages = Some(cfg.limits.max_active_messages);
     cfg.limits.max_active_message_bytes = (messages + 1) * 4096;
+    cfg.limits.max_topic_active_bytes = Some(cfg.limits.max_active_message_bytes);
+    cfg.limits.max_publisher_active_bytes = Some(cfg.limits.max_active_message_bytes);
     let mut engine = Engine::new(cfg, NOW)?;
     engine.start_id_allocator();
     let sessions: Vec<_> = keys

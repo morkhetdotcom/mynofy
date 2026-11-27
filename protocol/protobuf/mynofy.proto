@@ -150,6 +150,7 @@ message AuthWelcome {
   required string client_id = 2;
   required string service_id = 3;
   optional uint32 restart_counter = 4;
+  optional string boot_id = 5;
 }
 message Frame { required uint32 version = 1; oneof body {
  Poll poll = 10;

@@ -89,12 +89,14 @@ async fn run(messages: usize, size: usize, mode: &str) -> Result<(), BoxError> {
         encrypted: mode != "none",
     };
     config.security_storage = Some(SecurityStorage {
+        minimum_sequence: None,
         sync: false,
         directory: directory.0.join("security"),
         queue_capacity: 128,
         compact_after_records: 4096,
     });
     config.content_storage = Some(ContentStorage {
+        store_id: None,
         directory: directory.0.join("content"),
         encryption: match mode {
             "none" => ContentEncryption::None,
@@ -102,11 +104,16 @@ async fn run(messages: usize, size: usize, mode: &str) -> Result<(), BoxError> {
             _ => ContentEncryption::PasswordStdin,
         },
         max_snapshot_bytes: 256 * 1024 * 1024,
+        autosave_retry: Default::default(),
     });
     config.limits.client_burst = 1_000_000;
     config.limits.client_requests_per_second = 1_000_000;
     config.limits.max_active_messages = messages;
+    config.limits.max_topic_active_messages = Some(config.limits.max_active_messages);
+    config.limits.max_publisher_active_messages = Some(config.limits.max_active_messages);
     config.limits.max_active_message_bytes = messages * (size + 4096);
+    config.limits.max_topic_active_bytes = Some(config.limits.max_active_message_bytes);
+    config.limits.max_publisher_active_bytes = Some(config.limits.max_active_message_bytes);
     let mut engine = Engine::new_with_content_secret(config.clone(), NOW, secret(mode, false))?;
     engine.start_id_allocator();
     let session = authenticate(&mut engine, &key);

@@ -18,7 +18,7 @@ Verbindungen und den vorhandenen Rust-Client:
 
 | Fall | Erwartetes Softwareverhalten |
 | --- | --- |
-| Reader-Verbindung nach Poll vor ACK abbrechen | Reconnect liefert dieselbe Nachricht und Delivery-ID; zweimaliges ACK zählt nur einmal. ACK löscht keine Nachricht, Cursor verhindert erneutes Lesen alter Seiten. |
+| Reader-Verbindung nach Poll abbrechen | Poll nach Reconnect ohne Cursor liefert die weiterhin aktive Nachricht mit derselben Message-ID. Mit dem gespeicherten Cursor setzt der Consumer beim nächsten Eintrag fort. Dauerhafter fachlicher Fortschritt liegt beim Consumer. |
 | Publish mit gleicher Request-ID nach Reconnect erneut senden | Zwei unterschiedliche Message-IDs; eine Request-ID ist kein Idempotenzschlüssel. |
 | Ungültige Protobuf-Daten und Payload über 4096 Bytes | Fehler ohne Veröffentlichung; unabhängiger Client kann weiter lesen und schreiben. Der rohe Oversize-Frame umgeht bewusst die SDK-Vorprüfung. |
 | ACL während bestehender Sitzung entziehen | Alte Verbindung wird geschlossen, neue Publish/Poll-Aktionen werden verweigert. Eigener ursprünglicher Inhalt bleibt für den authentifizierten Producer lesbar. Andere berechtigte Clients bleiben nutzbar. |
@@ -38,10 +38,10 @@ keine Performance- oder exakten Timingtests.
   automatischen erneuten Publish.
 - Cancellation und EOF beenden ausstehende Owner-Arbeit; Metadaten bleiben
   während einer blockierten fachlichen Operation erreichbar.
-- Clientoperationen und ACL-/ACK-Semantik über echte stdio-MCP-Prozesse.
+- Clientoperationen und ACL- und Poll-Semantik über echte stdio-MCP-Prozesse.
 - Offline-Discovery und Trennung der unterstützten MCP-Protokollmodi.
 
-Das Skript umfasst derzeit neun Integrationstests. Es ersetzt weder die
+Das Skript umfasst derzeit 14 Integrationstests. Es ersetzt weder die
 funktionalen Core-/Mutationstests (`scripts/test-core-functional.sh`) noch die
 separate Speicher-Abbruchmatrix (`scripts/test-storage-crashes.sh`). Fachliche
 Workflow-Entscheidungen, menschlicher Stopp und Mandat bleiben Clientlogik;

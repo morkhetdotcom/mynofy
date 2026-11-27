@@ -49,6 +49,7 @@ fn fixture() -> Fixture {
 async fn unix_publish_poll_rotate_and_cleanup() {
     let mut f = fixture();
     f.config.security_storage = Some(mynofy_server::config::SecurityStorage {
+        minimum_sequence: None,
         sync: true,
         directory: f.dir.join("security"),
         queue_capacity: 128,
@@ -60,7 +61,7 @@ async fn unix_publish_poll_rotate_and_cleanup() {
     assert!(meta.file_type().is_socket());
     assert_eq!(meta.mode() & 0o777, 0o600);
     let config = f.config.clone();
-    let server = tokio::spawn(async move { transport::run_unix(bound, config).await });
+    let server = tokio::spawn(async move { support::run_unix_fixture(bound, config).await });
     let mut client = client::connect_unix_client(&f.socket, &f.key, "local", None)
         .await
         .unwrap();
@@ -109,7 +110,7 @@ async fn unix_rejects_unknown_key_and_wrong_owner() {
     let f = fixture();
     let bound = transport::bind_unix(&f.socket).unwrap();
     let config = f.config.clone();
-    let server = tokio::spawn(async move { transport::run_unix(bound, config).await });
+    let server = tokio::spawn(async move { support::run_unix_fixture(bound, config).await });
     assert!(
         client::connect_unix_client(&f.socket, &crypto::generate_key().unwrap(), "local", None)
             .await
@@ -233,6 +234,20 @@ fn cli_uses_unix_socket_and_sigterm_removes_socket() {
     };
     let f = fixture();
     let binary = env!("CARGO_BIN_EXE_mynofy");
+    let mut config = f.config.clone();
+    config.security_storage = Some(mynofy_server::config::SecurityStorage {
+        minimum_sequence: None,
+        directory: f.dir.join("security"),
+        sync: true,
+        queue_capacity: 128,
+        compact_after_records: 4096,
+    });
+    std::fs::write(
+        f.dir.join("config.json"),
+        serde_json::to_vec(&config).unwrap(),
+    )
+    .unwrap();
+    mynofy_server::initialize_security(&config).unwrap();
     let mut server = ServerChild(
         Command::new(binary)
             .args(["serve", "--config"])
@@ -244,7 +259,7 @@ fn cli_uses_unix_socket_and_sigterm_removes_socket() {
             .unwrap(),
     );
     let deadline = Instant::now() + Duration::from_secs(5);
-    while !f.socket.exists() {
+    while !support::unix_socket_ready(&f.socket) {
         assert!(
             server.0.try_wait().unwrap().is_none(),
             "Server exited before socket was bound"
@@ -350,7 +365,7 @@ sys.stdout.buffer.write(sys.stdin.buffer.read())
     .collect();
     let bound = transport::bind_unix(&f.socket).unwrap();
     let config = f.config.clone();
-    let server = tokio::spawn(async move { transport::run_unix(bound, config).await });
+    let server = tokio::spawn(async move { support::run_unix_fixture(bound, config).await });
     let key = f.dir.join("adapter.pk8");
     std::fs::write(&key, &f.key).unwrap();
     let rules = f.dir.join("rules.json");
@@ -448,4 +463,24 @@ sys.stdout.buffer.write(sys.stdin.buffer.read())
     adapter.wait().await.unwrap();
     server.abort();
     let _ = server.await;
+}
+
+#[tokio::test]
+async fn embedded_listener_requires_explicit_volatile_mode_or_an_initialized_store() {
+    let mut f = fixture();
+    assert!(transport::prepare(f.config.clone(), None).is_err());
+    assert!(transport::prepare_volatile(f.config.clone()).is_ok());
+    let path = f.dir.join("embedded-security");
+    f.config.security_storage = Some(mynofy_server::config::SecurityStorage {
+        minimum_sequence: None,
+        directory: path.clone(),
+        sync: true,
+        queue_capacity: 128,
+        compact_after_records: 4096,
+    });
+    assert!(transport::prepare(f.config.clone(), None).is_err());
+    assert!(!path.exists());
+    assert!(transport::prepare_volatile(f.config.clone()).is_err());
+    mynofy_server::initialize_security(&f.config).unwrap();
+    assert!(transport::prepare(f.config.clone(), None).is_ok());
 }

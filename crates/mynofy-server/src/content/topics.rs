@@ -2,7 +2,7 @@
 use super::*;
 use crate::config::TopicStorage;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Entry {
@@ -43,56 +43,10 @@ pub(super) fn load(
     now: u64,
 ) -> std::result::Result<(Checkpoint, Entries), BoxError> {
     if bytes.starts_with(b"MYNCP001") {
-        let legacy = Checkpoint::read(bytes, config, maximum)?;
-        if legacy
-            .image
-            .topics
-            .iter()
-            .any(|name| !config.topics.iter().any(|topic| topic.name == *name))
-        {
-            return Err(
-                "Legacy content requires explicit storage policies for every saved topic".into(),
-            );
-        }
-        let selected: Vec<_> = config
-            .topics
-            .iter()
-            .filter(|topic| topic.storage.persistent() && legacy.image.topics.contains(&topic.name))
-            .map(|topic| (topic.name.clone(), topic.storage.clone()))
-            .collect();
-        if selected.is_empty() {
-            return Err(
-                "Legacy content requires at least one explicit persistent topic policy".into(),
-            );
-        }
-        let mut entries = Entries::new();
-        save(
-            store,
-            &legacy,
-            &selected,
-            &mut entries,
-            config
-                .content_storage
-                .as_ref()
-                .ok_or("Missing content config")?
-                .encryption,
-            secret,
-            maximum,
-        )?;
-        let migrated = store
-            .read(maximum)?
-            .ok_or("Missing migrated content manifest")?;
-        let plain = encryption::decode(
-            migrated,
-            config
-                .content_storage
-                .as_ref()
-                .ok_or("Missing content config")?
-                .encryption,
-            secret,
-            maximum,
-        )?;
-        return load(store, &plain, config, secret, maximum, now);
+        return Err(
+            "Legacy content requires offline storage preview-legacy or storage migrate-legacy"
+                .into(),
+        );
     }
     if bytes.len() < 56
         || &bytes[..8] != b"MYNTOP01"
@@ -263,9 +217,16 @@ pub(super) fn save(
         names: Vec::new(),
         committed: false,
     };
+    let topic_slots: HashMap<_, _> = checkpoint
+        .image
+        .topics
+        .iter()
+        .enumerate()
+        .map(|(slot, name)| (name.as_str(), slot))
+        .collect();
     let mut next = entries.clone();
     // Configured RAM topics are absent from the captured persistent registry; remove old entries.
-    next.retain(|name, _| checkpoint.image.topics.contains(name));
+    next.retain(|name, _| topic_slots.contains_key(name.as_str()));
     // Budget the next committed generation, not a mixture of old and new
     // selected files. Old slots remain on disk until the atomic manifest commit.
     let replacing: std::collections::HashSet<_> =
@@ -285,26 +246,23 @@ pub(super) fn save(
     }
 
     for (name, storage) in selected {
-        let topic_slot = checkpoint
-            .image
-            .topics
-            .iter()
-            .position(|topic| topic == name)
+        let topic_slot = *topic_slots
+            .get(name.as_str())
             .ok_or("Unknown captured topic")?;
-        let mut used = vec![false; checkpoint.image.clients.len()];
-        if checkpoint.image.topics.len() == 1 {
+        let borrowed = checkpoint.image.topics.len() == 1 && {
+            let mut used = vec![false; checkpoint.image.clients.len()];
             for record in checkpoint.image.records.iter() {
                 used[record.producer_slot()] = true;
             }
-        }
-        let borrowed = checkpoint.image.topics.len() == 1 && used.iter().all(|used| *used);
+            used.iter().all(|used| *used)
+        };
         let owned = if borrowed {
             None
         } else {
-            Some(checkpoint.select_indexed(
-                &[u16::try_from(topic_slot)?],
+            Some(checkpoint.select_topic(
+                u16::try_from(topic_slot)?,
+                &record_slots[topic_slot],
                 maximum,
-                Some(&record_slots[topic_slot]),
             )?)
         };
         let topic = owned.as_ref().unwrap_or(checkpoint);
@@ -318,7 +276,7 @@ pub(super) fn save(
         let slot = entries.get(name).map_or(0, |entry| 1 - entry.slot);
         let file = filename(name, slot);
         staged.names.push(file.clone());
-        store.save_named(&file, &bytes)?;
+        store.stage_topic(&file, &bytes)?;
         next.insert(
             name.clone(),
             Entry {
@@ -346,6 +304,9 @@ pub(super) fn save(
         .is_none_or(|size| size > maximum)
     {
         return Err("Topic content exceeds aggregate size limit".into());
+    }
+    if !staged.names.is_empty() {
+        store.sync_staged_topics()?;
     }
     store.save(&bytes)?;
     staged.committed = true;
@@ -390,9 +351,11 @@ mod functional {
         let mut config: Config =
             serde_json::from_str(include_str!("../../../../config/scenarios/local.json")).unwrap();
         config.content_storage = Some(ContentStorage {
+            store_id: None,
             directory: directory.0.clone(),
             encryption: ContentEncryption::None,
             max_snapshot_bytes: 256 * 1024,
+            autosave_retry: Default::default(),
         });
         config.topics[0].storage = TopicStorage::Manual { encrypted: false };
         let now = 1_800_000_000_000;
@@ -445,6 +408,24 @@ mod functional {
                 },
             }],
         };
+        let slots: Vec<_> = checkpoint
+            .image
+            .records
+            .iter_slots()
+            .map(|(slot, _)| slot)
+            .collect();
+        let optimized = checkpoint.select_topic(0, &slots, 256 * 1024).unwrap();
+        let reference = checkpoint
+            .select_indexed(&[0], 256 * 1024, Some(&slots))
+            .unwrap();
+        assert_eq!(
+            optimized.write(256 * 1024).unwrap().as_slice(),
+            reference.write(256 * 1024).unwrap().as_slice(),
+        );
+        let empty = checkpoint.select_topic(0, &[], 256 * 1024).unwrap();
+        assert!(empty.image.clients.is_empty());
+        assert!(empty.produced.is_empty());
+
         let mut entries = Entries::new();
         save(
             &store,

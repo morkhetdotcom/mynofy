@@ -29,6 +29,7 @@ class IntegrationTest {
         var c = Client.connect(f.config)) {
       assertEquals(f.key.clientId(), c.info().clientId());
       assertEquals("local", c.info().owner());
+      assertEquals(16, java.util.Base64.getDecoder().decode(c.info().bootId()).length);
       assertTrue(
           c.getCatalog("mynofy", 1).getDefinition().toStringUtf8().contains("\"catalog_id\""));
       assertTrue(c.getPermissions(Fixture.TOPIC).getActionsList().contains("publish"));

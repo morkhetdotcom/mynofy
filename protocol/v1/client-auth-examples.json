@@ -39,7 +39,8 @@
         "request_id": "proof-1",
         "client_id": "client:ed25519:/8wY7RJc5IXV6zlzbT5b464j7V3n1Ju5GN4eqVY2NOs=",
         "service_id": "office-hub",
-        "restart_counter": 1
+        "restart_counter": 1,
+        "boot_id": "AAAAAAAAAAAAAAAAAAAAAA=="
       }
     }
   ]

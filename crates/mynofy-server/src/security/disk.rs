@@ -14,6 +14,7 @@ const MAX_RECORD: usize = 16 * 1024;
 pub(super) const MAX_SNAPSHOT: usize = 32 * 1024 * 1024;
 const COMPACT_BYTES: u64 = 8 * 1024 * 1024;
 const MAGIC: &[u8; 4] = b"MNS1";
+const INIT_SUFFIX: &str = ".mynofy-security-init";
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Snapshot<T> {
@@ -28,6 +29,13 @@ struct Record<T, O = String> {
     version: u8,
     owner: O,
     change: T,
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum TailPolicy {
+    Preview,
+    Repair,
+    Defer,
 }
 
 pub(super) struct Store {
@@ -52,7 +60,15 @@ fn invalid(message: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, message)
 }
 fn file(directory: &File, name: &str, create: bool) -> io::Result<File> {
-    let flags = OFlags::RDWR | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    file_with_mode(directory, name, create, false)
+}
+fn file_with_mode(directory: &File, name: &str, create: bool, read_only: bool) -> io::Result<File> {
+    let access = if read_only {
+        OFlags::RDONLY
+    } else {
+        OFlags::RDWR
+    };
+    let flags = access | OFlags::NOFOLLOW | OFlags::CLOEXEC;
     let file: File = openat(
         directory,
         name,
@@ -171,7 +187,120 @@ impl Store {
         owner: &str,
         initial: State,
     ) -> std::result::Result<Self, BoxError> {
+        Self::open_with_policy(path, owner, initial, false)
+    }
+
+    pub(super) fn initialize(
+        path: &Path,
+        owner: &str,
+        initial: State,
+    ) -> std::result::Result<(), BoxError> {
+        let name = path.file_name().ok_or("Invalid security directory")?;
+        if name.to_string_lossy().ends_with(INIT_SUFFIX) {
+            return Err("Reserved suffix in security directory name".into());
+        }
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        let directory: File = openat(
+            CWD,
+            parent,
+            OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+            Mode::empty(),
+        )?
+        .into();
+        flock(&directory, FlockOperation::NonBlockingLockExclusive)?;
+
+        let uid = rustix::process::geteuid().as_raw();
+        let private_directory = |metadata: &fs::Metadata| {
+            metadata.is_dir() && metadata.uid() == uid && metadata.mode() & 0o077 == 0
+        };
+        match fs::symlink_metadata(path) {
+            Ok(metadata)
+                if private_directory(&metadata)
+                    && fs::read_dir(path)?.next().transpose()?.is_none() => {}
+            Ok(_) => {
+                return Err(
+                    "Security initialization requires an absent or empty private destination"
+                        .into(),
+                );
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+
+        let mut stage_name = std::ffi::OsString::from(".");
+        stage_name.push(name);
+        stage_name.push(INIT_SUFFIX);
+        let stage = parent.join(&stage_name);
+        match fs::symlink_metadata(&stage) {
+            Ok(metadata) if private_directory(&metadata) => {
+                for entry in fs::read_dir(&stage)? {
+                    let entry = entry?;
+                    let metadata = fs::symlink_metadata(entry.path())?;
+                    if !matches!(
+                        entry.file_name().to_str(),
+                        Some("lock" | "snapshot" | "snapshot.tmp" | "journal")
+                    ) || !metadata.is_file()
+                        || metadata.nlink() != 1
+                        || metadata.uid() != uid
+                        || metadata.mode() & 0o077 != 0
+                    {
+                        return Err("Unexpected security initialization staging contents".into());
+                    }
+                }
+                for entry in fs::read_dir(&stage)? {
+                    fs::remove_file(entry?.path())?;
+                }
+                fs::remove_dir(&stage)?;
+                directory.sync_all()?;
+            }
+            Ok(_) => return Err("Invalid security initialization staging directory".into()),
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+        fs::DirBuilder::new().mode(0o700).create(&stage).map_err(|error| {
+            format!("Cannot stage security store in {}: {error}. Its parent must be writable during security-init.", parent.display())
+        })?;
+        directory.sync_all()?;
+        let mut store = Self::open(&stage, owner, initial)?;
+        store.checkpoint()?;
+        rustix::fs::renameat(&directory, &stage_name, &directory, name)?;
+        directory.sync_all()?;
+        Ok(())
+    }
+
+    pub(super) fn open_with_policy(
+        path: &Path,
+        owner: &str,
+        initial: State,
+        require_initialized: bool,
+    ) -> std::result::Result<Self, BoxError> {
+        Self::open_mode(
+            path,
+            owner,
+            initial,
+            require_initialized,
+            TailPolicy::Repair,
+            None,
+        )
+    }
+
+    pub(super) fn open_mode(
+        path: &Path,
+        owner: &str,
+        initial: State,
+        require_initialized: bool,
+        policy: TailPolicy,
+        floor: Option<u64>,
+    ) -> std::result::Result<Self, BoxError> {
+        let preview = matches!(policy, TailPolicy::Preview);
+        let require_initialized = require_initialized || floor.is_some_and(|seq| seq > 0);
         if !path.exists() {
+            if require_initialized {
+                return Err("Security store is missing; restore it or explicitly initialize a new owner store with security-init".into());
+            }
             fs::DirBuilder::new().mode(0o700).create(path)?;
             let parent = path
                 .parent()
@@ -196,9 +325,14 @@ impl Store {
             Mode::empty(),
         )?
         .into();
-        let mut lock = file(&directory, "lock", true)?;
+        let mut lock = file_with_mode(&directory, "lock", !require_initialized, preview)?;
         flock(&lock, FlockOperation::NonBlockingLockExclusive)?;
         let initialized = lock.metadata()?.len() != 0;
+        if require_initialized && !initialized {
+            return Err(
+                "Security store is not initialized; use security-init for a new store".into(),
+            );
+        }
         if initialized {
             let mut marker = [0; 4];
             lock.read_exact(&mut marker)?;
@@ -206,8 +340,8 @@ impl Store {
                 return Err("Invalid security initialization marker".into());
             }
         }
-        let mut snapshot = file(&directory, "snapshot", !initialized)?;
-        let journal = file(&directory, "journal", !initialized)?;
+        let mut snapshot = file_with_mode(&directory, "snapshot", !initialized, preview)?;
+        let journal = file_with_mode(&directory, "journal", !initialized, preview)?;
         if journal.metadata()?.len() > 16 * 1024 * 1024 {
             return Err("Security journal exceeds recovery size limit".into());
         }
@@ -244,20 +378,29 @@ impl Store {
             snapshot_sequence: sequence,
             length: 0,
         };
-        store.replay()?;
+        let torn = store.replay()?;
+        super::check_recovery_floor(floor, store.sequence)?;
+        if torn {
+            if preview {
+                return Err(
+                    "Incomplete final security journal frame; explicit recovery is required".into(),
+                );
+            }
+            if matches!(policy, TailPolicy::Repair) {
+                store.journal.set_len(store.length)?;
+                store.journal.sync_all()?;
+            }
+            // Startup checkpoints this validated prefix after Content validation.
+        }
         Ok(store)
     }
-    fn replay(&mut self) -> std::result::Result<(), BoxError> {
+    fn replay(&mut self) -> std::result::Result<bool, BoxError> {
         let mut offset = 0;
         let mut previous = None;
-        loop {
+        let torn = loop {
             match read_frame(&mut self.journal, MAX_RECORD)? {
-                Frame::End => break,
-                Frame::Torn => {
-                    self.journal.set_len(offset)?;
-                    self.journal.sync_all()?;
-                    break;
-                }
+                Frame::End => break false,
+                Frame::Torn => break true,
                 Frame::Complete(sequence, payload) => {
                     let record: Record<Change> = serde_json::from_slice(&payload)?;
                     if record.version != 1
@@ -278,9 +421,9 @@ impl Store {
                     offset = self.journal.stream_position()?;
                 }
             }
-        }
+        };
         self.length = offset;
-        Ok(())
+        Ok(torn)
     }
     pub(super) fn checkpoint(&mut self) -> io::Result<()> {
         let snapshot = Snapshot {
@@ -363,6 +506,18 @@ impl Store {
                         }
                     }
                 }
+                #[cfg(test)]
+                {
+                    let gate = shared.write_gate.lock().unwrap().clone();
+                    if let Some(gate) = gate {
+                        let (released, ready) = gate.as_ref();
+                        drop(ready.wait_timeout_while(
+                            released.lock().unwrap(),
+                            Duration::from_secs(3),
+                            |ready| !*ready,
+                        ));
+                    }
+                }
                 encoded.clear();
                 for entry in &pending {
                     let record = Record {
@@ -435,6 +590,59 @@ mod tests {
             let _ = fs::remove_dir_all(&self.0);
         }
     }
+    #[test]
+    fn unpublished_complete_snapshot_is_discarded_even_when_its_state_is_valid() {
+        let dir = Directory::new();
+        let target = dir.0.join("security");
+        let stage = dir.0.join(format!(".security{INIT_SUFFIX}"));
+        let mut stale = State::default();
+        stale.apply(&change(true));
+        let mut store = Store::open(&stage, "owner", stale).unwrap();
+        store.checkpoint().unwrap();
+        drop(store);
+        let check = Store::open_with_policy(&stage, "owner", State::default(), true).unwrap();
+        assert!(check.state.clients.contains_key("test-client"));
+        drop(check);
+
+        Store::initialize(&target, "owner", State::default()).unwrap();
+        let store = Store::open_with_policy(&target, "owner", State::default(), true).unwrap();
+        assert!(!store.state.clients.contains_key("test-client"));
+        assert!(!stage.exists());
+    }
+
+    #[test]
+    fn initialization_rebuilds_recognized_staging_and_preserves_live_store() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = Directory::new();
+        let target = dir.0.join("security");
+        let stage = dir.0.join(format!(".security{INIT_SUFFIX}"));
+        fs::DirBuilder::new().mode(0o700).create(&stage).unwrap();
+        fs::write(stage.join("snapshot.tmp"), b"stale pending snapshot").unwrap();
+        fs::set_permissions(
+            stage.join("snapshot.tmp"),
+            fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        Store::initialize(&target, "owner", State::default()).unwrap();
+        assert!(!stage.exists());
+        assert!(Store::open_with_policy(&target, "owner", State::default(), true).is_ok());
+        assert!(Store::initialize(&target, "owner", State::default()).is_err());
+        fs::DirBuilder::new().mode(0o700).create(&stage).unwrap();
+        std::os::unix::fs::symlink(&target, stage.join("snapshot")).unwrap();
+        assert!(Store::initialize(&target, "owner", State::default()).is_err());
+        assert!(Store::open_with_policy(&target, "owner", State::default(), true).is_ok());
+        let another = dir.0.join("another");
+        let bad = dir.0.join(format!(".another{INIT_SUFFIX}"));
+        fs::rename(&stage, &bad).unwrap();
+        assert!(Store::initialize(&another, "owner", State::default()).is_err());
+        assert!(!another.exists());
+        assert!(
+            fs::symlink_metadata(bad.join("snapshot"))
+                .unwrap()
+                .is_symlink()
+        );
+    }
+
     fn change(disabled: bool) -> Change {
         Change::Client {
             value: Client {
@@ -470,6 +678,32 @@ mod tests {
         file.write_all(bytes).unwrap();
         file.sync_all().unwrap();
     }
+    #[test]
+    fn recovery_floor_rejection_preserves_torn_journal() {
+        let directory = Directory::new();
+        initialized(&directory);
+        let mut bytes = frame(1, false);
+        bytes.extend_from_slice(&frame(2, true)[..1]);
+        write_journal(&directory, &bytes);
+        let reopen = |floor| {
+            Store::open_mode(
+                &directory.0,
+                "owner",
+                State::default(),
+                true,
+                TailPolicy::Repair,
+                Some(floor),
+            )
+        };
+        assert!(reopen(2).is_err());
+        assert_eq!(fs::read(directory.0.join("journal")).unwrap(), bytes);
+        assert_eq!(reopen(1).unwrap().sequence, 1);
+        assert_eq!(
+            fs::read(directory.0.join("journal")).unwrap(),
+            frame(1, false)
+        );
+    }
+
     #[test]
     fn replays_valid_prefix_and_truncates_only_an_incomplete_final_frame() {
         let first = frame(1, false);
@@ -593,6 +827,7 @@ mod tests {
             pending: AtomicUsize::new(1),
             stopping: AtomicBool::new(false),
             alive: AtomicBool::new(true),
+            write_gate: Mutex::new(None),
         });
         let entries = [Entry {
             sequence: 1,

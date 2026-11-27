@@ -7,9 +7,9 @@ pub async fn run(args: Vec<String>) -> Result<(), BoxError> {
         return Ok(());
     }
     let mut args = args.into_iter();
-    let operation = args
-        .next()
-        .ok_or("Expected storage check|inspect|cleanup|backup|restore|rekey|topic-ram")?;
+    let operation = args.next().ok_or(
+        "Expected storage check|inspect|cleanup|backup|restore|rekey|topic-ram|topic-encryption|migrate-legacy|preview-legacy",
+    )?;
     let mut flags = BTreeMap::new();
     while let Some(flag) = args.next() {
         if !flag.starts_with("--") || flags.contains_key(&flag) {
@@ -18,13 +18,15 @@ pub async fn run(args: Vec<String>) -> Result<(), BoxError> {
         flags.insert(flag, args.next().ok_or("Missing storage flag value")?);
     }
     let allowed: &[&str] = match operation.as_str() {
-        "check" | "inspect" | "cleanup" | "rekey" => &["--config"],
+        "check" | "inspect" | "cleanup" | "rekey" | "migrate-legacy" | "preview-legacy" => {
+            &["--config"]
+        }
         "backup" => &["--config", "--out"],
         "restore" => &["--config", "--from", "--backup-secret"],
-        "topic-ram" => &["--config", "--topic"],
+        "topic-ram" | "topic-encryption" => &["--config", "--topic"],
         _ => {
             return Err(
-                "Expected storage check|inspect|cleanup|backup|restore|rekey|topic-ram".into(),
+                "Expected storage check|inspect|cleanup|backup|restore|rekey|topic-ram|topic-encryption|migrate-legacy|preview-legacy".into(),
             );
         }
     };
@@ -51,13 +53,20 @@ pub async fn run(args: Vec<String>) -> Result<(), BoxError> {
                 return Err("--backup-secret must be stdin".into());
             }
         }
-        "topic-ram" => {
+        "topic-ram" | "topic-encryption" => {
             required("--topic")?;
         }
         _ => (),
     }
-    let config = Config::load(Path::new(required("--config")?))?;
+    let config = Config::load_explicit_security(Path::new(required("--config")?))?;
     let secret = content_secret::read(&config).await?;
+    if matches!(operation.as_str(), "migrate-legacy" | "preview-legacy") {
+        println!(
+            "{}",
+            OfflineStorage::migrate_legacy(config, secret, operation == "preview-legacy")?
+        );
+        return Ok(());
+    }
     let mut storage = if operation == "restore" {
         OfflineStorage::open_for_restore(config.clone(), secret)?
     } else {
@@ -79,6 +88,7 @@ pub async fn run(args: Vec<String>) -> Result<(), BoxError> {
             storage.restore_with_secret(Path::new(required("--from")?), backup_secret)?;
         }
         "topic-ram" => storage.topic_to_ram(required("--topic")?)?,
+        "topic-encryption" => storage.migrate_topic_encryption(required("--topic")?)?,
         "rekey" => {
             let secret = content_secret::read_label(&config, "New content")
                 .await?
@@ -122,6 +132,9 @@ mynofy storage backup --config FILE --out NEW_DIRECTORY
 mynofy storage restore --config FILE --from BACKUP_DIRECTORY [--backup-secret stdin]
 mynofy storage rekey --config FILE
 mynofy storage topic-ram --config FILE --topic TOPIC
+mynofy storage topic-encryption --config FILE --topic TOPIC
+mynofy storage preview-legacy --config FILE
+mynofy storage migrate-legacy --config FILE
 
 Offline only: stop the service first. Content and Security locks remain held.
 Secrets are read from stdin. Rekey reads current, new, then confirmation.

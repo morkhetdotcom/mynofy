@@ -9,6 +9,7 @@ Globale Einstellungen zur bestehenden Service-CFG hinzufügen:
 ```yaml
 content_storage:
   directory: content
+  store_id: "2b3167d768a1e5fd9cd12391c4df9707"
   encryption: password_stdin
   max_snapshot_bytes: 134217728
 ```
@@ -46,7 +47,13 @@ Die Topic-Beispiele zeigen nur die neuen Felder; `owner_id`, TTL-`policy` und `a
 
 `seconds` erlaubt 1–2.592.000 Sekunden. `encrypted` ist bei gespeicherten Topics standardmäßig false; ein verschlüsseltes Topic erfordert global `password_stdin` oder `key_stdin`. Ohne `content_storage` sind ausschließlich RAM-Topics zulässig. Ein Verzeichnis allein macht kein Topic persistent. RAM→Storage kann über die Admin-API aktiviert werden; dauerhaft wird die Änderung erst durch einen erfolgreichen Save. Storage→RAM erfolgt ausschließlich über das Offline-Werkzeug. [Bedienung](restart-and-storage.md).
 
-`directory` ist absolut oder relativ zur CFG. Das Elternverzeichnis muss existieren und dem endgültigen Dienstbenutzer zugänglich sein. Der Dienst erstellt sein Verzeichnis mit 0700 und Dateien mit 0600; sie müssen der Dienst-UID gehören. Symlinks, zusätzliche Hardlinks und fremde Dateieigentümer werden abgewiesen. Ein exklusives Lock verhindert zwei Instanzen im selben Verzeichnis. Content und Security benötigen getrennte Verzeichnisse.
+`directory` ist absolut oder relativ zur CFG. Das Elternverzeichnis muss existieren und dem endgültigen Dienstbenutzer zugänglich sein. `mynofy content-init --config config.yaml` richtet das Volume mit Modus 0700 und Dateien mit Modus 0600 ein. Die Dateien und das Verzeichnis müssen der Dienst-UID gehören. Symlinks, zusätzliche Hardlinks und fremde Dateieigentümer werden abgewiesen. Ein exklusives Lock verhindert zwei Instanzen im selben Verzeichnis. Content und Security benötigen getrennte Verzeichnisse.
+
+Mit `openssl rand -hex 16` eine eigene `store_id` erzeugen. Einmalig bei gestopptem Dienst
+`mynofy content-init --config config.yaml` ausführen. Bei einer Altinstallation dabei auf das
+bereits vorhandene, geprüfte Volume zeigen. Beim Start prüft mynofy die konfigurierte Identität.
+Ein fehlendes oder falsches Volume führt zum Abbruch. Bei einem Restore auf ein neues Volume
+die bisherige Store-ID verwenden und das Ziel vor dem Restore explizit initialisieren.
 
 ## Ein gemeinsames Start-Secret
 
@@ -66,7 +73,7 @@ Am Terminal ist die Eingabe verdeckt; normale Rückkehr und Eingabefehler stelle
 
 Secrets stehen weder in CFG/argv/env noch im Admin-Export oder Status. `check-config`, Konvertierung und Admin-Kommandos fragen sie nicht ab. Das Secret bleibt für Saves im laufenden Prozess in einem `Zeroizing`-Puffer. Inhalte liegen während des Betriebs entschlüsselt im RAM; diese Option schützt gespeicherte Dateien. Das Security-Journal bleibt separat.
 
-Ein Topic-Abbild trägt seinen tatsächlich gespeicherten Verschlüsselungsmodus im Manifest. Eine Änderung von `encrypted` wirkt beim nächsten Save dieses Topics; das bisherige Abbild wird beim Start weiterhin mit seinem gespeicherten Modus gelesen. Ein Wechsel des Secrets erfolgt ausdrücklich offline mit `storage rekey`; der globale Secret-Modus bleibt dabei gleich. Kein impliziter Rekey oder Klartext-Fallback.
+Ein Topic-Abbild trägt seinen tatsächlich gespeicherten Verschlüsselungsmodus im Manifest. Bei abweichender Verschlüsselung eines explizit persistent konfigurierten Topics verweigert der Dienst den Start. Stoppe den Dienst, setze den gewünschten Wert in der Konfiguration und führe `mynofy storage topic-encryption --config FILE --topic TOPIC` aus. Der Befehl liest das vorhandene Abbild nach seinem gespeicherten Modus und ersetzt die Topic-Datei atomar über das Manifest. Restore lehnt Konflikte mit der Zielkonfiguration vor dem Schreiben ab. Ein Wechsel des Secrets erfolgt ausdrücklich offline mit `storage rekey`; der globale Secret-Modus bleibt dabei gleich. Kein impliziter Rekey oder Klartext-Fallback.
 
 ## Einzelne Topics oder Gruppen speichern
 
@@ -102,9 +109,9 @@ Unabhängig gespeicherte Topics können unterschiedliche Zeitstände haben. Für
 | `save_in_progress` | Save eingereiht oder in Bearbeitung. |
 | `requires_restart` | Unbestätigter Manifest-Commit; weitere Saves bis zum Neustart abgewiesen. |
 | `last_save_time_ms` / `last_error` | Letzter Abschlusszeitpunkt / aktueller Fehler oder null. |
-| `topics` | Pro persistentem Topic Strategie, `revision`, `saved_revision`, `dirty`, `loaded`. |
+| `topics` | Pro persistentem Topic Strategie, `revision`, `saved_revision`, `dirty`, `loaded` und einen gegebenenfalls offenen `save_failure`. |
 
-Für einen Save der Revision N prüfen: `save_in_progress` false, `last_error` null und `saved_revision >= N`. Unter `topics` bleibt erkennbar, ob andere, nicht ausgewählte Topics weiterhin dirty sind. Ein einzelner Topic-Save bestätigt nicht den vollständigen aktuellen Owner-Inhalt. Neue Änderungen während eines Saves bleiben dirty. RAM-Änderungen lösen keine Save-Arbeit aus.
+Für einen Save der Revision N unter `topics` jede ausgewählte Position prüfen. Ihre `saved_revision` muss mindestens N sein. `save_failure` enthält Revision und Fehler des letzten fehlgeschlagenen Save-Auftrags für dieses Topic. Ein erfolgreicher Save räumt die Fehler seiner ausgewählten Topics aus. Die globale `saved_revision` und `last_error` beschreiben den zuletzt erfolgreichen beziehungsweise letzten Save und reichen für die Bestätigung eines früheren selektiven Auftrags nicht aus. Neue Änderungen während eines Saves bleiben dirty. RAM-Änderungen lösen keine Save-Arbeit aus.
 
 Reguläres Beenden wartet auf bereits angenommene Saves, startet aber keinen impliziten zusätzlichen Save. SIGKILL kann laufende und nach dem letzten Save erfolgte Änderungen verlieren. Betriebssystem-I/O kann das Beenden verzögern.
 
@@ -138,13 +145,13 @@ Topic-Cursor behalten gespeicherte Kopfstände. Ein als ungültig erkannter Poll
 
 ## Vergabestand und Backups
 
-The retired `references.bin` delivery allocator is no longer created, advanced or required. Existing MYNCP001 confirmation sections are validated and discarded during startup; new snapshots contain none. See [upgrade notes](message-client-confirmation.md).
+The retired `references.bin` delivery allocator is no longer created, advanced or required. Existing MYNCP001 confirmation sections are validated and discarded during offline migration; new snapshots contain none. See [upgrade notes](message-client-confirmation.md).
 
 Bei Backups das Manifest und seine referenzierten Topic-Dateien zusammen sichern, während kein Save läuft. Message-ID-RID-Pools setzen am gespeicherten Reservierungsstand an und prüfen aktive Kollisionen; sie sind keine über beliebige Backups global eindeutigen Ereigniskennungen.
 
 ## Wechsel vom bisherigen Owner-Checkpoint
 
-Das bisherige globale `content_storage.save_interval_seconds` entfällt. Dieses Feld aus der CFG entfernen und gewünschte Strategien explizit an den Topics setzen; ohne Angabe bleibt das jeweilige Topic RAM. Ein alter einzelner `MYNCP001`-Checkpoint wird beim Start nach vollständiger Prüfung in Topic-Dateien und Manifest überführt, mit demselben globalen Secret-Modus. Alle gespeicherten Topics brauchen dafür eine ausdrückliche CFG-Definition und mindestens eines eine persistente Strategie. Andernfalls bricht der Start ab, ohne den alten Checkpoint durch leeren Inhalt zu ersetzen. Als RAM konfigurierte Topics werden nicht übernommen. Der neue Manifest-Commit erhält den alten gespeicherten Zustand bis zum erfolgreichen Wechsel.
+Das bisherige globale `content_storage.save_interval_seconds` entfällt. Dieses Feld aus der CFG entfernen und gewünschte Strategien explizit an den Topics setzen; ohne Angabe bleibt das jeweilige Topic RAM. Ein alter einzelner `MYNCP001`-Checkpoint wird offline mit `storage preview-legacy` geprüft und mit `storage migrate-legacy` in Topic-Dateien und Manifest überführt, mit demselben globalen Secret-Modus. Alle gespeicherten Topics brauchen dafür eine ausdrückliche CFG-Definition und mindestens eines eine persistente Strategie. Andernfalls bricht der Start ab, ohne den alten Checkpoint durch leeren Inhalt zu ersetzen. Als RAM konfigurierte Topics werden nicht übernommen. Der neue Manifest-Commit erhält den alten gespeicherten Zustand bis zum erfolgreichen Wechsel.
 
 ## Verifikation
 
@@ -233,3 +240,79 @@ Projection limits bound the image itself; the bounded encoder and aggregate
 writer count actual serialized controls and files. The separate working-memory
 admission may conservatively include the entire live owner. Check save completion
 and errors through status; an accepted queue request is not a commit receipt.
+
+After the manifest commits, failed deletion of old topic slots appears as
+`cleanup_error` in content status. The writer retries cleanup after one
+second using the latest committed manifest as its keep set. Save revision
+and save errors continue to report the commit itself.
+
+Selective saves reserve working memory from the selected records and shared
+metadata. Larger selections can pin the record chunks and blob pages they
+reference, then project an independent compact image on the writer. The
+reservation includes pinned blocks and potential detached live copies.
+Small selections and selections whose pins would exceed the budget use a
+compact capture directly. A broad capture that exceeds the working budget can
+fall back to selective capture. Neither path includes unrelated RAM messages
+in the persisted generation.
+
+
+Autosave retry is configured under `content_storage.autosave_retry`.
+Its defaults are `enabled: true`, `initial_delay_seconds: 1` and
+`max_delay_seconds: 60`. A dirty scheduled topic whose save failed is
+retried with doubling delay up to the configured maximum. The regular
+interval resumes after success. An uncertain manifest pauses saves and
+reports `requires_restart`.
+
+Content status reports `last_writer_duration_us` separately from capture.
+It includes the writer’s security fence, projection and file operations.
+
+The writer synchronizes each staged topic file before renaming it into an
+inactive slot. After all selected topic slots are staged, it synchronizes the
+directory once before replacing the manifest. The manifest replacement has its
+own durability barrier. A failure at the staging barrier leaves the previous
+manifest and its referenced slots intact.
+
+
+After a capacity failure, automatic saves retry the affected selections
+separately. Topic status exposes `autosave_isolated` during these retries.
+Explicit multi-topic saves keep their atomic commit behavior.
+
+Legacy `MYNCP001` data requires offline conversion. Run
+`mynofy storage preview-legacy --config FILE` to list the saved topics and
+record counts. The preview holds offline locks and opens both stores read-only.
+If it encounters an incomplete final security journal record, it reports it and
+leaves the source files intact. The explicit migration command uses normal
+security recovery, which may remove an incomplete final record.
+Configure every saved topic as locally persistent, then run
+`mynofy storage migrate-legacy --config FILE`. The migration validates
+security bindings and active limits before committing the new manifest.
+
+
+Ein Backup erhält die Store-ID erst, nachdem das vollständige Manifest
+dauerhaft geschrieben ist. Der unvollständige Backup-Pfad bleibt bis dahin
+für den regulären Dienststart gesperrt. Bereits eingerichtete, bislang leere
+Volumes aus älteren Builds brauchen einmalig `content-init` auf dem geprüften
+Zielvolume. Vorhandene vollständige Generationen bleiben lesbar.
+Nach einer Offline-Operation weist
+`commit=durable cleanup=pending` auf eine bereits wirksame Änderung mit
+verbliebenen Dateien hin. `storage cleanup` räumt diese Dateien auf. Bei
+Rekey gilt bereits das neue Secret.
+
+Beim regulären Dienststopp wird der Content-Writer geleert. Ist der zuletzt
+angenommene Save fehlgeschlagen oder die Dauerhaftigkeit des Manifests
+unklar, meldet der Dienst `content_drain_failed`. Ohne eingereihten Save
+gilt die konfigurierte Speicherstrategie bis zum letzten bestätigten Stand.
+
+
+Restore öffnet die Backup-Quelle mit einem schreibfreien Dateizugriff und
+einem exklusiven Lock. Die Quelle braucht den Marker und das Manifest einer
+abgeschlossenen Generation. Das Ziel bleibt schreibbar.
+
+Beim gemeinsamen Start werden Content und Security unter ihren Store-Locks
+geprüft. Erst nach erfolgreicher Inhaltswiederherstellung im RAM wird der
+Security-Neustartzähler bestätigt, anschließend räumt Content
+unreferenzierte Dateien auf. Ein abgeschnittenes Journalende wird beim Dienststart erst bei dieser
+Kompaktierung entfernt. Content bestätigt davor
+das vorhandene Dateisystem und gegebenenfalls den sichtbaren Manifest-Marker
+für die Crash-Recovery. Für die Diagnose unveränderlicher Abbilder
+Originale schreibgeschützt aufbewahren und eine Arbeitskopie verwenden.

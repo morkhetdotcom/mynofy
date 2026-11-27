@@ -145,7 +145,11 @@ impl Backend {
         let Some(w) = &self.welcome else {
             return json!({"response":response});
         };
-        json!({"owner_id":w.service_id,"client_id":w.client_id,"restart_counter":w.restart_counter,"response":response})
+        let mut envelope = json!({"owner_id":w.service_id,"client_id":w.client_id,"restart_counter":w.restart_counter,"response":response});
+        if let Some(boot_id) = &w.boot_id {
+            envelope["boot_id"] = json!(boot_id);
+        }
+        envelope
     }
     pub(super) async fn call(&mut self, mut request: Option<Value>) -> Value {
         if self.connect().await.is_err() {

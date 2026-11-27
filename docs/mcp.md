@@ -52,7 +52,7 @@ Adapter und bricht einen noch laufenden Aufruf ab.
 
 | Tool | Aufgabe |
 | --- | --- |
-| `mynofy_connection_info` | Bei Bedarf anmelden; Owner, stabile Client-ID und Neustartzähler melden. Bereits geladene Sitzungsdaten sind kein eigener Liveness-Nachweis. |
+| `mynofy_connection_info` | Bei Bedarf anmelden; Owner, stabile Client-ID, Neustartzähler und verfügbare Boot-ID melden. Bereits geladene Sitzungsdaten sind kein eigener Liveness-Nachweis. |
 | `mynofy_publish` | Eine Nachricht mit vorhandener Payload-Syntax und optionalem `expires.time` veröffentlichen. |
 | `mynofy_poll` | Eine Seite sofort lesen; `topic`, optional `after` und `limit` 1–100. |
 | `mynofy_list_messages` | Eigene aktive ursprüngliche Nachrichten und verfügbare Statusdaten auflisten. |
@@ -68,7 +68,7 @@ keine Schreibrechte auf das geschützte Menschentopic.
 
 Erfolgreiche Broker-Antworten erscheinen als `structuredContent` und zusätzlich
 als JSON-Text in `content`. Der Datenumschlag enthält `owner_id`, `client_id`,
-`restart_counter` und das ursprüngliche mynofy-Objekt unter `response`.
+`restart_counter`, die optionale `boot_id` und das ursprüngliche mynofy-Objekt unter `response`.
 Brokerfehler werden als Tool-Ergebnis mit `isError: true` geliefert; fehlerhafte
 MCP-/Tool-Argumente als JSON-RPC-Fehler. Nachrichteninhalte sind Anwendungsdaten,
 keine zusätzlichen Tool-Berechtigungen.
@@ -133,7 +133,12 @@ fachliche Wartefrist für den Agenten-Workflow.
 
 Der Adapter erzeugt keine Poll-Schleife, Interpretationserneuerung, Ticketvergabe,
 automatischen ACKs, gespeicherten Business-Fortschritt oder Workflow-Automatik.
-Cursor und Neustartzähler liefert er an den Aufrufer; `after` ist explizit.
+Der Adapter liefert Cursor, Neustartzähler und die verfügbare Boot-ID an
+den Aufrufer. `after` ist explizit. Speichere den Cursor zusammen mit der
+Boot-ID. Vergleiche sie beim Wiederverbinden und bei Poll-Antworten. Bei
+einem Wechsel beginne ohne `after`. Bei älteren Ownern bleibt der Zähler
+die verfügbare Orientierung. Nach einem bekannten Restore eines solchen
+Owners beginne die Historie erneut.
 Poll reads active content without creating message/client state and is annotated read-only. Die fachlichen Regeln des [Skill-Entwurfs](../skills/mynofy/SKILL.md)
 bleiben davon getrennt. Die [Operator-Regeln](../skills/mynofy-operator/SKILL.md) beschreiben die menschliche Koordination.
 

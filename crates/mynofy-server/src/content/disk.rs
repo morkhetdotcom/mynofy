@@ -10,6 +10,7 @@ pub(super) struct Store {
     directory: File,
     lock: File,
     uncertain: AtomicBool,
+    cleanup_error: Mutex<Option<String>>,
 }
 // Release the owner's flock immediately, even if a concurrent process spawn briefly
 // inherited a duplicate before exec closes its CLOEXEC descriptors.
@@ -38,7 +39,23 @@ fn open(directory: &File, name: &str, flags: OFlags) -> std::result::Result<File
 }
 impl Store {
     pub fn open(path: &Path) -> std::result::Result<Self, BoxError> {
-        if !path.exists() {
+        Self::open_mode(path, false)
+    }
+
+    pub(super) fn open_mode(path: &Path, preview: bool) -> std::result::Result<Self, BoxError> {
+        Self::open_inner(path, preview, None)
+    }
+
+    pub(super) fn open_bound(path: &Path, id: &str) -> std::result::Result<Self, BoxError> {
+        Self::open_inner(path, false, Some(id))
+    }
+
+    fn open_inner(
+        path: &Path,
+        preview: bool,
+        expected_id: Option<&str>,
+    ) -> std::result::Result<Self, BoxError> {
+        if !preview && expected_id.is_none() && !path.exists() {
             fs::DirBuilder::new().mode(0o700).create(path)?;
             File::open(
                 path.parent()
@@ -64,13 +81,27 @@ impl Store {
             Mode::empty(),
         )?
         .into();
-        let lock = open(&directory, "lock", OFlags::CREATE | OFlags::RDWR)?;
+        let lock_flags = if preview {
+            OFlags::RDONLY
+        } else if expected_id.is_some() {
+            OFlags::RDWR
+        } else {
+            OFlags::CREATE | OFlags::RDWR
+        };
+        let lock = open(&directory, "lock", lock_flags)?;
         flock(&lock, FlockOperation::NonBlockingLockExclusive)?;
         let store = Self {
             directory,
             lock,
             uncertain: AtomicBool::new(false),
+            cleanup_error: Mutex::new(None),
         };
+        if let Some(id) = expected_id {
+            store.verify_id(id)?;
+        }
+        if preview {
+            return Ok(store);
+        }
         // A previous process may have stopped after rename but before directory sync.
         // Confirm the visible namespace before any old slot can be overwritten or removed.
         #[cfg(test)]
@@ -82,6 +113,45 @@ impl Store {
             store.mark(b"MYNFRESH")?;
         }
         Ok(store)
+    }
+
+    pub(super) fn verify_id(&self, id: &str) -> std::result::Result<(), BoxError> {
+        let mut file = open(&self.directory, "store-id", OFlags::RDONLY)
+            .map_err(|_| "Content store identity missing; mount the expected volume or explicitly initialize it")?;
+        let mut stored = Vec::new();
+        Read::by_ref(&mut file).take(33).read_to_end(&mut stored)?;
+        if stored != id.as_bytes() {
+            return Err("Content store identity does not match the configuration".into());
+        }
+        Ok(())
+    }
+
+    pub(super) fn initialize(path: &Path, id: &str) -> std::result::Result<(), BoxError> {
+        let store = Self::open(path)?;
+        if !store.has_state()? {
+            store.require_fresh()?;
+        }
+        match open(&store.directory, "store-id", OFlags::RDONLY) {
+            Ok(_) => store.verify_id(id)?,
+            Err(error)
+                if error.downcast_ref::<rustix::io::Errno>() == Some(&rustix::io::Errno::NOENT) =>
+            {
+                store.write_id(id)?;
+            }
+            Err(error) => return Err(error),
+        }
+        if !store.has_state()? {
+            store.mark(b"MYNFRI02")?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn write_id(&self, id: &str) -> std::result::Result<(), BoxError> {
+        self.replace("store-id.tmp", "store-id", id.as_bytes(), true)
+    }
+
+    pub(super) fn begin_backup(&self) -> std::result::Result<(), BoxError> {
+        self.mark(b"MYNBACK1")
     }
 
     fn mark(&self, marker: &[u8; 8]) -> std::result::Result<(), BoxError> {
@@ -102,12 +172,30 @@ impl Store {
         Ok(false)
     }
     pub fn require_fresh(&self) -> std::result::Result<(), BoxError> {
+        self.check_fresh(false)
+    }
+
+    pub(super) fn check_fresh(&self, bound: bool) -> std::result::Result<(), BoxError> {
         let mut marker = Vec::new();
         let mut lock = &self.lock;
         lock.seek(SeekFrom::Start(0))?;
         lock.take(9).read_to_end(&mut marker)?;
-        if marker != b"MYNFRESH" {
-            return Err("Content manifest missing from an initialized or unrecognized store; files preserved".into());
+        if marker == b"MYNFRI02" || (!bound && marker == b"MYNFRESH") {
+            return Ok(());
+        }
+        Err("Content manifest missing from a store without an explicit fresh marker; files preserved".into())
+    }
+
+    pub(super) fn require_committed(&self) -> std::result::Result<(), BoxError> {
+        let mut marker = [0; 8];
+        let mut lock = &self.lock;
+        lock.seek(SeekFrom::Start(0))?;
+        if lock.metadata()?.len() != 8
+            || lock.read_exact(&mut marker).is_err()
+            || &marker != b"MYNCOM01"
+            || !self.has_state()?
+        {
+            return Err("Restore source has no committed content manifest".into());
         }
         Ok(())
     }
@@ -184,16 +272,37 @@ impl Store {
         Ok(Some(bytes))
     }
     pub fn save(&self, bytes: &[u8]) -> std::result::Result<(), BoxError> {
-        self.replace("state.tmp", "state.bin", bytes)
+        self.replace("state.tmp", "state.bin", bytes, true)
     }
     pub fn uncertain(&self) -> bool {
         self.uncertain.load(Ordering::Acquire)
     }
+    #[cfg(test)]
     pub fn save_named(&self, name: &str, bytes: &[u8]) -> std::result::Result<(), BoxError> {
-        self.replace("topic.tmp", name, bytes)
+        self.replace("topic.tmp", name, bytes, true)
+    }
+    // Data must reach disk before the final manifest can refer to this slot.
+    // The writer synchronizes the directory once after staging the entire batch.
+    pub fn stage_topic(&self, name: &str, bytes: &[u8]) -> std::result::Result<(), BoxError> {
+        self.replace("topic.tmp", name, bytes, false)
+    }
+    pub fn sync_staged_topics(&self) -> std::result::Result<(), BoxError> {
+        #[cfg(test)]
+        super::faults::hit("topics.dir_sync")?;
+        self.directory.sync_all()?;
+        #[cfg(test)]
+        super::faults::hit("topics.dir_synced")?;
+        Ok(())
     }
     pub fn remove_named(&self, name: &str) {
-        let _ = self.remove_named_checked(name);
+        if let Err(error) = self.remove_named_checked(name) {
+            let message = format!("Could not remove old content file {name}: {error}");
+            eprintln!("mynofy: {message}");
+            *self.cleanup_error.lock().unwrap() = Some(message);
+        }
+    }
+    pub fn take_cleanup_error(&self) -> Option<String> {
+        self.cleanup_error.lock().unwrap().take()
     }
     fn remove_named_checked(&self, name: &str) -> std::io::Result<()> {
         #[cfg(test)]
@@ -216,7 +325,13 @@ impl Store {
         self.directory.sync_all()?;
         Ok(())
     }
-    fn replace(&self, name: &str, target: &str, bytes: &[u8]) -> std::result::Result<(), BoxError> {
+    fn replace(
+        &self,
+        name: &str,
+        target: &str,
+        bytes: &[u8],
+        sync_directory: bool,
+    ) -> std::result::Result<(), BoxError> {
         if self.uncertain() {
             return Err(
                 "Content manifest durability is uncertain; restart before saving again".into(),
@@ -255,11 +370,13 @@ impl Store {
             }
             #[cfg(test)]
             super::faults::phase(target, "renamed")?;
-            #[cfg(test)]
-            super::faults::phase(target, "dir_sync")?;
-            self.directory.sync_all()?;
-            #[cfg(test)]
-            super::faults::phase(target, "dir_synced")?;
+            if sync_directory {
+                #[cfg(test)]
+                super::faults::phase(target, "dir_sync")?;
+                self.directory.sync_all()?;
+                #[cfg(test)]
+                super::faults::phase(target, "dir_synced")?;
+            }
             if target == "state.bin" {
                 self.mark(b"MYNCOM01")?;
                 self.uncertain.store(false, Ordering::Release);

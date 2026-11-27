@@ -303,6 +303,9 @@ pub struct AuthWelcome {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[prost(uint32, optional, tag = "4")]
     pub restart_counter: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[prost(string, optional, tag = "5")]
+    pub boot_id: Option<String>,
 }
 #[derive(Clone, PartialEq, prost::Message)]
 pub struct Frame {

@@ -20,7 +20,9 @@ pub(super) async fn serve(
     bound: BoundUnixSocket,
     engine: Arc<Mutex<Engine>>,
 ) -> Result<(), BoxError> {
-    let permits = Arc::new(Semaphore::new(4));
+    // Four commands may wait for durability. Two bounded socket slots remain for status.
+    let permits = Arc::new(Semaphore::new(6));
+    let commands = Arc::new(Semaphore::new(4));
     let mut tasks = JoinSet::new();
     let mut tokens = 20.;
     let mut updated = Instant::now();
@@ -34,7 +36,8 @@ pub(super) async fn serve(
                 if tokens<1. {continue;}tokens-=1.;
                 let Ok(permit)=permits.clone().try_acquire_owned() else{continue};
                 let engine=engine.clone();
-                tasks.spawn(async move {let _permit=permit;let _=timeout(Duration::from_secs(5), connection(stream,engine)).await;});
+                let commands=commands.clone();
+                tasks.spawn(async move {let _permit=permit;let _=timeout(Duration::from_secs(9), connection(stream,engine,commands,Duration::from_secs(7))).await;});
             },
             _=tasks.join_next(),if !tasks.is_empty()=>{},
         }
@@ -43,11 +46,19 @@ pub(super) async fn serve(
 fn error(code: &str, detail: &str) -> Value {
     serde_json::json!({"version":VERSION,"ok":false,"error":{"code":code,"detail":detail}})
 }
-async fn connection(mut stream: UnixStream, engine: Arc<Mutex<Engine>>) -> Result<(), BoxError> {
+async fn connection(
+    mut stream: UnixStream,
+    engine: Arc<Mutex<Engine>>,
+    commands: Arc<Semaphore>,
+    start_budget: Duration,
+) -> Result<(), BoxError> {
     let mut input = vec![0; MAX_REQUEST_BYTES + 1];
     let mut len = 0;
+    let start = Instant::now();
+    let read_deadline = start + Duration::from_secs(2);
+    let confirmation_deadline = start + start_budget;
     let parsed = loop {
-        let n = stream.read(&mut input[len..]).await?;
+        let n = tokio::time::timeout_at(read_deadline, stream.read(&mut input[len..])).await??;
         if n == 0 {
             return Ok(());
         }
@@ -76,7 +87,23 @@ async fn connection(mut stream: UnixStream, engine: Arc<Mutex<Engine>>) -> Resul
     }
     let response = match parsed {
         Ok(request) if request.version == VERSION => {
-            let mutating = matches!(
+            let _command_permit =
+                if matches!(request.command, Command::Status {} | Command::Health {}) {
+                    None
+                } else if let Ok(permit) = commands.try_acquire() {
+                    Some(permit)
+                } else {
+                    stream
+                        .write_all(&encode(&error(
+                            "admin_busy",
+                            "Admin command slots are occupied.",
+                        ))?)
+                        .await?;
+                    stream.write_all(b"\n").await?;
+                    stream.shutdown().await?;
+                    return Ok(());
+                };
+            let confirms_security = matches!(
                 request.command,
                 Command::ClientAdd { .. }
                     | Command::ClientDisable { .. }
@@ -90,19 +117,35 @@ async fn connection(mut stream: UnixStream, engine: Arc<Mutex<Engine>>) -> Resul
                     | Command::TopicCreate { .. }
                     | Command::TopicDelete { .. }
             );
+            let needs_start_budget = confirms_security
+                || matches!(
+                    request.command,
+                    Command::TopicPolicy { .. }
+                        | Command::TopicStorage { .. }
+                        | Command::ContentSave { .. }
+                );
             let (result, confirmation) = {
                 let mut state = engine
                     .lock()
                     .map_err(|_| "Service state lock is poisoned")?;
-                let result = state.admin(request.command, now_ms());
-                let confirmation = (mutating && result.is_ok())
+                let result = if needs_start_budget && Instant::now() >= confirmation_deadline {
+                    Err(protocol::ApiError::new(
+                        "admin_busy",
+                        "Request could not start within its time budget.",
+                    ))
+                } else {
+                    state.admin(request.command, now_ms())
+                };
+                let confirmation = (confirms_security && result.is_ok())
                     .then(|| state.security_confirmation())
                     .flatten();
                 (result, confirmation)
             };
             let result = if let Some(confirmation) = confirmation
-                && confirmation.confirm().await.is_err()
-            {
+                && !matches!(
+                    tokio::time::timeout_at(confirmation_deadline, confirmation.confirm()).await,
+                    Ok(Ok(()))
+                ) {
                 Err(protocol::ApiError::new(
                     "security_storage_unsynced",
                     "RAM change applied; durable confirmation failed. Inspect security status before retrying.",
@@ -147,9 +190,11 @@ pub async fn request(path: &Path, command: Command) -> Result<Value, BoxError> {
         command,
     })?;
     if raw.len() > MAX_REQUEST_BYTES {
-        return Err("Admin request exceeds size limit".into());
+        return Err(
+            format!("Encoded admin request exceeds the {MAX_REQUEST_BYTES}-byte limit").into(),
+        );
     }
-    timeout(Duration::from_secs(5), async {
+    timeout(Duration::from_secs(10), async {
         let mut stream = UnixStream::connect(path).await?;
         if stream.peer_cred()?.uid() != metadata.uid() {
             return Err::<Value, BoxError>("Admin socket owner changed".into());
@@ -224,5 +269,75 @@ mod tests {
         );
         assert!(writer.exceeded);
         assert!(writer.bytes.len() <= 32);
+    }
+
+    #[tokio::test]
+    async fn live_policy_storage_and_save_cannot_start_after_deadline() {
+        let config =
+            serde_json::from_str(include_str!("../../../../config/scenarios/local.json")).unwrap();
+        let engine = Arc::new(Mutex::new(Engine::new(config, now_ms()).unwrap()));
+        for command in [
+            serde_json::json!({"op":"topic_policy","topic":"local/events","policy":{
+                "default_ttl_seconds":1,"max_ttl_seconds":2
+            }}),
+            serde_json::json!({"op":"topic_storage","topic":"local/events","storage":{
+                "mode":"manual"
+            }}),
+            serde_json::json!({"op":"content_save"}),
+        ] {
+            let (locked, guard_acquired) = tokio::sync::oneshot::channel();
+            let (release, wait_for_release) = std::sync::mpsc::channel();
+            let state = engine.clone();
+            let holder = std::thread::spawn(move || {
+                let _guard = state.lock().unwrap();
+                locked.send(()).unwrap();
+                let _ = wait_for_release.recv();
+            });
+            guard_acquired.await.unwrap();
+
+            let (mut client, server) = UnixStream::pair().unwrap();
+            let slots = Arc::new(Semaphore::new(1));
+            let budget = Duration::from_millis(40);
+            let server = server.into_std().unwrap();
+            let command_engine = engine.clone();
+            let command_slots = slots.clone();
+            let task = std::thread::spawn(move || {
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(async {
+                        let server = UnixStream::from_std(server).unwrap();
+                        connection(server, command_engine, command_slots, budget).await
+                    })
+            });
+            client
+                .write_all(
+                    format!(
+                        "{}\n",
+                        serde_json::json!({
+                            "version":VERSION, "command":command,
+                        })
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            timeout(Duration::from_secs(1), async {
+                while slots.available_permits() != 0 {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .unwrap();
+            tokio::time::sleep(budget).await;
+            release.send(()).unwrap();
+            holder.join().unwrap();
+            let mut reply = Vec::new();
+            client.read_to_end(&mut reply).await.unwrap();
+            task.join().unwrap().unwrap();
+            let reply: Value = serde_json::from_slice(&reply).unwrap();
+            assert_eq!(reply["error"]["code"], "admin_busy", "{reply}");
+        }
     }
 }

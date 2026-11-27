@@ -271,6 +271,16 @@ impl Record {
         Self { bytes }
     }
 }
+#[derive(Clone, Copy, Default)]
+pub(crate) struct PolledLengths {
+    message: usize,
+    payload: usize,
+}
+impl PolledLengths {
+    pub(crate) fn item_len(self) -> usize {
+        direct::field_len(2, self.message)
+    }
+}
 impl<B: AsRef<[u8]>> Record<B> {
     pub(crate) fn relocate(
         &self,
@@ -339,28 +349,21 @@ impl<B: AsRef<[u8]>> Record<B> {
             content_type: u32_at(self.bytes.as_ref(), 44),
         }
     }
-    fn wire_len(
+    pub(crate) fn polled_lengths(
         &self,
         names: (&str, &str),
         types: &ContentTypes,
         blobs: &Blobs,
         expiry: &str,
-    ) -> usize {
+    ) -> PolledLengths {
         let (topic, producer_id) = names;
-        direct::field_len(1, 8)
+        let payload = self.payload().encoded_len(types, blobs);
+        let message = direct::field_len(1, 8)
             + direct::field_len(2, topic.len())
-            + direct::field_len(3, self.payload().encoded_len(types, blobs))
+            + direct::field_len(3, payload)
             + direct::field_len(4, direct::field_len(1, expiry.len()))
-            + direct::field_len(5, producer_id.len())
-    }
-    pub(crate) fn polled_len(
-        &self,
-        names: (&str, &str),
-        types: &ContentTypes,
-        blobs: &Blobs,
-        expiry: &str,
-    ) -> usize {
-        direct::field_len(2, self.wire_len(names, types, blobs, expiry))
+            + direct::field_len(5, producer_id.len());
+        PolledLengths { payload, message }
     }
     pub(crate) fn encode_polled(
         &self,
@@ -368,14 +371,15 @@ impl<B: AsRef<[u8]>> Record<B> {
         types: &ContentTypes,
         blobs: &Blobs,
         expiry: &str,
+        lengths: PolledLengths,
         out: &mut BytesMut,
     ) {
         let (topic, producer_id) = names;
-        direct::header(2, self.wire_len(names, types, blobs, expiry), out);
+        direct::header(2, lengths.message, out);
         direct::data(1, &self.id().0, out);
         direct::data(2, topic.as_bytes(), out);
         let payload = self.payload();
-        direct::header(3, payload.encoded_len(types, blobs), out);
+        direct::header(3, lengths.payload, out);
         payload.encode(types, blobs, out);
         direct::header(4, direct::field_len(1, expiry.len()), out);
         direct::data(1, expiry.as_bytes(), out);

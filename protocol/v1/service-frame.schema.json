@@ -17,6 +17,9 @@
           "minLength": 1,
           "maxLength": 128
         },
+        "link_version": {
+          "const": 2
+        },
         "service_id": {
           "type": "string",
           "minLength": 1
@@ -26,7 +29,8 @@
         "version",
         "type",
         "id",
-        "service_id"
+        "service_id",
+        "link_version"
       ],
       "additionalProperties": false
     },
@@ -44,6 +48,9 @@
           "minLength": 1,
           "maxLength": 128
         },
+        "link_version": {
+          "const": 2
+        },
         "service_id": {
           "type": "string",
           "minLength": 1
@@ -53,7 +60,8 @@
         "version",
         "type",
         "request_id",
-        "service_id"
+        "service_id",
+        "link_version"
       ],
       "additionalProperties": false
     },
@@ -374,6 +382,28 @@
         "channel",
         "path",
         "expires_at"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "version": {
+          "const": 1
+        },
+        "type": {
+          "const": "tunnel_authenticated"
+        },
+        "channel": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 4294967295
+        }
+      },
+      "required": [
+        "version",
+        "type",
+        "channel"
       ],
       "additionalProperties": false
     },

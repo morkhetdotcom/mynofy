@@ -1,7 +1,8 @@
 //! Real TLS + WebSocket tests, using only the already available OpenSSL CLI for test certificates.
+mod support;
 use mynofy_client as client;
 use mynofy_protocol::crypto;
-use mynofy_server::{config::Config, transport};
+use mynofy_server::config::Config;
 use serde_json::json;
 use std::{
     path::PathBuf,
@@ -125,7 +126,7 @@ async fn encrypted_publish_poll_rotation_and_reconnect() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let config = f.config.clone();
-    let server = tokio::spawn(async move { transport::run(listener, config).await });
+    let server = tokio::spawn(async move { support::run_wss_fixture(listener, config).await });
     let url = format!("wss://localhost:{}/", addr.port());
     let ca = f.dir.join("ca.crt");
     let mut ws = client::connect_client(&url, &ca, &f.key, "local", None)
@@ -177,7 +178,7 @@ async fn rejects_unregistered_client_and_wrong_expected_owner() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let config = f.config.clone();
-    let server = tokio::spawn(async move { transport::run(listener, config).await });
+    let server = tokio::spawn(async move { support::run_wss_fixture(listener, config).await });
     let url = format!("wss://localhost:{}/", addr.port());
     let ca = f.dir.join("ca.crt");
     let unknown = crypto::generate_key().unwrap();
@@ -213,7 +214,7 @@ async fn application_frames_before_auth_and_idle_auth_connections_are_closed() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
     let config = f.config.clone();
-    let server = tokio::spawn(async move { transport::run(listener, config).await });
+    let server = tokio::spawn(async move { support::run_wss_fixture(listener, config).await });
     let url = format!("wss://localhost:{}/", address.port());
     let ca = f.dir.join("ca.crt");
     let tls = client::client_tls(&ca).unwrap();
@@ -266,9 +267,9 @@ async fn separate_admin_unix_socket_registers_a_client_on_the_wss_listener() {
     config.service.admin_socket = Some(path.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
-    let server = tokio::spawn(async move { transport::run(listener, config).await });
+    let server = tokio::spawn(async move { support::run_wss_fixture(listener, config).await });
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        while !path.exists() {
+        while !support::unix_socket_ready(&path) {
             tokio::task::yield_now().await;
         }
     })
@@ -322,7 +323,7 @@ async fn wss_rejects_json_application_frames_before_and_after_authentication() {
     let f = fixture();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
-    let server = tokio::spawn(transport::run(listener, f.config.clone()));
+    let server = tokio::spawn(support::run_wss_fixture(listener, f.config.clone()));
     let url = format!("wss://localhost:{}/", address.port());
     let ca = f.dir.join("ca.crt");
     for authenticated in [false, true] {

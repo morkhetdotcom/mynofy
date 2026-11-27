@@ -57,6 +57,13 @@
   {
     "frame": {
       "version": 1,
+      "type": "tunnel_authenticated",
+      "channel": 2
+    }
+  },
+  {
+    "frame": {
+      "version": 1,
       "type": "tunnel_close",
       "channel": 2
     }

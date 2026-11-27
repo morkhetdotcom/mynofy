@@ -80,9 +80,9 @@ impl Service {
         let config: Config = serde_json::from_value(cfg).unwrap();
         config.validate().unwrap();
         let bound = transport::bind_unix(&socket).unwrap();
-        let task = tokio::spawn(async move { transport::run_unix(bound, config).await });
+        let task = tokio::spawn(async move { support::run_unix_fixture(bound, config).await });
         timeout(Duration::from_secs(3), async {
-            while !admin.exists() {
+            while !support::unix_socket_ready(&admin) {
                 tokio::task::yield_now().await;
             }
         })

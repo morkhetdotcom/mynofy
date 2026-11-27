@@ -28,6 +28,15 @@ pub fn decode<const N: usize>(text: &str) -> Result<[u8; N]> {
     }
     bytes.try_into().map_err(|_| ApiError::invalid())
 }
+/// Decode the canonical padded rotation secret directly into its owning buffer.
+pub fn decode_rotation_secret(text: &str) -> Result<zeroize::Zeroizing<[u8; 32]>> {
+    let mut secret = zeroize::Zeroizing::new([0; 32]);
+    if text.len() != 44 || STANDARD.decode_slice(text, secret.as_mut()).ok() != Some(32) {
+        return Err(ApiError::invalid());
+    }
+    Ok(secret)
+}
+
 /// SHA-256 checksum for framed local storage; not an authenticity proof.
 pub fn sha256(bytes: &[u8]) -> [u8; 32] {
     let hash = digest::digest(&digest::SHA256, bytes);

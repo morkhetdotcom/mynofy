@@ -46,7 +46,11 @@ async fn run(
     config.limits.client_burst = 1_000_000;
     config.limits.client_requests_per_second = 1_000_000;
     config.limits.max_active_messages = messages;
+    config.limits.max_topic_active_messages = Some(config.limits.max_active_messages);
+    config.limits.max_publisher_active_messages = Some(config.limits.max_active_messages);
     config.limits.max_active_message_bytes = (messages * (payload_bytes + 4096)).max(65536);
+    config.limits.max_topic_active_bytes = Some(config.limits.max_active_message_bytes);
+    config.limits.max_publisher_active_bytes = Some(config.limits.max_active_message_bytes);
     let ttl = config.topics[0]
         .policy
         .as_ref()

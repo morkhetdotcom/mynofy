@@ -10,6 +10,7 @@ pub struct OfflineStorage {
     entries: topics::Entries,
     maximum: u64,
     _security: crate::security::OfflineLock,
+    configured_topics: Vec<crate::config::Topic>,
     ram_baseline: std::collections::HashSet<String>,
 }
 fn read(
@@ -24,13 +25,7 @@ fn read(
     let bytes = store
         .read(options.max_snapshot_bytes)?
         .ok_or("No saved content manifest")?;
-    let prepared = match secret {
-        Some(ContentSecret::Password(password)) => Some(encryption::prepare(
-            ContentSecret::Password(password.clone()),
-            Some(&bytes),
-        )?),
-        _ => None,
-    };
+    let prepared = encryption::prepare_source(secret, &bytes)?;
     let secret = prepared.as_ref().or(secret);
     let plain = encryption::decode(
         bytes,
@@ -38,12 +33,6 @@ fn read(
         secret,
         options.max_snapshot_bytes,
     )?;
-    if !plain.starts_with(b"MYNTOP01") {
-        return Err(
-            "Offline tools require a topic manifest; start the service once to migrate legacy data"
-                .into(),
-        );
-    }
     topics::load(
         store,
         &plain,
@@ -54,6 +43,89 @@ fn read(
     )
 }
 impl OfflineStorage {
+    /// Convert an entire legacy generation after validating its topics and security bindings.
+    pub fn migrate_legacy(
+        mut config: Config,
+        secret: Option<ContentSecret>,
+        preview: bool,
+    ) -> std::result::Result<serde_json::Value, BoxError> {
+        config.validate()?;
+        config.require_local_owner()?;
+        let options = config
+            .content_storage
+            .clone()
+            .ok_or("Content storage is not configured")?;
+        if !options.directory.is_dir() {
+            return Err("Legacy content directory does not exist".into());
+        }
+        let store = match (&options.store_id, preview) {
+            (Some(id), false) => disk::Store::open_bound(&options.directory, id)?,
+            (expected, _) => {
+                let store = disk::Store::open_mode(&options.directory, preview)?;
+                if let Some(id) = expected {
+                    store.verify_id(id)?;
+                }
+                store
+            }
+        };
+        let bytes = store
+            .read(options.max_snapshot_bytes + 80)?
+            .ok_or("No legacy manifest")?;
+        let secret = secret
+            .map(|secret| encryption::prepare(secret, Some(&bytes)))
+            .transpose()?;
+        let plain = encryption::decode(
+            bytes,
+            options.encryption,
+            secret.as_ref(),
+            options.max_snapshot_bytes,
+        )?;
+        if !plain.starts_with(b"MYNCP001") {
+            return Err("Content manifest is not in the legacy format".into());
+        }
+        let checkpoint = Checkpoint::read(&plain, &config, options.max_snapshot_bytes)?;
+        let mut selected = Vec::with_capacity(checkpoint.image.topics.len());
+        for name in &checkpoint.image.topics {
+            let topic = config
+                .topics
+                .iter()
+                .find(|topic| {
+                    &topic.name == name
+                        && topic.owner_id == config.service.id
+                        && topic.storage.persistent()
+                })
+                .ok_or_else(|| {
+                    format!("Configure saved topic {name} as locally persistent before migrating")
+                })?;
+            selected.push((name.clone(), topic.storage.clone()));
+        }
+        if selected.is_empty() {
+            return Err("Legacy store has no topic to migrate".into());
+        }
+        let _security = crate::security::OfflineLock::open_mode(&mut config, preview)?;
+        checkpoint.prepare_topics(&mut config)?;
+        validate_checkpoint(&checkpoint, &mut config)?;
+        let mut counts = vec![0usize; selected.len()];
+        for record in checkpoint.image.records.iter() {
+            counts[record.topic() as usize] += 1;
+        }
+        let topics: Vec<_> = selected.iter().zip(counts).map(|((name, storage), messages)| {
+            serde_json::json!({"topic":name, "storage":storage, "messages":messages})
+        }).collect();
+        if !preview {
+            topics::save(
+                &store,
+                &checkpoint,
+                &selected,
+                &mut topics::Entries::new(),
+                options.encryption,
+                secret.as_ref(),
+                options.max_snapshot_bytes,
+            )?;
+        }
+        Ok(serde_json::json!({"preview":preview,"topics":topics}))
+    }
+
     pub fn open(
         config: Config,
         secret: Option<ContentSecret>,
@@ -103,7 +175,10 @@ impl OfflineStorage {
         if !allow_empty && !options.directory.exists() {
             return Err("Content storage directory does not exist".into());
         }
-        let store = disk::Store::open(&options.directory)?;
+        let store = match &options.store_id {
+            Some(id) => disk::Store::open_bound(&options.directory, id)?,
+            None => disk::Store::open(&options.directory)?,
+        };
         let secret = secret
             .map(|secret| {
                 let bytes = store.read(options.max_snapshot_bytes)?;
@@ -115,7 +190,7 @@ impl OfflineStorage {
         let (checkpoint, entries) = if allow_empty && !has_manifest {
             // An initialized target has an unknown cutoff after manifest loss.
             // Never turn it into a fresh target and permit expiry rollback.
-            store.require_fresh()?;
+            store.check_fresh(options.store_id.is_some())?;
             let image = crate::message_image::MessageImage::capture(
                 &config.service.id,
                 &[],
@@ -140,6 +215,10 @@ impl OfflineStorage {
         } else {
             read(&store, &config, secret.as_ref())?
         };
+        let configured_topics = config.topics.clone();
+        if allow_empty {
+            check_topic_encryption(&entries, &configured_topics)?;
+        }
         checkpoint.prepare_topics(&mut config)?;
         for topic in &mut config.topics {
             if let Some(entry) = entries.get(&topic.name) {
@@ -157,6 +236,7 @@ impl OfflineStorage {
             entries,
             maximum: options.max_snapshot_bytes,
             _security: security,
+            configured_topics,
             ram_baseline,
         })
     }
@@ -208,6 +288,17 @@ impl OfflineStorage {
         self.store.cleanup_temporary()?;
         Ok(())
     }
+    fn cleanup_after_commit(&self) -> std::result::Result<(), BoxError> {
+        let prior = self.store.take_cleanup_error();
+        let cleanup = self.cleanup();
+        match cleanup {
+            Ok(()) => Ok(()),
+            Err(error) => Err(format!(
+                "commit=durable cleanup=pending: {error}. Run storage cleanup before retrying the operation.{}",
+                prior.map_or_else(String::new, |detail| format!(" Earlier cleanup: {detail}"))
+            ).into()),
+        }
+    }
     /// Copy only a fully committed content generation into a new private directory.
     pub fn backup(&self, destination: &Path) -> std::result::Result<(), BoxError> {
         self.ensure_certain()?;
@@ -221,15 +312,27 @@ impl OfflineStorage {
         )?
         .sync_all()?;
         let target = disk::Store::open(destination)?;
+        target.begin_backup()?;
         for name in topics::committed_files(&self.entries) {
             let bytes = self
                 .store
                 .read_named(&name, self.maximum)?
                 .ok_or("Missing committed topic")?;
-            target.save_named(&name, &bytes)?;
+            target.stage_topic(&name, &bytes)?;
+        }
+        if !self.entries.is_empty() {
+            target.sync_staged_topics()?;
         }
         let manifest = self.store.read(self.maximum)?.ok_or("Missing manifest")?;
         target.save(&manifest)?;
+        if let Some(id) = self
+            .config
+            .content_storage
+            .as_ref()
+            .and_then(|storage| storage.store_id.as_deref())
+        {
+            target.write_id(id)?;
+        }
         Ok(())
     }
     /// Restore content only. Current security and its boot counter are never replaced.
@@ -245,12 +348,14 @@ impl OfflineStorage {
         if !source.exists() {
             return Err("Backup directory does not exist".into());
         }
-        let source = disk::Store::open(source)?;
+        let source = disk::Store::open_mode(source, true)?;
+        source.require_committed()?;
         let (mut checkpoint, entries) = read(
             &source,
             &self.config,
             backup_secret.as_ref().or(self.secret.as_ref()),
         )?;
+        check_topic_encryption(&entries, &self.configured_topics)?;
         checkpoint.cutoff = checkpoint
             .cutoff
             .max(self.checkpoint.cutoff)
@@ -277,8 +382,7 @@ impl OfflineStorage {
             self.maximum,
         )?;
         self.checkpoint = checkpoint;
-        self.cleanup()?;
-        Ok(())
+        self.cleanup_after_commit()
     }
     /// Change the shared secret, keeping its password/key mode and per-topic encryption choices.
     pub fn rekey(&mut self, replacement: ContentSecret) -> std::result::Result<(), BoxError> {
@@ -315,8 +419,41 @@ impl OfflineStorage {
             self.maximum,
         )?;
         self.secret = Some(replacement);
-        self.cleanup()?;
-        Ok(())
+        self.cleanup_after_commit()
+    }
+    /// Rewrite one committed topic using the persistent policy in the config.
+    pub fn migrate_topic_encryption(&mut self, topic: &str) -> std::result::Result<(), BoxError> {
+        self.ensure_certain()?;
+        let storage = self
+            .configured_topics
+            .iter()
+            .find(|configured| configured.name == topic && configured.storage.persistent())
+            .ok_or("Topic needs an explicit persistent storage policy in the configuration")?
+            .storage
+            .clone();
+        let current = self
+            .entries
+            .get(topic)
+            .ok_or("Topic has no saved content")?;
+        if current.storage.encrypted() == storage.encrypted() {
+            return self.cleanup();
+        }
+        let common = self
+            .config
+            .content_storage
+            .as_ref()
+            .ok_or("Missing content config")?
+            .encryption;
+        topics::save(
+            &self.store,
+            &self.checkpoint,
+            &[(topic.to_owned(), storage)],
+            &mut self.entries,
+            common,
+            self.secret.as_ref(),
+            self.maximum,
+        )?;
+        self.cleanup_after_commit()
     }
     /// Storage -> RAM is offline-only and deletes the saved topic slots after manifest commit.
     pub fn topic_to_ram(&mut self, topic: &str) -> std::result::Result<(), BoxError> {
@@ -356,8 +493,7 @@ impl OfflineStorage {
             self.maximum,
         )?;
         self.checkpoint = checkpoint;
-        self.cleanup()?;
-        Ok(())
+        self.cleanup_after_commit()
     }
 }
 

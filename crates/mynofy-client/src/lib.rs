@@ -128,7 +128,14 @@ async fn authenticate<S: AsyncRead + AsyncWrite + Unpin>(
     let Some(protocol::pb::Body::AuthWelcome(welcome)) = frame.body else {
         return Err("Missing welcome metadata".into());
     };
+    validate_boot_id(welcome.boot_id.as_deref())?;
     Ok((ws, welcome))
+}
+fn validate_boot_id(boot_id: Option<&str>) -> Result<(), BoxError> {
+    if let Some(id) = boot_id {
+        crypto::decode::<16>(id).map_err(|_| "Invalid owner boot identity")?;
+    }
+    Ok(())
 }
 // A cancelled exchange cannot leave a reusable socket with an outstanding reply.
 // Starting Close synchronously transitions tungstenite out of its writable state;
@@ -192,10 +199,51 @@ fn validate_response(
         ) if status.message.id != request.message_id => {
             return Err("Response message ID does not match requested message".into());
         }
+        (Some(protocol::pb::Body::Poll(q)), Some(protocol::pb::Body::Messages(page)))
+            if page.items.iter().any(|item| item.message.topic != q.topic) =>
+        {
+            return Err("Poll response topic mismatch".into());
+        }
+        (
+            Some(protocol::pb::Body::ListMessages(q)),
+            Some(protocol::pb::Body::MessagesPage(page)),
+        ) if q
+            .topic
+            .as_ref()
+            .is_some_and(|topic| page.items.iter().any(|item| &item.topic != topic)) =>
+        {
+            return Err("Producer page topic mismatch".into());
+        }
+        (
+            Some(protocol::pb::Body::GetPermissions(q)),
+            Some(protocol::pb::Body::Permissions(reply)),
+        ) if reply.topic != q.topic => {
+            return Err("Permissions response topic mismatch".into());
+        }
         _ => {}
     }
     Ok(())
 }
+struct RotationConfirmation(protocol::pb::Frame);
+impl Drop for RotationConfirmation {
+    fn drop(&mut self) {
+        if let Some(protocol::pb::Body::RotationConfirm(command)) = self.0.body.as_mut() {
+            zeroize::Zeroize::zeroize(&mut command.shared_secret);
+        }
+    }
+}
+
+struct SensitiveFrame(Option<Message>);
+impl Drop for SensitiveFrame {
+    fn drop(&mut self) {
+        if let Some(Message::Binary(bytes)) = self.0.take()
+            && let Ok(mut bytes) = bytes.try_into_mut()
+        {
+            zeroize::Zeroize::zeroize(bytes.as_mut());
+        }
+    }
+}
+
 /// Typed protobuf exchange, including auth, ACL and rotation frames.
 /// Replies must match the request ID and command type. Cancellation, timeout or
 /// protocol/transport failure closes the socket for future commands. Reconnect
@@ -211,10 +259,13 @@ pub async fn exchange_frame<S: AsyncRead + AsyncWrite + Unpin>(
         complete: false,
     };
     let result = timeout(Duration::from_secs(10), async {
-        guard
-            .socket
-            .send(Message::Binary(request.encode_to_vec().into()))
-            .await?;
+        let outgoing = Message::Binary(request.encode_to_vec().into());
+        let sensitive = SensitiveFrame(
+            matches!(request.body, Some(protocol::pb::Body::RotationConfirm(_)))
+                .then(|| outgoing.clone()),
+        );
+        guard.socket.send(outgoing).await?;
+        drop(sensitive);
         while let Some(frame) = guard.socket.next().await {
             match frame? {
                 Message::Binary(data) => {
@@ -296,7 +347,14 @@ async fn rotation_exchange<S: AsyncRead + AsyncWrite + Unpin>(
     phase: RotationPhase,
 ) -> Result<Value, BoxError> {
     let frame = protocol::pb::Frame::from_json(request.clone())?;
-    let response = exchange_frame(ws, &frame).await?;
+    rotation_exchange_frame(ws, &frame, phase).await
+}
+async fn rotation_exchange_frame<S: AsyncRead + AsyncWrite + Unpin>(
+    ws: &mut WebSocketStream<S>,
+    frame: &protocol::pb::Frame,
+    phase: RotationPhase,
+) -> Result<Value, BoxError> {
+    let response = exchange_frame(ws, frame).await?;
     if let Some(protocol::pb::Body::Error(error)) = response.body.as_ref() {
         return Err(Box::new(RotationError {
             phase,
@@ -328,11 +386,16 @@ pub async fn rotate_client<S: AsyncRead + AsyncWrite + Unpin>(
         let rid = offer["rotation_id"].as_str().ok_or("Missing rotation ID")?;
         let secret = zeroize::Zeroizing::new(crypto::random::<32>()?);
         phase = RotationPhase::Confirm;
-        let ready = rotation_exchange(
-            ws,
-            &json!({"version":1,"type":"rotation_confirm","id":"rotation-confirm","rotation_id":rid,"shared_secret":crypto::encode(secret.as_ref())}), phase,
-        )
-        .await?;
+        let confirmation = RotationConfirmation(protocol::pb::Frame {
+            version: 1,
+            body: Some(protocol::pb::Body::RotationConfirm(protocol::pb::RotationConfirm {
+                id: "rotation-confirm".into(),
+                rotation_id: rid.to_owned(),
+                shared_secret: crypto::encode(secret.as_ref()),
+            })),
+        });
+        let ready = rotation_exchange_frame(ws, &confirmation.0, phase).await?;
+        drop(confirmation);
         if ready["type"] != "rotation_ready"
             || ready["request_id"] != "rotation-confirm"
             || ready["rotation_id"] != rid

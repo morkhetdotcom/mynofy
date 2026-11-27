@@ -40,7 +40,8 @@ async fn cluster(count: usize) -> Cluster {
         "mynofy-links-{}",
         u64::from_le_bytes(crypto::random().unwrap())
     ));
-    std::fs::create_dir(&dir).unwrap();
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
     openssl(
         &dir,
         &[
@@ -172,7 +173,7 @@ fn start(c: &mut Cluster) -> Vec<tokio::task::JoinHandle<Result<(), mynofy_serve
     listeners
         .into_iter()
         .zip(c.configs.clone())
-        .map(|(l, cfg)| tokio::spawn(async move { transport::run(l, cfg).await }))
+        .map(|(l, cfg)| tokio::spawn(async move { support::run_wss_fixture(l, cfg).await }))
         .collect()
 }
 fn url(c: &Cluster, index: usize) -> String {
@@ -215,6 +216,15 @@ async fn two_services_preserve_owner_auth_acl_pairs_and_parallel_channels() {
     {
         c.configs[0].service.admin_socket = Some(c.dir.join("admin.sock"));
     }
+    for config in &mut c.configs {
+        config.limits.max_service_channels = 128;
+    }
+    let mut second_topic = c.configs[0].topics[1].clone();
+    second_topic.name = "owner/events".into();
+    c.configs[0].topics.push(second_topic);
+    c.configs[1].accepted_peers[0]
+        .topics
+        .push("owner/events".into());
     let tasks = start(&mut c);
     let ca = c.dir.join("ca.crt");
     assert!(
@@ -222,10 +232,16 @@ async fn two_services_preserve_owner_auth_acl_pairs_and_parallel_channels() {
             .await
             .is_err()
     );
-    let mut sockets = Vec::new();
-    for _ in 0..8 {
-        sockets.push(connect(&c, &c.key).await);
-    }
+    let mut sockets = vec![connect(&c, &c.key).await];
+    #[cfg(unix)]
+    let original_route = link_status(&c).await["routes"]["shared/events"].clone();
+    tokio::time::sleep(Duration::from_millis(10)).await;
+    sockets.extend(futures_util::future::join_all((1..8).map(|_| connect(&c, &c.key))).await);
+    #[cfg(unix)]
+    assert_eq!(
+        link_status(&c).await["routes"]["shared/events"],
+        original_route
+    );
     for (i, socket) in sockets.iter_mut().enumerate() {
         assert_eq!(exchange(socket,json!({"version":1,"type":"publish","id":"p","topic":"shared/events","payload":format!("job-{i}")})).await["type"],"result");
     }
@@ -251,6 +267,34 @@ async fn two_services_preserve_owner_auth_acl_pairs_and_parallel_channels() {
     )
     .await;
     assert_eq!(permissions["owner_id"], "owner");
+    let denied = exchange(
+        &mut sockets[0],
+        json!({"version":1,"type":"poll","id":"scope","topic":"owner/events"}),
+    )
+    .await;
+    assert_eq!(denied["code"], "forbidden");
+    let mut direct = client::connect_via_info(
+        &url(&c, 0),
+        &ca,
+        client::ViaOptions {
+            topic: "owner/events",
+            owner: "owner",
+            owner_certificate_identity: "owner",
+            owner_ca: &ca,
+        },
+        &c.key,
+        None,
+    )
+    .await
+    .unwrap()
+    .0;
+    let allowed = exchange(
+        &mut direct,
+        json!({"version":1,"type":"poll","id":"scope","topic":"owner/events"}),
+    )
+    .await;
+    assert_eq!(allowed["type"], "messages");
+    drop(direct);
     let unknown = crypto::generate_key().unwrap();
     let opts = client::ViaOptions {
         topic: "shared/events",
@@ -535,11 +579,28 @@ async fn mtls_peer_name_binding_and_duplicate_registration_are_enforced() {
     let tasks = start(&mut c);
     let hello = || {
         Message::Text(
-            json!({"version":1,"type":"service_hello","id":"hello","service_id":"edge"})
+            json!({"version":1,"type":"service_hello","link_version":2,"id":"hello","service_id":"edge"})
                 .to_string()
                 .into(),
         )
     };
+    let mut legacy = peer_socket(&c, "edge").await;
+    legacy
+        .send(Message::Text(
+            json!({"version":1,"type":"service_hello","id":"legacy","service_id":"edge"})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let Some(Ok(Message::Text(rejection))) = legacy.next().await else {
+        panic!("missing version rejection")
+    };
+    assert_eq!(
+        serde_json::from_str::<Value>(&rejection).unwrap()["code"],
+        "unsupported_version"
+    );
+    drop(legacy);
     let mut wrong = peer_socket(&c, "owner").await;
     wrong.send(hello()).await.unwrap();
     assert!(!matches!(
@@ -593,14 +654,15 @@ async fn cli_reaches_owner_through_a_unix_proxy() {
     let owner_listener = listeners.pop().unwrap();
     drop(listeners);
     let owner_cfg = c.configs[1].clone();
-    let owner = tokio::spawn(async move { transport::run(owner_listener, owner_cfg).await });
+    let owner =
+        tokio::spawn(async move { support::run_wss_fixture(owner_listener, owner_cfg).await });
     let path = c.dir.join("edge.sock");
     c.configs[0].service.listen = None;
     c.configs[0].service.unix_socket = Some(path.clone());
     c.configs[0].validate().unwrap();
     let bound = transport::bind_unix(&path).unwrap();
     let edge_cfg = c.configs[0].clone();
-    let edge = tokio::spawn(async move { transport::run_unix(bound, edge_cfg).await });
+    let edge = tokio::spawn(async move { support::run_unix_fixture(bound, edge_cfg).await });
     let key = c.dir.join("client.pk8");
     std::fs::write(&key, &c.key).unwrap();
     let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_mynofy"))
@@ -796,7 +858,7 @@ async fn mcp_cli_uses_the_same_end_to_end_owner_tunnel() {
 async fn peer_admin(c: &Cluster, index: usize, command: mynofy_server::admin::Command) -> Value {
     let path = c.configs[index].service.admin_socket.as_ref().unwrap();
     tokio::time::timeout(Duration::from_secs(3), async {
-        while !path.exists() {
+        while !support::unix_socket_ready(path) {
             tokio::task::yield_now().await;
         }
     })
@@ -888,6 +950,8 @@ async fn runtime_peer_management_updates_existing_links_without_restarting_local
         "{}",
         String::from_utf8_lossy(&cli.stderr)
     );
+    // The previous rejected handshake starts the Edge reconnect cooldown.
+    tokio::time::sleep(Duration::from_millis(250)).await;
     let mut active = connect(&c, &c.key).await;
     let published=exchange(&mut active,json!({"version":1,"type":"publish","id":"before","topic":"shared/events","payload":"preserve"})).await;
     assert_eq!(published["type"], "result");
@@ -924,6 +988,8 @@ async fn runtime_peer_management_updates_existing_links_without_restarting_local
         },
     )
     .await;
+    // The previous rejected handshake starts the Edge reconnect cooldown.
+    tokio::time::sleep(Duration::from_millis(250)).await;
     let mut active = connect(&c, &c.key).await;
     let page = exchange(
         &mut active,
@@ -1127,5 +1193,184 @@ async fn owner_tunnel_rejects_json_application_frames() {
     for task in tasks {
         task.abort();
         let _ = task.await;
+    }
+}
+
+#[tokio::test]
+async fn pending_owner_tunnels_have_their_own_quota() {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::{client_async, tungstenite::Message};
+
+    let mut c = cluster(3).await;
+    c.configs[0].upstream = c.configs[1].upstream.clone();
+    c.configs[0]
+        .topics
+        .iter_mut()
+        .find(|topic| topic.name == "shared/events")
+        .unwrap()
+        .via = Some("owner".into());
+    let mut edge_grant = c.configs[2].accepted_peers[0].clone();
+    edge_grant.service_id = "edge".into();
+    c.configs[2].accepted_peers.push(edge_grant);
+    for config in &mut c.configs {
+        config.limits.max_service_channels = 8;
+    }
+    c.configs[2].limits.max_service_channels = 16;
+    let tasks = start(&mut c);
+    let mut established = connect(&c, &c.key).await;
+    async fn open_pending(
+        c: &Cluster,
+        edge: usize,
+        ip: std::net::Ipv4Addr,
+    ) -> (
+        tokio_tungstenite::WebSocketStream<tokio_rustls::client::TlsStream<tokio::net::TcpStream>>,
+        bool,
+    ) {
+        let ca = c.dir.join("ca.crt");
+        let tcp = tokio::net::TcpSocket::new_v4().unwrap();
+        tcp.bind((ip, 0).into()).unwrap();
+        let tcp = tcp
+            .connect(c.configs[edge].service.listen.unwrap())
+            .await
+            .unwrap();
+        let tls = tokio_rustls::TlsConnector::from(client::client_tls(&ca).unwrap())
+            .connect(
+                tokio_rustls::rustls::pki_types::ServerName::try_from(
+                    c.configs[edge].service.id.clone(),
+                )
+                .unwrap(),
+                tcp,
+            )
+            .await
+            .unwrap();
+        let (mut socket, _) = client_async(url(c, edge), tls).await.unwrap();
+        socket.send(Message::Text(
+            json!({"version":1,"type":"client_tunnel","id":"pending","topic":"shared/events","owner_id":"owner"})
+                .to_string().into(),
+        )).await.unwrap();
+        let response = tokio::time::timeout(Duration::from_secs(2), socket.next())
+            .await
+            .unwrap();
+        let ready = matches!(response, Some(Ok(Message::Text(ref text))) if text.contains("client_tunnel_ready"));
+        (socket, ready)
+    }
+    let local = std::net::Ipv4Addr::LOCALHOST;
+    let (pending, ready) = open_pending(&c, 0, local).await;
+    assert!(ready);
+    let (_, ready) = open_pending(&c, 0, local).await;
+    assert!(
+        !ready,
+        "a second pending tunnel must exceed the source quota"
+    );
+    #[cfg(target_os = "linux")]
+    let second_source = {
+        let (pending, ready) = open_pending(&c, 0, std::net::Ipv4Addr::new(127, 0, 0, 2)).await;
+        assert!(ready, "an independent source has a separate edge slot");
+        let (_, ready) = open_pending(&c, 0, std::net::Ipv4Addr::new(127, 0, 0, 3)).await;
+        assert!(
+            !ready,
+            "a third source still shares its owner's per-peer quota"
+        );
+        pending
+    };
+    let (independent_peer, ready) = open_pending(&c, 1, local).await;
+    assert!(ready, "an independent peer must retain an admission slot");
+    let reply = exchange(
+        &mut established,
+        json!({"version":1,"type":"poll","id":"still-live","topic":"shared/events"}),
+    )
+    .await;
+    assert_eq!(reply["type"], "messages");
+    drop(pending);
+    drop(independent_peer);
+    #[cfg(target_os = "linux")]
+    drop(second_source);
+    tokio::time::timeout(Duration::from_secs(3), async {
+        loop {
+            let (_, ready) = open_pending(&c, 0, local).await;
+            if ready {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    for task in tasks {
+        task.abort();
+        let _ = task.await;
+    }
+}
+
+#[tokio::test]
+async fn stalled_upstream_attempt_is_shared_and_does_not_block_local_client() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let mut c = cluster(2).await;
+    c.configs[0].limits.request_timeout_seconds = 1;
+    #[cfg(unix)]
+    {
+        c.configs[0].service.admin_socket = Some(c.dir.join("admin.sock"));
+    }
+    let listener = c.listeners.pop().unwrap();
+    let accepted = Arc::new(AtomicUsize::new(0));
+    let observe = accepted.clone();
+    let stalled = tokio::spawn(async move {
+        let mut connections = Vec::new();
+        while let Ok((socket, _)) = listener.accept().await {
+            observe.fetch_add(1, Ordering::Relaxed);
+            connections.push(socket);
+        }
+    });
+    let tasks = start(&mut c);
+    let ca = c.dir.join("ca.crt");
+    let edge = url(&c, 0);
+    let requests = futures_util::future::join_all((0..4).map(|_| {
+        client::connect_via_info(
+            &edge,
+            &ca,
+            client::ViaOptions {
+                topic: "shared/events",
+                owner: "owner",
+                owner_certificate_identity: "owner",
+                owner_ca: &ca,
+            },
+            &c.key,
+            None,
+        )
+    }));
+    let local = async {
+        let mut socket = client::connect_client(&edge, &ca, &c.local, "edge", None)
+            .await
+            .unwrap();
+        let reply = exchange(
+            &mut socket,
+            json!({"version":1,"type":"poll","id":"local","topic":"edge/events"}),
+        )
+        .await;
+        assert_eq!(reply["type"], "messages");
+    };
+    let (results, ()) = tokio::time::timeout(Duration::from_millis(1700), async {
+        tokio::join!(requests, local)
+    })
+    .await
+    .unwrap();
+    assert!(results.iter().all(Result::is_err));
+    assert_eq!(accepted.load(Ordering::Relaxed), 1);
+    #[cfg(unix)]
+    {
+        let status = peer_admin(&c, 0, mynofy_server::admin::Command::Status {}).await;
+        let links = &status["service_links"];
+        assert_eq!(links["upstream_service_id"], "owner");
+        assert_eq!(links["upstream_connected"], false);
+        assert_eq!(links["upstream_connecting"], false);
+        assert_eq!(links["upstream_last_error"]["phase"], "tls");
+        assert!(links["upstream_last_error"]["at_ms"].is_u64());
+    }
+    stalled.abort();
+    for task in tasks {
+        task.abort();
     }
 }

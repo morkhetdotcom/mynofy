@@ -7,6 +7,13 @@
 use crate::{ApiError, ProtobufMessage, Result, pb};
 use bytes::Bytes;
 
+/// Identify the small rotation response class without allocating command payloads.
+pub fn is_rotation_commit(raw: Bytes) -> bool {
+    pb::FrameMetadata::decode(raw).is_ok_and(|frame| {
+        frame.version == 1 && matches!(frame.body, Some(pb::MetadataBody::RotationCommit(_)))
+    })
+}
+
 /// Extract a client command ID without decoding its payload or executing it.
 ///
 /// The input must be the already bounded WebSocket Bytes buffer. At most 128

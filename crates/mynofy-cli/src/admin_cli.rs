@@ -27,6 +27,16 @@ pub async fn run(args: Vec<String>) -> Result<(), BoxError> {
             .map(String::as_str)
             .ok_or_else(|| BoxError::from(format!("Missing {name}")))
     };
+    let topic_list = || -> Result<Option<Vec<String>>, BoxError> {
+        match (flags.get("--topics"), flags.get("--topics-json")) {
+            (Some(_), Some(_)) => Err("Choose either --topics or --topics-json".into()),
+            (Some(names), None) => Ok(Some(names.split(',').map(str::to_owned).collect())),
+            (None, Some(json)) => Ok(Some(serde_json::from_value(mynofy_protocol::strict_json(
+                json,
+            )?)?)),
+            (None, None) => Ok(None),
+        }
+    };
     let public = || read_public(Path::new(required("--public-key")?));
     let command = match words.as_slice() {
         ["peers", "list"] => Command::PeersList {
@@ -37,7 +47,7 @@ pub async fn run(args: Vec<String>) -> Result<(), BoxError> {
             peer: mynofy_server::config::Peer {
                 service_id: (*id).into(),
                 certificate_identity: flags.get("--identity").cloned(),
-                topics: required("--topics")?.split(',').map(String::from).collect(),
+                topics: topic_list()?.ok_or("Missing --topics or --topics-json")?,
             },
         },
         ["peers", "delete", id] => Command::PeerDelete {
@@ -177,9 +187,11 @@ pub async fn run(args: Vec<String>) -> Result<(), BoxError> {
             }
         }
         ["content", "save"] => Command::ContentSave {
-            topics: flags
-                .get("--topics")
-                .map(|names| names.split(',').map(str::to_owned).collect()),
+            topics: topic_list()?,
+        },
+        ["health"] => Command::Health {},
+        ["content", "status", topic] => Command::ContentTopicStatus {
+            topic: (*topic).into(),
         },
         ["status"] => Command::Status {},
         ["storage", "stats"] => Command::StorageStats {},
@@ -190,7 +202,7 @@ pub async fn run(args: Vec<String>) -> Result<(), BoxError> {
         Command::PeersList { .. } | Command::PeerCertificatesList { .. } => {
             &["--socket", "--after", "--limit"]
         }
-        Command::PeerSet { .. } => &["--socket", "--topics", "--identity"],
+        Command::PeerSet { .. } => &["--socket", "--topics", "--topics-json", "--identity"],
         Command::PeerCertificateRevoke { .. } => &["--socket", "--certificate", "--fingerprint"],
         Command::TopicsList { .. } => &["--socket", "--after", "--limit"],
         Command::TopicCreate { .. } | Command::TopicPolicy { .. } => {
@@ -201,7 +213,7 @@ pub async fn run(args: Vec<String>) -> Result<(), BoxError> {
         Command::KeyAdd { .. } => &["--socket", "--public-key", "--valid-until"],
         Command::AclSet { .. } => &["--socket", "--allow"],
         Command::TopicStorage { .. } => &["--socket", "--mode", "--seconds", "--encrypted"],
-        Command::ContentSave { .. } => &["--socket", "--topics"],
+        Command::ContentSave { .. } => &["--socket", "--topics", "--topics-json"],
         Command::Export {} => &["--socket", "--out"],
         _ => &["--socket"],
     };
@@ -221,13 +233,8 @@ pub async fn run(args: Vec<String>) -> Result<(), BoxError> {
         .into());
     }
     let value = reply.get("result").ok_or("Missing admin result")?;
-    let data = if export
-        && flags
-            .get("--out")
-            .is_some_and(|path| mynofy_server::config::is_yaml(Path::new(path)))
-    {
-        let config: mynofy_server::config::Config = serde_json::from_value(value.clone())?;
-        config.to_yaml()?.into_bytes()
+    let data = if let Some(path) = flags.get("--out").filter(|_| export).map(Path::new) {
+        super::config_output(path, value, mynofy_server::config::Config::MAX_INPUT_BYTES)?
     } else {
         let mut data = serde_json::to_vec_pretty(value)?;
         data.push(b'\n');
@@ -267,4 +274,20 @@ fn read_public(path: &Path) -> Result<String, BoxError> {
         Ok(text.into())
     }
 }
-const HELP: &str = "mynofy admin peers list --socket PATH [--after ID] [--limit 1..100]\nmynofy admin peers set ID --topics TOPIC,TOPIC [--identity SAN] --socket PATH\nmynofy admin peers delete|disable|enable ID --socket PATH\nmynofy admin peers revoke-certificate --certificate LEAF.pem --socket PATH\nmynofy admin peers revoke-certificate --fingerprint sha256:BASE64 --socket PATH\nmynofy admin peers revoked-certificates --socket PATH [--after FINGERPRINT] [--limit 1..100]\nmynofy admin clients list --socket PATH [--after SLOT] [--limit 1..100]\nmynofy admin clients get CLIENT --socket PATH\nmynofy admin clients add --public-key FILE --socket PATH [--valid-until UTC] [--name NAME]\nmynofy admin clients disable|enable CLIENT --socket PATH\nmynofy admin keys add CLIENT --public-key FILE --socket PATH [--valid-until UTC]\nmynofy admin keys revoke TOKEN --socket PATH\nmynofy admin acl get CLIENT TOPIC --socket PATH\nmynofy admin acl set CLIENT TOPIC --allow publish,subscribe,inspect_own|none --socket PATH\nmynofy admin topics list --socket PATH [--after TOPIC] [--limit 1..100]\nmynofy admin topics get TOPIC --socket PATH\nmynofy admin topics create|policy TOPIC --default-ttl SECONDS --max-ttl SECONDS --socket PATH\nmynofy admin topics delete TOPIC --socket PATH\nmynofy admin topics storage TOPIC --mode manual|interval [--seconds N] [--encrypted true|false] --socket PATH\nmynofy admin content save [--topics TOPIC,TOPIC] --socket PATH\nmynofy admin status --socket PATH\nmynofy admin storage stats --socket PATH\nmynofy admin export --socket PATH [--out NEW_FILE]\nPublic-key files contain keygen JSON or a raw Base64 public key. Security mutations take effect in RAM immediately. Durable security confirmation is the default; security_storage.sync=false opts out. Export uses YAML for .yaml/.yml output files, otherwise JSON.";
+const HELP: &str = "mynofy admin peers list --socket PATH [--after ID] [--limit 1..100]\nmynofy admin peers set ID --topics TOPIC,TOPIC|--topics-json ARRAY [--identity SAN] --socket PATH\nmynofy admin peers delete|disable|enable ID --socket PATH\nmynofy admin peers revoke-certificate --certificate LEAF.pem --socket PATH\nmynofy admin peers revoke-certificate --fingerprint sha256:BASE64 --socket PATH\nmynofy admin peers revoked-certificates --socket PATH [--after FINGERPRINT] [--limit 1..100]\nmynofy admin clients list --socket PATH [--after SLOT] [--limit 1..100]\nmynofy admin clients get CLIENT --socket PATH\nmynofy admin clients add --public-key FILE --socket PATH [--valid-until UTC] [--name NAME]\nmynofy admin clients disable|enable CLIENT --socket PATH\nmynofy admin keys add CLIENT --public-key FILE --socket PATH [--valid-until UTC]\nmynofy admin keys revoke TOKEN --socket PATH\nmynofy admin acl get CLIENT TOPIC --socket PATH\nmynofy admin acl set CLIENT TOPIC --allow publish,subscribe,inspect_own|none --socket PATH\nmynofy admin topics list --socket PATH [--after TOPIC] [--limit 1..100]\nmynofy admin topics get TOPIC --socket PATH\nmynofy admin topics create|policy TOPIC --default-ttl SECONDS --max-ttl SECONDS --socket PATH\nmynofy admin topics delete TOPIC --socket PATH\nmynofy admin topics storage TOPIC --mode manual|interval [--seconds N] [--encrypted true|false] --socket PATH\nmynofy admin content save [--topics TOPIC,TOPIC|--topics-json ARRAY] --socket PATH\nmynofy admin status --socket PATH\nmynofy admin health --socket PATH\nmynofy admin content status TOPIC --socket PATH\nmynofy admin storage stats --socket PATH\nmynofy admin export --socket PATH [--out NEW_FILE]\nPublic-key files contain keygen JSON or a raw Base64 public key. Security mutations take effect in RAM immediately. Durable security confirmation is the default; security_storage.sync=false opts out. Export uses YAML for .yaml/.yml output files, otherwise JSON.";
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn export_uses_compact_json_when_pretty_output_exceeds_limit() {
+        let value =
+            serde_json::from_str(include_str!("../../../config/scenarios/unix.json")).unwrap();
+        let compact = serde_json::to_vec(&value).unwrap();
+        let path = std::path::Path::new("export.json");
+        assert_eq!(
+            crate::config_output(path, &value, compact.len()).unwrap(),
+            compact
+        );
+        assert!(crate::config_output(path, &serde_json::json!({}), 1024).is_err());
+    }
+}

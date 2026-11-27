@@ -4,6 +4,11 @@ use crate::{
     security::{Change, Reservation, Status},
 };
 impl Engine {
+    #[cfg(all(test, unix))]
+    pub(crate) fn set_security_write_gate(&self, gate: std::sync::Arc<crate::security::WriteGate>) {
+        self.security.as_ref().unwrap().set_write_gate(gate);
+    }
+
     /// Service transports confirm this fence after releasing the Engine lock.
     /// Embedders invoking synchronous Core APIs own their acknowledgement policy.
     pub(crate) fn security_confirmation(&self) -> Option<crate::security::DurabilityFence> {
@@ -24,6 +29,9 @@ impl Engine {
         Ok(())
     }
     pub(crate) fn security_reserve(&self) -> Result<Option<Reservation>> {
+        if self.shutting_down {
+            return Err(ApiError::new("service_stopping", "Owner is shutting down."));
+        }
         self.security
             .as_ref()
             .map(|journal| journal.reserve())
@@ -46,10 +54,10 @@ impl Engine {
     }
     pub(crate) fn security_client(&self, name: &str) -> Result<Client> {
         let state = self.clients.get(name).ok_or_else(ApiError::internal)?;
-        let mut keys = self
-            .keys
-            .values()
-            .filter(|key| key.client == name)
+        let mut keys = state
+            .key_tokens
+            .iter()
+            .map(|token| &self.keys[token])
             .map(|key| {
                 Ok(PublicKey {
                     algorithm: "ed25519".into(),

@@ -212,3 +212,28 @@ func TestSharedPayloadValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestBootIdentitySharedVectors(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(repoRoot(t), "protocol/conformance/sdk-v1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors struct {
+		BootIdentity []struct {
+			Name  string
+			Value *string
+			Valid bool
+		} `json:"boot_identity"`
+	}
+	if err := json.Unmarshal(raw, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range vectors.BootIdentity {
+		t.Run(row.Name, func(t *testing.T) {
+			_, err := validatedBootID(row.Value)
+			if (err == nil) != row.Valid {
+				t.Fatalf("boot identity: %v", err)
+			}
+		})
+	}
+}

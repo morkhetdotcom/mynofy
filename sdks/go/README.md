@@ -3,7 +3,7 @@
 
 The broker uses stateless polling: ACK/NACK, delivery IDs and confirmation counters have been removed. Application results are published messages. See [upgrade notes](../../docs/message-client-confirmation.md).
 
-Nativer Client ab Go 1.26 für direkte WSS- und Unix-Verbindungen. Keine CLI-
+Nativer Client ab Go 1.27.4 für direkte WSS- und Unix-Verbindungen. Keine CLI-
 Unterprozesse im SDK. Die API und das gemeinsame Protobuf-v1-Protokoll sind noch
 veränderliche Prototypen.
 
@@ -160,3 +160,5 @@ It is immutable, survives authorized key rotation and storage restore, and is
 separate from any sender or actor claim inside the payload. Match workflow roles
 to this value. This is an assertion over the protected owner connection, not a
 portable cryptographic message signature.
+
+For cursor continuity, compare `ConnectionInfo.BootID` between authenticated sessions. An empty value indicates a legacy owner.

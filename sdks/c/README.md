@@ -222,3 +222,5 @@ rejections during confirmation and commit. The connection remains available for
 an explicit next operation. A lost or invalid commit response remains an unknown
 outcome; keep both keys and verify credentials through an explicit reconnect.
 No automatic retry occurs. See [key rotation guide](../../docs/key-rotation.md).
+
+For cursor continuity, compare the value from `mynofy_client_boot_id` between authenticated sessions. This borrowed string is empty for legacy owners and is valid while the handle lives.

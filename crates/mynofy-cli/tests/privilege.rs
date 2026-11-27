@@ -1,4 +1,5 @@
 #![cfg(target_os = "linux")]
+mod support;
 use mynofy_protocol::crypto;
 use serde_json::{Value, json};
 use std::{
@@ -105,25 +106,40 @@ fn runtime_threads_and_sockets_have_only_target_privileges() {
         let data = f.dir.join("data.sock");
         let admin = f.dir.join("admin.sock");
         config["service"] = json!({"id":"local","unix_socket":data,"admin_socket":admin});
+        config["security_storage"] = json!({"directory":"security"});
         let cfg = f.dir.join("config.json");
         std::fs::write(&cfg, config.to_string()).unwrap();
-        let mut command = if !explicit && rustix::process::geteuid().is_root() {
-            // Exercise an ordinary non-root invocation too, with no retained root group.
-            let mut command = Command::new("python3");
-            let script = "import os,sys; os.setgroups([]); os.setgid(65534); os.setuid(65534); os.execv(sys.argv[1],sys.argv[1:])";
-            command.args(["-c", script, env!("CARGO_BIN_EXE_mynofy")]);
+        let command = || {
+            let mut command = if !explicit && rustix::process::geteuid().is_root() {
+                // Exercise an ordinary non-root invocation too, with no retained root group.
+                let mut command = Command::new("python3");
+                let script = "import os,sys; os.setgroups([]); os.setgid(65534); os.setuid(65534); os.execv(sys.argv[1],sys.argv[1:])";
+                command.args(["-c", script, env!("CARGO_BIN_EXE_mynofy")]);
+                command
+            } else {
+                cli()
+            };
+            if explicit {
+                command.args([
+                    "--run-as-uid",
+                    &uid.to_string(),
+                    "--run-as-gid",
+                    &gid.to_string(),
+                ]);
+            }
             command
-        } else {
-            cli()
         };
-        if explicit {
-            command.args([
-                "--run-as-uid",
-                &uid.to_string(),
-                "--run-as-gid",
-                &gid.to_string(),
-            ]);
-        }
+        let setup = command()
+            .args(["security-init", "--config"])
+            .arg(&cfg)
+            .output()
+            .unwrap();
+        assert!(
+            setup.status.success(),
+            "{}",
+            String::from_utf8_lossy(&setup.stderr)
+        );
+        let mut command = command();
         let child = command
             .args(["serve", "--config"])
             .arg(&cfg)
@@ -134,7 +150,9 @@ fn runtime_threads_and_sockets_have_only_target_privileges() {
         let pid = child.id();
         f.child = Some(child);
         let deadline = Instant::now() + Duration::from_secs(5);
-        while !admin.exists() {
+        // The admin listener is bound before the data listener. Each path
+        // becomes visible before bind_unix finishes setting its permissions.
+        while !(support::unix_socket_ready(&data) && support::unix_socket_ready(&admin)) {
             let child = f.child.as_mut().unwrap();
             if let Some(status) = child.try_wait().unwrap() {
                 panic!(
@@ -153,7 +171,10 @@ fn runtime_threads_and_sockets_have_only_target_privileges() {
                     )
                 );
             }
-            assert!(Instant::now() < deadline, "startup timed out");
+            assert!(
+                Instant::now() < deadline,
+                "startup timed out waiting for both Unix sockets at mode 0600"
+            );
             std::thread::sleep(Duration::from_millis(10));
         }
         for socket in [&data, &admin] {

@@ -284,3 +284,45 @@ func TestSharedReplySemantics(t *testing.T) {
 		})
 	}
 }
+
+func TestMalformedPollClosesBeforeAnotherCommandCanSend(t *testing.T) {
+	started, release := make(chan struct{}), make(chan struct{})
+	c := faultClient(t, func(conn *websocket.Conn) {
+		f, err := receive(conn)
+		if err != nil || f.GetPoll() == nil {
+			t.Errorf("expected poll: %v", err)
+			return
+		}
+		close(started)
+		<-release
+		reply := frameFor("messages", &pb.Messages{
+			RequestId: f.GetPoll().Id, NextCursor: proto.String("broken"), HasMore: proto.Bool(false),
+		})
+		data, err := proto.Marshal(reply)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_ = conn.Write(context.Background(), websocket.MessageBinary, data)
+		if _, err = receive(conn); err == nil {
+			t.Error("command sent after invalid poll")
+		}
+	})
+	result := make(chan error, 1)
+	go func() {
+		_, err := c.Poll(context.Background(), topic, "", 20)
+		result <- err
+	}()
+	<-started
+	_, busy := c.Publish(context.Background(), topic, Bytes([]byte("mutate"), ""), nil)
+	close(release)
+	if !errors.Is(busy, ErrBusy) {
+		t.Fatalf("expected busy: %v", busy)
+	}
+	if err := <-result; err == nil {
+		t.Fatal("accepted invalid poll cursor")
+	}
+	if _, err := c.Publish(context.Background(), topic, Bytes([]byte("mutate"), ""), nil); !errors.Is(err, ErrClosed) {
+		t.Fatalf("expected closed: %v", err)
+	}
+}

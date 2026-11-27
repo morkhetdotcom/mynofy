@@ -114,7 +114,13 @@ final class Fixture implements AutoCloseable {
       cfg.getAsJsonObject("limits").addProperty("client_burst", 1000);
       cfg.getAsJsonObject("limits").addProperty("client_requests_per_second", 1000);
       Path file = dir.resolve("config.json");
+      var security = new com.google.gson.JsonObject();
+      security.addProperty("directory", "security");
+      cfg.add("security_storage", security);
       Files.writeString(file, cfg.toString());
+      var init = new ProcessBuilder(binary.toString(), "security-init", "--config", file.toString())
+          .inheritIO().start();
+      if (init.waitFor() != 0) throw new IOException("Security store initialization failed");
       process =
           new ProcessBuilder(binary.toString(), "serve", "--config", file.toString())
               .redirectOutput(ProcessBuilder.Redirect.DISCARD)

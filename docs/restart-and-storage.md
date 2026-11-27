@@ -4,7 +4,7 @@
 
 `service.id` bleibt die dauerhafte Identität; es gibt keine zusätzliche Instanz-ID. Der Dienst lädt den Security-Speicher, erhöht dessen `restart_counter: u32` mit Umlauf und synchronisiert den neuen Stand, bevor ein Listener Clients annehmen kann. Fehlgeschlagene Starts dürfen Werte verbrauchen. Ein Fehler bei diesem Speicherschritt bricht den Start ab. Normale Security-Änderungen bleiben wie bisher asynchron; der Startzähler ist die ausdrücklich beschlossene synchrone Ausnahme.
 
-Der Zähler liegt im vorhandenen Security-Snapshot. Ältere Snapshots ohne Feld beginnen beim ersten aktualisierten Start mit 1. Beim Überlauf folgt auf 4294967295 die 0. Clients prüfen **Ungleichheit**, nicht Größenordnung. Nach exakt 2^32 unbeobachteten Starts bleibt der Wert mehrdeutig. Ein direkter eingebetteter `Engine` ohne Security-Backend bleibt dateifrei und verwendet 0; für dauerhafte Neustarterkennung das Security-Backend konfigurieren. `Config::load` aktiviert es für den CLI-Dienst ohnehin.
+Der Zähler liegt im vorhandenen Security-Snapshot. Ältere Snapshots ohne Feld beginnen beim ersten aktualisierten Start mit 1. Beim Überlauf folgt auf 4294967295 die 0. Clients prüfen **Ungleichheit**, nicht Größenordnung. Nach exakt 2^32 unbeobachteten Starts bleibt der Wert mehrdeutig. Ein direkter eingebetteter `Engine` ohne Security-Backend bleibt dateifrei und verwendet 0; für dauerhafte Neustarterkennung das Security-Backend konfigurieren. Die CLI verlangt für `serve` einen expliziten, bereits initialisierten Security-Store.
 
 Auth-Welcome enthält jetzt:
 
@@ -12,13 +12,23 @@ Auth-Welcome enthält jetzt:
 {"version":1,"type":"auth_welcome","request_id":"auth-proof","client_id":"client:ed25519:…","service_id":"local","restart_counter":12}
 ```
 
-Der Admin-Status liefert denselben Zähler. Er erscheint nicht in jedem Nachrichtenrecord oder Cursor. Das achtstellige Cursorformat bleibt unverändert. Im Protobuf ist das Feld optional repräsentiert, um fehlende Werte von gültiger 0 unterscheiden zu können; der Client verlangt beim Authentifizieren ausdrücklich seine Anwesenheit. Server und Clients gemeinsam aktualisieren.
+Der Admin-Status liefert denselben Zähler. Aktuelle Owner senden im
+`AuthWelcome` zusätzlich eine zufällige 128-Bit-`boot_id`, die bei jedem
+Start neu entsteht und außerhalb der gespeicherten Snapshots liegt.
+Gespeicherte Cursor verwenden diese Kennung zur Fortsetzung. Ein Restore
+kann den Zähler wiederholen und erhält dennoch eine frische Boot-ID. Er erscheint nicht in jedem Nachrichtenrecord oder Cursor. Das achtstellige Cursorformat bleibt unverändert. Im Protobuf ist das Feld optional repräsentiert, um fehlende Werte von gültiger 0 unterscheiden zu können; der Client verlangt beim Authentifizieren ausdrücklich seine Anwesenheit. Server und Clients gemeinsam aktualisieren.
 
 ## Client-Fortschritt und Replay
 
 Der verwaltete SDK-Client `mynofy_client::progress::RestartClient` erhält eine authentifizierte Verbindung, deren Welcome und einen `ClientProgress`. `connect_client_info` beziehungsweise `connect_unix_client_info` liefern Socket und Welcome zusammen. Fortschritt ist an Service-ID und stabile Client-ID gebunden; die Anwendung bewahrt ihn für den nächsten Verbindungsaufbau auf.
 
-Bei geändertem Counter werden gespeicherte Topic-Cursor verworfen. Der erste erfolgreiche Poll je Topic startet ohne bisherigen Cursor, auch wenn der Aufrufer einen alten, noch syntaktisch gültigen Cursor übergibt. Ein abgewiesener Poll verbraucht diesen Replay nicht. `poll(topic, limit)` verwendet danach den aktualisierten eigenen Fortschritt. Legacy confirmation records are discarded when loading content. Nachrichten dürfen erneut erscheinen; automatische Neuveröffentlichung, erneute Ausführung oder genau einmalige Verarbeitung werden daraus nicht abgeleitet.
+Bei geänderter Boot-ID werden gespeicherte Topic-Cursor verworfen. Eine
+bereits gebundene Fortschrittsdatei aus einer älteren Version wird bei der
+ersten Verbindung mit einem aktuellen Owner zurückgesetzt. Bei älteren
+Ownern ohne Boot-ID greift der bisherige Zähler. Nach einem Restore mit
+älterem Owner oder älterem Client gespeicherte Positionen ausdrücklich
+verwerfen. Anwendungen mit eigener Cursor-Verwaltung vergleichen beim
+Verbindungsaufbau die Boot-ID. Der erste erfolgreiche Poll je Topic startet ohne bisherigen Cursor, auch wenn der Aufrufer einen alten, noch syntaktisch gültigen Cursor übergibt. Ein abgewiesener Poll verbraucht diesen Replay nicht. `poll(topic, limit)` verwendet danach den aktualisierten eigenen Fortschritt. Legacy confirmation records are discarded during offline migration. Nachrichten dürfen erneut erscheinen; automatische Neuveröffentlichung, erneute Ausführung oder genau einmalige Verarbeitung werden daraus nicht abgeleitet.
 
 Die bisherigen Funktionen `connect_client`, `connect_unix_client`, `exchange` und `exchange_frame` bleiben direkte Socket-APIs ohne verwalteten Fortschritt. Ein Wrapper ist nötig, damit kein globaler unbeschränkter Zustand pro Owner/Client entsteht. Er begrenzt den eigenen Fortschritt auf 10.000 Topics. Es gibt keinen automatischen Verbindungs-/Command-Retry.
 
@@ -29,7 +39,7 @@ mynofy client --socket run/mynofy.sock --key client.pk8 --owner local \
   --progress .local/client-progress.json
 ```
 
-Alternativ dieselbe Option beim WSS-Client verwenden. JSONL-Requests und Antworten bleiben gleich. Die Fortschrittsdatei enthält Owner, Client-ID, Counter und Cursor, keine Credentials. Privates reguläres File, No-Follow, Verzeichnisprüfung, exklusives Lock, begrenztes Einlesen und atomare synchronisierte Ersetzung schützen den Zustand. Parallelverwendung derselben Fortschrittsdatei wird abgewiesen. Auch ein noch ausstehender Cursor-Reset bleibt über einen Client-Abbruch hinweg gespeichert. Nach einer Poll-Antwort schreibt die CLI den Fortschritt erst nach erfolgreichem stdout-Flush; eine atomare Verbindung zur Verarbeitung durch den Empfänger entsteht dadurch nicht. Ohne `--progress` bleibt der bisherige direkte CLI-Modus erhalten. Der Adapter beginnt ohnehin ohne Cursor und bleibt ohne dauerhaften Workflow-Checkpoint.
+Alternativ dieselbe Option beim WSS-Client verwenden. JSONL-Requests und Antworten bleiben gleich. Die Fortschrittsdatei enthält Owner, Client-ID, Counter, Boot-ID und Cursor, keine Credentials. Privates reguläres File, No-Follow, Verzeichnisprüfung, exklusives Lock, begrenztes Einlesen und atomare synchronisierte Ersetzung schützen den Zustand. Die generische JSONL-CLI setzt beim Poll am selben Owner den gespeicherten Cursor nur ein, wenn der Aufrufer ihn als `after` übergibt. Verwende dazu den letzten `next_cursor` des Topics. Fehlt `after`, beginnt der Poll am Anfang der verfügbaren Historie. `RestartClient::poll` ergänzt den gespeicherten Cursor eigenständig. Parallelverwendung derselben Fortschrittsdatei wird abgewiesen. Auch ein noch ausstehender Cursor-Reset bleibt über einen Client-Abbruch hinweg gespeichert. Geänderten Poll-Fortschritt schreibt die CLI erst nach erfolgreichem stdout-Flush; unveränderte Antworten lösen keinen Dateitausch aus; eine atomare Verbindung zur Verarbeitung durch den Empfänger entsteht dadurch nicht. Ohne `--progress` bleibt der bisherige direkte CLI-Modus erhalten. Der Adapter beginnt ohnehin ohne Cursor und bleibt ohne dauerhaften Workflow-Checkpoint.
 
 ## RAM → Storage im laufenden Dienst
 
@@ -54,6 +64,12 @@ mynofy admin status --socket run/mynofy-admin.sock
 
 Nur RAM → manual/interval ist online erlaubt. Weitere Storage-/Parameterwechsel und Storage → RAM werden online abgewiesen. Während eines laufenden Saves wird die Aktivierung ebenfalls abgewiesen, um keine widersprüchlichen erfassten Strategien zu erhalten. Der normale Save-Status unterscheidet weiterhin Queue-Annahme und dauerhaften Abschluss. Es gibt keine automatische CFG-Rückschreibung.
 
+Vor dem Wiederanlauf prüft `mynofy check-config --config config.yaml`
+die statische `serve`-Konfiguration einschließlich explizitem Security-Pfad
+und Store-ID für Content. Eine ältere Datei mit implizitem Security-Pfad kann
+`config-convert` weiterhin einlesen. Dateibindungen, Journal, Schlüssel und
+Listener werden erst bei den jeweiligen Betriebsbefehlen geprüft.
+
 ## Offline-Werkzeuge
 
 Alle folgenden Kommandos öffnen keine Listener. Sie halten das Content-Lock und das bestehende Security-Lock; bei laufendem Dienst scheitern sie. Der Security-Zähler wird dabei nicht erhöht. Sicherheitszustand, Schlüsselwiderrufe und ACLs werden nicht aus einem Inhaltsbackup ersetzt. Vorhandene Security-Journale werden wie beim Start gelesen; ein abgerissener letzter Record darf nach der bestehenden Recovery-Regel gekürzt werden.
@@ -68,7 +84,7 @@ mynofy storage cleanup --config config.yaml
 
 `inspect` ergänzt Topic-Metadaten ohne Payloads; `cleanup` entfernt nach erfolgreicher Prüfung nur verwaiste interne Slots und Staging-Dateien. Einzelheiten und [gezielte Abbruchtests](storage-interruption-tests.md).
 
-Liest, entschlüsselt und prüft Manifest, alle referenzierten Topic-Abbilder, Owner-/Clientbindungen, Vergabemetadaten und aktive konfigurierte Quoten. Liefert eine kleine JSON-Zusammenfassung. Fehlende, defekte oder inkompatible Daten werden nicht als gültiger Leerstand behandelt. Alte einzelne Owner-Checkpoints zunächst durch einen regulären Start in das Topic-Format migrieren.
+Liest, entschlüsselt und prüft Manifest, alle referenzierten Topic-Abbilder, Owner-/Clientbindungen, Vergabemetadaten und aktive konfigurierte Quoten. Liefert eine kleine JSON-Zusammenfassung. Fehlende, defekte oder inkompatible Daten werden nicht als gültiger Leerstand behandelt. Alte einzelne Owner-Checkpoints vom Format `MYNCP001` mit `storage preview-legacy --config config.yaml` prüfen und anschließend mit `storage migrate-legacy --config config.yaml` ins Topic-Format überführen.
 
 ### Backup
 
@@ -154,3 +170,36 @@ Offline `topic-ram` keeps the shared producer registry referenced by untouched
 topic files, including producers whose messages have expired. This preserves
 other topics' ability to reopen and bind messages to their original producers;
 it does not re-enable credentials or grant permissions.
+
+
+Die CLI meldet `listening on …` erst nach dem Binden des Datenlisteners
+und des konfigurierten Admin-Sockets. Ein Neustartzähler-Sprung bestätigt
+die persistente Vorbereitung und kann auch bei späterem Bindefehler auftreten.
+
+
+Die verwaltete CLI-Fortschrittsdatei ist auf 4 MiB codiertes JSON begrenzt.
+Escaping langer Topic-Namen kann diese Grenze bereits vor 10.000 Cursor-Einträgen
+erreichen. Überschreitet ein neuer Cursor das Budget, beendet die CLI den Poll
+mit einem Fehler vor der stdout-Ausgabe und behält die bisherige Datei.
+
+
+### Rückwechsel auf eine ältere CLI
+
+Eine aktuelle verwaltete CLI speichert die Boot-ID mit dem Cursor. Die
+CLI aus v0.1.0 kann eine Datei mit diesem Feld nicht laden.
+Beim Rückwechsel einen neuen, bisher unbenutzten `--progress`-Pfad angeben
+und den ersten Poll ohne `after` ausführen. Die bisherige Datei kann für
+die aktuelle CLI erhalten bleiben. Bereits ausgeführte Fachschritte
+anhand des eigenen dauerhaften Workflow-Zustands abgleichen.
+
+### Kapazitätsprofil der Fortschrittsdatei
+
+Eine Cursoränderung schreibt und synchronisiert das ganze Register. Die
+Kosten wachsen mit der codierten Datei und der Latenz des lokalen
+Dateisystems. Der Review maß für 20 Einzelseiten im Median 152 ms mit
+einem gespeicherten Cursor und 268 ms mit 6.001 Cursorn
+(rund 1,5 MiB). Jeweils drei lokale Release-Läufe einschließlich
+Prozessstart und Broker-I/O. Bei vielen Topics dieses Profil am
+Zieldatenträger messen. Getrennte Fortschrittsdateien können getrennte
+Topic-Sets abbilden. Die CLI prüft das Bytebudget vor stdout und
+veröffentlicht die Datei erst nach erfolgreichem Flush.

@@ -31,6 +31,7 @@ cfg['security_storage']={'directory':'security'}
 (demo/'rules.json').write_text(json.dumps(rule,indent=2)+'\n')
 PY
 cargo run --quiet --locked -- config-convert --config "$demo_dir/config-seed.json" --out "$demo_dir/config.yaml"
+cargo run --quiet --locked -- security-init --config "$demo_dir/config.yaml"
 rm -- "$demo_dir/config-seed.json"
 printf 'Adapter scenario created in %s\n' "$demo_dir"
 printf 'Server: cargo run --locked -- serve --config .local/adapter/config.yaml\n'

@@ -1184,6 +1184,8 @@ fn direct_output_matches_generated_codec_across_pages_and_errors() {
 fn expired_index_scans_are_bounded_and_empty_pages_advance_both_cursors() {
     let mut f = fixture();
     f.cfg.limits.max_active_messages = 3000;
+    f.cfg.limits.max_topic_active_messages = Some(f.cfg.limits.max_active_messages);
+    f.cfg.limits.max_publisher_active_messages = Some(f.cfg.limits.max_active_messages);
     f.cfg.limits.client_burst = 10000;
     f.cfg.topics[0].policy.as_mut().unwrap().default_ttl_seconds = 1;
     let producer = f.ids[0].clone();
@@ -1624,6 +1626,7 @@ impl SecurityDirectory {
             .create(&path)
             .unwrap();
         config.security_storage = Some(SecurityStorage {
+            minimum_sequence: None,
             sync: false,
             directory: path.clone(),
             queue_capacity: capacity,
@@ -1852,9 +1855,11 @@ fn content_fixture(f: &mut Fixture, mode: ContentEncryption) -> SecurityDirector
         }
     }
     f.cfg.content_storage = Some(ContentStorage {
+        store_id: None,
         directory: directory.0.join("content"),
         encryption: mode,
         max_snapshot_bytes: 128 * 1024 * 1024,
+        autosave_retry: Default::default(),
     });
     directory
 }
@@ -2356,7 +2361,7 @@ fn topic_storage_configuration_is_strict_and_corrupt_or_missing_topic_files_abor
 
 #[cfg(unix)]
 #[test]
-fn legacy_owner_checkpoint_migrates_at_start_with_explicit_topic_policies() {
+fn legacy_owner_checkpoint_requires_validated_offline_migration() {
     use crate::content::{Checkpoint, checkpoint::TopicState};
     let mut f = fixture();
     let directory = content_fixture(&mut f, ContentEncryption::None);
@@ -2396,8 +2401,40 @@ fn legacy_owner_checkpoint_migrates_at_start_with_explicit_topic_policies() {
     for topic in &mut unspecified.topics {
         topic.storage = TopicStorage::Ram {};
     }
-    assert!(Engine::new(unspecified, NOW).is_err());
-    assert!(std::fs::read(&path).unwrap().starts_with(b"MYNCP001"));
+    let original = std::fs::read(&path).unwrap();
+    assert!(Engine::new(f.cfg.clone(), NOW).is_err());
+    assert!(
+        crate::content::offline::OfflineStorage::migrate_legacy(unspecified, None, false).is_err()
+    );
+    let content_lock = directory.0.join("content/lock");
+    let lock_before = std::fs::read(&content_lock).unwrap();
+    let journal = f
+        .cfg
+        .security_storage
+        .as_ref()
+        .unwrap()
+        .directory
+        .join("journal");
+    let original_journal = std::fs::read(&journal).unwrap();
+    let mut torn = original_journal.clone();
+    torn.push(b'M');
+    std::fs::write(&journal, &torn).unwrap();
+    let error = crate::content::offline::OfflineStorage::migrate_legacy(f.cfg.clone(), None, true)
+        .unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("Incomplete final security journal frame")
+    );
+    assert_eq!(std::fs::read(&journal).unwrap(), torn);
+    assert_eq!(std::fs::read(&content_lock).unwrap(), lock_before);
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    std::fs::write(&journal, &original_journal).unwrap();
+    let preview =
+        crate::content::offline::OfflineStorage::migrate_legacy(f.cfg.clone(), None, true).unwrap();
+    assert_eq!(preview["topics"][0]["messages"], 1);
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+    crate::content::offline::OfflineStorage::migrate_legacy(f.cfg.clone(), None, false).unwrap();
     let mut e = Engine::new(f.cfg, NOW).unwrap();
     assert!(std::fs::read(&path).unwrap().starts_with(b"MYNTOP01"));
 
@@ -2462,6 +2499,14 @@ fn online_ram_to_storage_requires_save_and_includes_preexisting_messages() {
     e.enable_topic_storage("local/events", TopicStorage::Manual { encrypted: false })
         .unwrap();
     assert!(e.content_status().topics["local/events"].dirty);
+    let page = e.admin_topics_list(None, Some(1), NOW).unwrap();
+    assert_eq!(page["items"][0]["storage"]["mode"], "manual");
+    assert_eq!(page["next_after"], "local/events");
+    assert_eq!(
+        e.admin_topics_list(Some("local/events".into()), Some(1), NOW)
+            .unwrap()["items"][0]["storage"]["mode"],
+        "ram"
+    );
     assert!(
         e.enable_topic_storage("local/events", TopicStorage::Ram {})
             .is_err()
@@ -2491,6 +2536,10 @@ fn online_ram_to_storage_requires_save_and_includes_preexisting_messages() {
     drop(e);
     let mut e = Engine::new(f.cfg, NOW).unwrap();
     assert!(e.config.topics[0].storage.persistent());
+    assert_eq!(
+        e.admin_topic("local/events", NOW).unwrap()["storage"]["mode"],
+        "manual"
+    );
     let session = auth(&mut e, &f.keys[0], NOW);
     assert_eq!(
         poll(&mut e, session, None, 20, NOW)["items"][0]["message"]["payload"],
@@ -3061,6 +3110,131 @@ fn topic_slot_remap_keeps_existing_confirmation_references_and_recreated_topic_c
         later,
     );
     assert_eq!(page["items"][0]["message"]["payload"], "new", "{page}");
+}
+
+#[test]
+fn equivalent_certificate_identities_are_rejected_in_static_and_runtime_peer_policy() {
+    use crate::admin::Command as A;
+
+    for (first, second) in [
+        ("Edge.Example", "edge.example"),
+        ("edge.example", "EDGE.EXAMPLE."),
+        ("2001:db8::1", "2001:0db8:0:0:0:0:0:1"),
+    ] {
+        let mut cfg = fixture().cfg;
+        let peer = Peer {
+            service_id: first.into(),
+            certificate_identity: None,
+            topics: vec!["local/events".into()],
+        };
+        let duplicate = Peer {
+            service_id: "other-peer".into(),
+            certificate_identity: Some(second.into()),
+            topics: peer.topics.clone(),
+        };
+        cfg.accepted_peers = vec![peer.clone()];
+        let mut e = Engine::new(cfg.clone(), NOW).unwrap();
+        cfg.accepted_peers.push(duplicate.clone());
+        assert_eq!(
+            cfg.validate().unwrap_err(),
+            DUPLICATE_PEER_CERTIFICATE_IDENTITY
+        );
+        let revision = *e.link_changes.borrow();
+        let error = e
+            .admin(
+                A::PeerSet {
+                    peer: duplicate.clone(),
+                },
+                NOW,
+            )
+            .err()
+            .expect("duplicate peer must be rejected");
+        assert_eq!(error.code, "invalid_request");
+        assert_eq!(error.detail, DUPLICATE_PEER_CERTIFICATE_IDENTITY);
+        assert_eq!(*e.link_changes.borrow(), revision);
+        assert_eq!(e.config.accepted_peers, vec![peer]);
+
+        let mut distinct = duplicate;
+        distinct.certificate_identity = Some("distinct.example".into());
+        e.admin(A::PeerSet { peer: distinct }, NOW).unwrap();
+    }
+}
+
+#[test]
+fn large_peer_allowlists_validate_independently_of_topic_order() {
+    let mut cfg = fixture().cfg;
+    let mut topic = cfg.topics[0].clone();
+    topic.acl = Some(Vec::new());
+    cfg.topics = (0..10_000)
+        .map(|i| crate::config::Topic {
+            name: format!("topic/{i}"),
+            ..topic.clone()
+        })
+        .collect();
+    let topics = cfg.topics[9750..]
+        .iter()
+        .map(|t| t.name.clone())
+        .collect::<Vec<_>>();
+    cfg.accepted_peers = (0..120)
+        .map(|i| Peer {
+            service_id: format!("peer-{i}"),
+            certificate_identity: None,
+            topics: topics.clone(),
+        })
+        .collect();
+    cfg.validate().unwrap();
+    cfg.topics.reverse();
+    cfg.validate().unwrap();
+    cfg.accepted_peers[119].topics[249] = "unknown".into();
+    assert!(cfg.validate().is_err());
+}
+
+#[test]
+fn upstream_configuration_validates_endpoint_without_network_access() {
+    let mut cfg = fixture().cfg;
+    let mut upstream = Upstream {
+        service_id: "upstream".into(),
+        url: String::new(),
+        trust: Trust {
+            mode: "ca".into(),
+            ca_file: "unused-ca.pem".into(),
+            expected_certificate_identity: "upstream.example".into(),
+        },
+    };
+    for url in [
+        "wss:///path",
+        "wss://",
+        "ws://upstream.example",
+        "wss://:443",
+        "wss://upstream.example:",
+        "wss://upstream.example:bad",
+        "wss://upstream.example:0",
+        "wss://upstream.example:65536",
+        "wss://[example]:443",
+        "wss://[::1]:65536",
+        "wss://person@upstream.example",
+        "wss://upstream.example/path#fragment",
+    ] {
+        upstream.url = url.into();
+        cfg.upstream = Some(upstream.clone());
+        assert_eq!(
+            cfg.validate().unwrap_err(),
+            "Invalid upstream WebSocket URL",
+            "{url}"
+        );
+    }
+    for (url, port) in [
+        ("wss://upstream.invalid", 443),
+        ("wss://upstream.invalid:8443/path?q=1", 8443),
+        ("wss://127.0.0.1:65535", 65535),
+        ("wss://[::1]", 443),
+        ("wss://[2001:db8::1]:8443", 8443),
+    ] {
+        upstream.url = url.into();
+        cfg.upstream = Some(upstream.clone());
+        cfg.validate().unwrap_or_else(|e| panic!("{url}: {e}"));
+        assert_eq!(upstream.endpoint().unwrap().1, port);
+    }
 }
 
 #[test]
@@ -4240,12 +4414,42 @@ fn captured_content_is_an_owned_epoch_across_live_expiry_reuse_and_registry_chan
 fn selected_save_ignores_large_ram_topics_and_never_writes_their_content() {
     let mut f = fixture();
     let directory = content_fixture(&mut f, ContentEncryption::None);
+    f.cfg.topics[0].storage = TopicStorage::Interval {
+        seconds: 60,
+        encrypted: false,
+    };
     f.cfg.topics[1].storage = TopicStorage::Ram {};
     f.cfg.content_storage.as_mut().unwrap().max_snapshot_bytes = 65536;
     f.cfg.limits.client_burst = 1000;
+    f.cfg.limits.max_content_working_bytes = 2 * 1024 * 1024;
     let mut e = Engine::new(f.cfg.clone(), NOW).unwrap();
     let session = auth(&mut e, &f.keys[0], NOW);
     let original = publish(&mut e, session, json!("small persistent message"), NOW);
+    let status = e
+        .admin(
+            crate::admin::Command::ContentTopicStatus {
+                topic: "local/events".into(),
+            },
+            NOW,
+        )
+        .unwrap();
+    let crate::admin::ResultBody::Data(status) = status else {
+        panic!("expected topic details")
+    };
+    assert_eq!(
+        status,
+        serde_json::to_value(&e.content_status().topics["local/events"]).unwrap()
+    );
+    assert!(status["dirty"].as_bool().unwrap());
+    assert!(
+        e.admin(
+            crate::admin::Command::ContentTopicStatus {
+                topic: "other".into()
+            },
+            NOW,
+        )
+        .is_err()
+    );
     let marker = b"PRIVATE-RAM-TOPIC-MARKER";
     let mut bytes = vec![b'x'; 4096];
     bytes[..marker.len()].copy_from_slice(marker);
@@ -4275,6 +4479,16 @@ fn selected_save_ignores_large_ram_topics_and_never_writes_their_content() {
     wait_content(&e, |status| !status.save_in_progress);
     assert_eq!(e.content_status().saved_revision, revision);
     assert!(e.content_status().last_error.is_none());
+    assert_eq!(
+        publish(&mut e, session, json!("small autosaved message"), NOW)["type"],
+        "result"
+    );
+    e.content.as_mut().unwrap().force_due();
+    e.maintenance(NOW);
+    wait_content(&e, |status| {
+        status.saved_revision > revision && !status.save_in_progress
+    });
+    assert!(e.content_status().last_error.is_none());
     for entry in std::fs::read_dir(directory.0.join("content")).unwrap() {
         let p = entry.unwrap().path();
         if p.is_file() {
@@ -4284,7 +4498,7 @@ fn selected_save_ignores_large_ram_topics_and_never_writes_their_content() {
     }
     drop(e);
     let mut restored = Engine::new(f.cfg, NOW).unwrap();
-    assert_eq!(restored.records.len(), 1);
+    assert_eq!(restored.records.len(), 2);
     let session = auth(&mut restored, &f.keys[0], NOW);
     assert_eq!(
         get(
@@ -4569,4 +4783,645 @@ fn empty_ram_topic_names_do_not_consume_disk_budget_in_both_capture_paths() {
         .map(|p| std::fs::metadata(p).unwrap().len())
         .sum();
     assert!(total <= 65536, "{total}");
+}
+
+#[cfg(unix)]
+#[test]
+fn topic_encryption_conflicts_require_an_offline_rewrite() {
+    use crate::content::{ContentSecret, offline::OfflineStorage};
+    let now = crate::transport::now_ms();
+    let mut f = fixture();
+    for client in &mut f.cfg.clients {
+        for key in &mut client.keys {
+            key.valid_until = protocol::timestamp(now + 86_400_000).unwrap();
+        }
+    }
+    let directory = content_fixture(&mut f, ContentEncryption::KeyStdin);
+    let secret = || Some(ContentSecret::Key(Zeroizing::new([7; 32])));
+    let mut e = Engine::new_with_content_secret(f.cfg.clone(), now, secret()).unwrap();
+    let session = auth(&mut e, &f.keys[0], now);
+    assert_eq!(
+        publish(&mut e, session, json!("migrate"), now)["type"],
+        "result"
+    );
+    let revision = e.save_content().unwrap();
+    wait_content(&e, |status| status.saved_revision == revision);
+    drop(e);
+
+    let backup = directory.0.join("backup");
+    OfflineStorage::open(f.cfg.clone(), secret())
+        .unwrap()
+        .backup(&backup)
+        .unwrap();
+    let manifest = directory.0.join("content/state.bin");
+    for encrypted in [false, true] {
+        f.cfg
+            .topics
+            .iter_mut()
+            .find(|topic| topic.name == "local/events")
+            .unwrap()
+            .storage = TopicStorage::Manual { encrypted };
+        let before = std::fs::read(&manifest).unwrap();
+        assert!(Engine::new_with_content_secret(f.cfg.clone(), now, secret()).is_err());
+        assert!(OfflineStorage::open_for_restore(f.cfg.clone(), secret()).is_err());
+        assert_eq!(std::fs::read(&manifest).unwrap(), before);
+        let mut store = OfflineStorage::open(f.cfg.clone(), secret()).unwrap();
+        store.migrate_topic_encryption("local/events").unwrap();
+        drop(store);
+        let e = Engine::new_with_content_secret(f.cfg.clone(), now, secret()).unwrap();
+        assert_eq!(e.records.len(), 1);
+        assert_eq!(
+            e.config
+                .topics
+                .iter()
+                .find(|topic| topic.name == "local/events")
+                .unwrap()
+                .storage
+                .encrypted(),
+            encrypted
+        );
+        drop(e);
+        if !encrypted {
+            let before = std::fs::read(&manifest).unwrap();
+            let mut store = OfflineStorage::open_for_restore(f.cfg.clone(), secret()).unwrap();
+            let error = store.restore(&backup).unwrap_err();
+            assert!(error.to_string().contains("encryption differs"));
+            assert_eq!(std::fs::read(&manifest).unwrap(), before);
+        }
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn committed_save_reports_and_retries_old_slot_cleanup() {
+    let mut f = fixture();
+    let directory = content_fixture(&mut f, ContentEncryption::None);
+    let mut e = Engine::new(f.cfg, NOW).unwrap();
+    let session = auth(&mut e, &f.keys[0], NOW);
+    publish(&mut e, session, json!("first"), NOW);
+    let revision = e.save_content().unwrap();
+    wait_content(&e, |s| s.saved_revision == revision && !s.save_in_progress);
+
+    let old_file = std::fs::read_dir(directory.0.join("content"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .find(|path| {
+            path.file_name()
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .starts_with("topic-")
+        })
+        .unwrap();
+    // A directory at the old slot path makes unlink fail without special privileges.
+    std::fs::remove_file(&old_file).unwrap();
+    std::fs::create_dir(&old_file).unwrap();
+    publish(&mut e, session, json!("second"), NOW);
+    let revision = e.save_content().unwrap();
+    wait_content(&e, |s| s.saved_revision == revision && !s.save_in_progress);
+    let status = e.content_status();
+    assert!(status.last_error.is_none());
+    assert!(status.cleanup_error.is_some());
+
+    std::fs::remove_dir(&old_file).unwrap();
+    std::fs::write(&old_file, b"unreferenced slot awaiting cleanup").unwrap();
+    wait_content(&e, |s| s.cleanup_error.is_none());
+    assert!(!old_file.exists());
+    assert_eq!(e.content_status().saved_revision, revision);
+}
+
+#[test]
+fn publisher_and_topic_budgets_isolate_other_topics_and_reclaim_on_expiry() {
+    let mut f = fixture();
+    f.cfg.limits.max_active_messages = 4;
+    let mut e = Engine::new(f.cfg, NOW).unwrap();
+    let publisher = e.clients[&f.ids[0]].slot;
+    let independent = e.clients[&f.ids[1]].slot;
+    for _ in 0..2 {
+        e.publish_typed(
+            publisher,
+            "p",
+            "local/events",
+            Payload::bytes(vec![1], None),
+            Some(protocol::Expires {
+                time: protocol::timestamp(NOW + 1000).unwrap(),
+            }),
+            NOW,
+        )
+        .unwrap();
+    }
+    let payload = || Payload::bytes(vec![2], None);
+    let denied = e
+        .publish_typed(publisher, "p", "local/events", payload(), None, NOW)
+        .unwrap_err();
+    assert_eq!(denied.code, "resource_exhausted");
+    let other = e.publish_typed(independent, "p", "other", payload(), None, NOW);
+    assert!(other.is_ok(), "{other:?}");
+    e.maintenance(NOW + 1000);
+    e.publish_typed(publisher, "p", "local/events", payload(), None, NOW + 1000)
+        .unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn sparse_worker_projection_keeps_only_selected_payloads_from_capture_epoch() {
+    let mut f = fixture();
+    let _store = content_fixture(&mut f, ContentEncryption::None);
+    f.cfg.topics[1].storage = TopicStorage::Ram {};
+    let mut e = Engine::new(f.cfg, NOW).unwrap();
+    let producer = e.clients[&f.ids[0]].slot;
+    for _ in 0..300 {
+        for (topic, byte) in [("local/events", 7), ("other", 9)] {
+            e.publish_typed(
+                producer,
+                "p",
+                topic,
+                Payload::bytes(vec![byte; 256], Some(format!("application/t{byte}"))),
+                Some(protocol::Expires {
+                    time: protocol::timestamp(NOW + 1000).unwrap(),
+                }),
+                NOW,
+            )
+            .unwrap();
+        }
+    }
+    let selection = [(
+        "local/events".into(),
+        TopicStorage::Manual { encrypted: false },
+    )];
+    e.content.as_ref().unwrap().reserve().unwrap();
+    let snapshot = e.capture_content(&selection).unwrap();
+    assert_eq!(snapshot.indices.as_ref().unwrap().len(), 300);
+    let first = e.records.iter().next().unwrap().id().to_string();
+
+    for _ in 0..16 {
+        e.maintenance(NOW + 1000);
+    }
+    assert_eq!(e.records.len(), 0);
+    e.publish_typed(
+        producer,
+        "p",
+        "local/events",
+        Payload::bytes(vec![3; 256], None),
+        None,
+        NOW + 1000,
+    )
+    .unwrap();
+
+    let projected = snapshot.finish(&selection, 128 * 1024 * 1024).unwrap();
+    assert_eq!(projected.image.message_count(), 300);
+    let message = projected.image.message(&first).unwrap();
+    assert_eq!(
+        message.payload.content_type.as_deref(),
+        Some("application/t7")
+    );
+    assert_eq!(
+        message.payload,
+        Payload::bytes(vec![7; 256], Some("application/t7".into()))
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_autosave_uses_configured_retry_before_regular_interval() {
+    let mut f = fixture();
+    let _dir = content_fixture(&mut f, ContentEncryption::None);
+    f.cfg.topics[0].storage = TopicStorage::Interval {
+        seconds: 86_400,
+        encrypted: false,
+    };
+    f.cfg.topics[1].storage = TopicStorage::Ram {};
+    f.cfg.limits.max_content_working_bytes = 1;
+    let mut e = Engine::new(f.cfg, NOW).unwrap();
+    let session = auth(&mut e, &f.keys[0], NOW);
+    assert_eq!(
+        publish(&mut e, session, json!("retry"), NOW)["type"],
+        "result"
+    );
+    e.content.as_mut().unwrap().force_due();
+    e.maintenance(NOW);
+    assert!(e.content_status().last_error.is_some());
+    assert!(e.content_status().dirty);
+
+    e.config.limits.max_content_working_bytes = 256 * 1024 * 1024;
+    e.maintenance(NOW);
+    assert!(!e.content_status().save_in_progress);
+    std::thread::sleep(std::time::Duration::from_millis(1050));
+    e.maintenance(NOW);
+    wait_content(&e, |status| !status.dirty && !status.save_in_progress);
+    assert!(e.content_status().last_error.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn autosave_capacity_error_isolates_small_topic_from_oversized_topic() {
+    let mut f = fixture();
+    let _directory = content_fixture(&mut f, ContentEncryption::None);
+    f.cfg.content_storage.as_mut().unwrap().max_snapshot_bytes = 65_536;
+    for topic in &mut f.cfg.topics {
+        topic.storage = TopicStorage::Interval {
+            seconds: 3600,
+            encrypted: false,
+        };
+    }
+    let mut e = Engine::new(f.cfg, NOW).unwrap();
+    let session = auth(&mut e, &f.keys[0], NOW);
+    assert_eq!(
+        publish(&mut e, session, json!("small"), NOW)["type"],
+        "result"
+    );
+    let producer = e.clients[&f.ids[0]].slot;
+    for _ in 0..40 {
+        e.publish_typed(
+            producer,
+            "large",
+            "other",
+            Payload::bytes(vec![7; 4096], None),
+            None,
+            NOW,
+        )
+        .unwrap();
+    }
+    e.content.as_mut().unwrap().force_due();
+    e.maintenance(NOW);
+    wait_content(&e, |s| s.last_error.is_some() && !s.save_in_progress);
+    e.maintenance(NOW);
+    assert!(e.content_status().topics["other"].autosave_isolated);
+    std::thread::sleep(std::time::Duration::from_millis(1050));
+    e.maintenance(NOW);
+    wait_content(&e, |s| {
+        !s.topics["local/events"].dirty && !s.save_in_progress
+    });
+    assert!(e.content_status().topics["other"].dirty);
+}
+
+#[test]
+fn routing_index_tracks_registry_and_supports_large_configurations() {
+    use crate::admin::Command;
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::time::Instant;
+
+    let mut f = fixture();
+    let initial = f.cfg.topics[0].clone();
+    let owner = f.cfg.service.id.clone();
+    for index in 0..(9_999 - f.cfg.topics.len()) {
+        let mut topic = initial.clone();
+        topic.name = format!("route/{index}");
+        topic.acl = Some(Vec::new());
+        f.cfg.topics.push(topic);
+    }
+    let mut engine = Engine::new(f.cfg, NOW).unwrap();
+    assert_eq!(engine.topic_owner("local/events"), Some(owner.as_str()));
+    assert_eq!(engine.topic_owner("route/missing"), None);
+    admin_data(
+        &mut engine,
+        Command::TopicCreate {
+            topic: "route/dynamic".into(),
+            policy: initial.policy.unwrap(),
+        },
+    );
+    assert_eq!(engine.topic_owner("route/dynamic"), Some(owner.as_str()));
+    admin_data(
+        &mut engine,
+        Command::TopicDelete {
+            topic: "route/dynamic".into(),
+        },
+    );
+    assert_eq!(engine.topic_owner("route/dynamic"), None);
+
+    if std::env::var_os("MYNOFY_MEASURE_ROUTE_LOOKUP").is_none() {
+        return;
+    }
+    let known = engine.config.topics.last().unwrap().name.clone();
+    let session = auth(&mut engine, &f.keys[0], NOW);
+    let producer = engine.clients[&f.ids[0]].slot;
+    let engine = Arc::new(Mutex::new(engine));
+    let done = AtomicBool::new(false);
+    std::thread::scope(|scope| {
+        for publish in [true, false] {
+            let engine = &engine;
+            let done = &done;
+            scope.spawn(move || {
+                let payload = Payload::bytes(vec![1; 64], None);
+                let mut operations = 0;
+                while !done.load(Ordering::Relaxed) {
+                    let mut engine = engine.lock().unwrap();
+                    if publish {
+                        let _ = engine.publish_typed(
+                            producer,
+                            "pub",
+                            "local/events",
+                            payload.clone(),
+                            None,
+                            NOW,
+                        );
+                    } else {
+                        let page = engine
+                            .poll_typed(
+                                session,
+                                "poll",
+                                "local/events",
+                                None,
+                                Some(1),
+                                NOW,
+                                false,
+                                None,
+                            )
+                            .unwrap();
+                        std::hint::black_box(page);
+                    }
+                    operations += 1;
+                    drop(engine);
+                    std::thread::sleep(std::time::Duration::from_micros(25));
+                }
+                println!("route background publish={publish} operations={operations}");
+            });
+        }
+        for round in 0..3 {
+            for indexed in [round % 2 == 0, round % 2 != 0] {
+                for topic in [&known, &"route/missing".to_owned()] {
+                    let mut ns = Vec::with_capacity(10_000);
+                    for _ in 0..ns.capacity() {
+                        let started = Instant::now();
+                        let engine = engine.lock().unwrap();
+                        let result = if indexed {
+                            engine.topic_owner(std::hint::black_box(topic))
+                        } else {
+                            engine
+                                .config
+                                .topics
+                                .iter()
+                                .find(|entry| entry.name == *std::hint::black_box(topic))
+                                .map(|entry| entry.owner_id.as_str())
+                        };
+                        std::hint::black_box(result);
+                        drop(engine);
+                        ns.push(started.elapsed().as_nanos());
+                    }
+                    ns.sort_unstable();
+                    println!(
+                        "route round={round} indexed={indexed} hit={} p50_ns={} p95_ns={} p99_ns={}",
+                        *topic == known,
+                        ns[5000],
+                        ns[9500],
+                        ns[9900]
+                    );
+                }
+            }
+        }
+        done.store(true, Ordering::Relaxed);
+    });
+}
+
+#[test]
+fn producer_list_cursor_renews_after_every_page() {
+    let f = fixture();
+    let mut engine = Engine::new(f.cfg, NOW).unwrap();
+    let session = auth(&mut engine, &f.keys[0], NOW);
+    for value in 0..5 {
+        publish(&mut engine, session, json!(value), NOW);
+    }
+    let mut cursor = None;
+    for index in 0..5 {
+        let now = NOW + index * 20_000;
+        let page = engine
+            .list_typed(
+                &f.ids[0],
+                "list",
+                Some("local/events".into()),
+                Some(1),
+                cursor,
+                now,
+                false,
+            )
+            .unwrap();
+        assert_eq!(page.items.len(), 1);
+        cursor = page.next_cursor;
+    }
+    assert!(cursor.is_none());
+}
+
+#[cfg(unix)]
+#[test]
+fn recovered_security_sequence_must_reach_configured_floor() {
+    let mut f = fixture();
+    let _directory = SecurityDirectory::configure(&mut f.cfg, 128, 4096);
+    drop(Engine::new(f.cfg.clone(), NOW).unwrap());
+    f.cfg.security_storage.as_mut().unwrap().minimum_sequence = Some(1);
+    assert!(Engine::new(f.cfg.clone(), NOW).is_err());
+    f.cfg.security_storage.as_mut().unwrap().minimum_sequence = Some(0);
+    assert!(Engine::new(f.cfg, NOW).is_ok());
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_group_save_requires_success_for_each_selected_topic() {
+    let mut f = fixture();
+    let dir = content_fixture(&mut f, ContentEncryption::None);
+    f.cfg.topics[1].storage = TopicStorage::Interval {
+        seconds: 3600,
+        encrypted: false,
+    };
+    let mut engine = Engine::new(f.cfg, NOW).unwrap();
+    let session = auth(&mut engine, &f.keys[0], NOW);
+    topic_publish(&mut engine, session, "local/events", "manual", NOW);
+    topic_publish(&mut engine, session, "other", "automatic", NOW);
+    let blocked = dir.0.join("content/state.tmp");
+    std::fs::create_dir(&blocked).unwrap();
+    let failed = engine.save_content().unwrap();
+    wait_content(&engine, |s| s.last_error.is_some() && !s.save_in_progress);
+    let status = serde_json::to_value(engine.content_status()).unwrap();
+    assert_eq!(
+        status["topics"]["local/events"]["save_failure"]["revision"],
+        failed
+    );
+    assert_eq!(
+        status["topics"]["other"]["save_failure"]["revision"],
+        failed
+    );
+
+    std::fs::remove_dir(blocked).unwrap();
+    engine.content.as_mut().unwrap().force_due();
+    engine.maintenance(NOW);
+    wait_content(&engine, |s| {
+        s.topics["other"].save_failure.is_none() && !s.save_in_progress
+    });
+    assert!(
+        engine.content_status().topics["local/events"]
+            .save_failure
+            .is_some()
+    );
+
+    let retry = engine
+        .save_content_topics(Some(&["local/events".into()]))
+        .unwrap();
+    wait_content(&engine, |s| {
+        s.topics["local/events"].saved_revision == retry && !s.save_in_progress
+    });
+    assert!(
+        engine.content_status().topics["local/events"]
+            .save_failure
+            .is_none()
+    );
+    engine.content.as_mut().unwrap().drain().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_security_recovery_preserves_unreferenced_content_slots() {
+    let mut f = fixture();
+    let dir = content_fixture(&mut f, ContentEncryption::None);
+    let mut engine = Engine::new(f.cfg.clone(), NOW).unwrap();
+    let session = auth(&mut engine, &f.keys[0], NOW);
+    topic_publish(&mut engine, session, "local/events", "kept", NOW);
+    let revision = engine.save_content().unwrap();
+    wait_content(&engine, |s| {
+        s.saved_revision == revision && !s.save_in_progress
+    });
+    drop(engine);
+    let orphan = dir
+        .0
+        .join("content")
+        .join(format!("topic-{}-0.bin", "1".repeat(64)));
+    std::fs::write(&orphan, b"retained for diagnosis").unwrap();
+    let snapshot = dir.0.join("security/snapshot");
+    let baseline = std::fs::read(&snapshot).unwrap();
+    f.cfg.security_storage.as_mut().unwrap().minimum_sequence = Some(1);
+    assert!(Engine::new(f.cfg, NOW).is_err());
+    assert_eq!(std::fs::read(snapshot).unwrap(), baseline);
+    assert_eq!(std::fs::read(orphan).unwrap(), b"retained for diagnosis");
+}
+
+#[test]
+fn precharged_binary_request_consumes_one_token_and_rechecks_identity() {
+    let mut f = fixture();
+    f.cfg.limits.client_burst = 2;
+    f.cfg.limits.client_requests_per_second = 1;
+    let mut engine = Engine::new(f.cfg, NOW).unwrap();
+    let session = auth(&mut engine, &f.keys[0], NOW);
+    let frame = || {
+        Some(pb::Frame {
+            version: 1,
+            body: Some(pb::Body::Publish(pb::Publish {
+                id: "precharged".into(),
+                topic: "local/events".into(),
+                payload: Payload::bytes(b"once".to_vec(), None),
+                expires: None,
+            })),
+        })
+    };
+    let mut response = bytes::BytesMut::new();
+    engine.charge(session, NOW).unwrap();
+    assert_eq!(
+        engine.write_protobuf_response(session, frame, NOW, &mut response, None, true),
+        "result"
+    );
+    engine.charge(session, NOW).unwrap();
+    engine.disconnect(session);
+    assert_eq!(
+        engine.write_protobuf_response(
+            session,
+            || panic!("invalid session decoded"),
+            NOW,
+            &mut response,
+            None,
+            true
+        ),
+        "error"
+    );
+    assert_eq!(engine.storage_stats().active_records, 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn rejected_combined_start_leaves_incomplete_security_tail_intact() {
+    let mut f = fixture();
+    let dir = content_fixture(&mut f, ContentEncryption::None);
+    let mut engine = Engine::new(f.cfg.clone(), NOW).unwrap();
+    let session = auth(&mut engine, &f.keys[0], NOW);
+    topic_publish(&mut engine, session, "local/events", "durable", NOW);
+    let revision = engine.save_content().unwrap();
+    wait_content(&engine, |s| {
+        s.saved_revision == revision && !s.save_in_progress
+    });
+    drop(engine);
+
+    let mut incompatible = f.cfg.clone();
+    incompatible.clients.remove(0);
+    for topic in &mut incompatible.topics {
+        topic
+            .acl
+            .as_mut()
+            .unwrap()
+            .retain(|rule| rule.client_id != f.ids[0]);
+    }
+    let wrong = dir.0.join("wrong-security");
+    incompatible.security_storage.as_mut().unwrap().directory = wrong.clone();
+    incompatible
+        .security_storage
+        .as_mut()
+        .unwrap()
+        .minimum_sequence = Some(0);
+    crate::initialize_security(&incompatible).unwrap();
+    let journal = wrong.join("journal");
+    std::fs::write(&journal, b"M").unwrap();
+    let snapshot = std::fs::read(wrong.join("snapshot")).unwrap();
+    let manifest = std::fs::read(dir.0.join("content/state.bin")).unwrap();
+    assert!(Engine::new(incompatible, NOW).is_err());
+    assert_eq!(std::fs::read(journal).unwrap(), b"M");
+    assert_eq!(std::fs::read(wrong.join("snapshot")).unwrap(), snapshot);
+    assert_eq!(
+        std::fs::read(dir.0.join("content/state.bin")).unwrap(),
+        manifest
+    );
+    let matching_journal = dir.0.join("security/journal");
+    assert!(std::fs::read(&matching_journal).unwrap().is_empty());
+    std::fs::write(&matching_journal, b"M").unwrap();
+    let mut recovered = Engine::new(f.cfg, NOW).unwrap();
+    assert!(std::fs::read(matching_journal).unwrap().is_empty());
+    let session = auth(&mut recovered, &f.keys[0], NOW);
+    assert_eq!(
+        topic_poll(&mut recovered, session, "local/events", NOW)["items"][0]["message"]["payload"],
+        "durable"
+    );
+}
+
+#[test]
+fn admin_client_indexes_track_key_and_session_lifecycles() {
+    use crate::admin::Command as A;
+
+    let fixture = fixture();
+    let client = &fixture.ids[0];
+    let mut engine = Engine::new(fixture.cfg, NOW).unwrap();
+    let session = auth(&mut engine, &fixture.keys[0], NOW);
+    let other = auth(&mut engine, &fixture.keys[1], NOW);
+    let get = |engine: &mut Engine, now| {
+        let crate::admin::ResultBody::Data(data) = engine
+            .admin(
+                A::ClientGet {
+                    client: client.clone(),
+                },
+                now,
+            )
+            .unwrap()
+        else {
+            panic!("expected admin data")
+        };
+        data
+    };
+    let before = get(&mut engine, NOW);
+    assert_eq!(before["active_sessions"], 1);
+    assert_eq!(before["session_ids"], json!([session]));
+    assert_eq!(before["keys"].as_array().unwrap().len(), 1);
+    assert_eq!(get(&mut engine, NOW + 86_400_000)["active_sessions"], 0);
+    let token = before["keys"][0]["token_id"].as_str().unwrap();
+    engine.revoke_key(token).unwrap();
+    let after = get(&mut engine, NOW + 86_400_000);
+    assert_eq!(after["active_sessions"], 0);
+    assert_eq!(after["keys"], json!([]));
+    assert!(!engine.sessions.contains_key(&session));
+    assert!(engine.sessions.contains_key(&other));
 }

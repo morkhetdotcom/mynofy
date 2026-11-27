@@ -47,7 +47,9 @@ pub(crate) struct Status {
     pub working_memory_reserved_bytes: usize,
     pub requires_restart: bool,
     pub last_save_time_ms: Option<u64>,
+    pub last_writer_duration_us: Option<u64>,
     pub last_error: Option<String>,
+    pub cleanup_error: Option<String>,
 }
 #[derive(Clone, Serialize)]
 pub(crate) struct TopicStatus {
@@ -56,14 +58,33 @@ pub(crate) struct TopicStatus {
     pub saved_revision: u64,
     pub dirty: bool,
     pub loaded: bool,
+    pub autosave_isolated: bool,
+    pub save_failure: Option<SaveFailure>,
+}
+#[derive(Clone, Serialize)]
+pub(crate) struct SaveFailure {
+    revision: u64,
+    error: String,
+}
+fn is_capacity_failure(error: &str) -> bool {
+    error.starts_with("content_memory_budget_exceeded:")
+        || error.starts_with("resource_exhausted:")
+        || error == "Topic content exceeds aggregate size limit"
+        || error == "Configured capacity reached."
+        || error.contains("exceeds configured size limit")
 }
 struct Schedule {
     name: String,
     storage: TopicStorage,
     revision: u64,
     next: Instant,
+    retry_at: Option<Instant>,
+    retry_delay: u64,
+    attempted_revision: Option<u64>,
+    isolated_retry: bool,
 }
 struct Save {
+    automatic: bool,
     security: Option<crate::security::DurabilityFence>,
     capture: checkpoint::Capture,
     selected: Vec<(String, TopicStorage)>,
@@ -71,6 +92,7 @@ struct Save {
 struct Shared {
     status: Mutex<Status>,
     busy: AtomicBool,
+    automatic_capacity_failure: AtomicBool,
 }
 impl Shared {
     fn snapshot(&self) -> Status {
@@ -97,6 +119,8 @@ pub(crate) struct ContentRuntime {
     shared: Arc<Shared>,
     schedules: Vec<Schedule>,
     automatic: Vec<usize>,
+    last_automatic: Option<usize>,
+    retry: crate::config::AutosaveRetry,
     pub revision: u64,
     pub maximum: u64,
 }
@@ -121,6 +145,10 @@ impl ContentRuntime {
             name,
             storage: TopicStorage::default(),
             revision: self.revision,
+            retry_at: None,
+            retry_delay: 0,
+            attempted_revision: None,
+            isolated_retry: false,
             next: Instant::now(),
         });
     }
@@ -163,6 +191,8 @@ impl ContentRuntime {
                 saved_revision: 0,
                 dirty: true,
                 loaded: false,
+                autosave_isolated: false,
+                save_failure: None,
             },
         );
         Ok(())
@@ -175,13 +205,24 @@ impl ContentRuntime {
             schedule.revision = self.revision;
         }
     }
+    pub(crate) fn topic_status(&self, name: &str, slot: u16) -> Option<TopicStatus> {
+        let mut topic = self.shared.status().topics.get(name)?.clone();
+        Self::update_topic_status(&mut topic, self.schedules.get(usize::from(slot))?);
+        Some(topic)
+    }
+
+    fn update_topic_status(topic: &mut TopicStatus, schedule: &Schedule) {
+        topic.revision = schedule.revision;
+        topic.autosave_isolated = schedule.isolated_retry;
+        topic.dirty = topic.revision > topic.saved_revision || topic.revision == u64::MAX;
+    }
+
     pub(crate) fn status(&self) -> Status {
         let mut status = self.shared.snapshot();
         status.revision = self.revision;
         for schedule in self.schedules.iter().filter(|s| s.storage.persistent()) {
             if let Some(topic) = status.topics.get_mut(&schedule.name) {
-                topic.revision = schedule.revision;
-                topic.dirty = topic.revision > topic.saved_revision || topic.revision == u64::MAX;
+                Self::update_topic_status(topic, schedule);
             }
         }
         status.dirty = status.topics.values().any(|topic| topic.dirty);
@@ -191,13 +232,12 @@ impl ContentRuntime {
     pub(crate) fn force_due(&mut self) {
         for schedule in &mut self.schedules {
             schedule.next = Instant::now();
+            schedule.retry_at = None;
+            schedule.attempted_revision = None;
         }
     }
-    pub(crate) fn due(&mut self) -> Vec<String> {
-        if self.shared.busy.load(Ordering::Acquire) {
-            return Vec::new();
-        }
-        if self.automatic.is_empty() {
+    pub(crate) fn due(&mut self) -> Vec<(String, TopicStorage)> {
+        if self.shared.busy.load(Ordering::Acquire) || self.automatic.is_empty() {
             return Vec::new();
         }
         let status = self.shared.status();
@@ -205,19 +245,71 @@ impl ContentRuntime {
             return Vec::new();
         }
         let now = Instant::now();
-        let mut due = Vec::new();
+        let capacity_failure = self
+            .shared
+            .automatic_capacity_failure
+            .load(Ordering::Relaxed);
+        let mut ready = Vec::new();
         for &slot in &self.automatic {
             let schedule = &mut self.schedules[slot];
-            if let Some(seconds) = schedule.storage.interval()
-                && now >= schedule.next
-            {
+            let Some(seconds) = schedule.storage.interval() else {
+                continue;
+            };
+            let saved = status.topics[&schedule.name].saved_revision;
+            if let Some(revision) = schedule.attempted_revision.take() {
                 schedule.next = now + std::time::Duration::from_secs(seconds);
-                if schedule.revision > status.topics[&schedule.name].saved_revision
-                    || schedule.revision == u64::MAX
-                {
-                    due.push(schedule.name.clone());
+                if saved >= revision {
+                    schedule.retry_at = None;
+                    schedule.retry_delay = 0;
+                    schedule.isolated_retry = false;
+                } else if self.retry.enabled {
+                    schedule.isolated_retry |= capacity_failure;
+                    schedule.retry_delay = if schedule.retry_delay == 0 {
+                        self.retry.initial_delay_seconds
+                    } else {
+                        schedule
+                            .retry_delay
+                            .saturating_mul(2)
+                            .min(self.retry.max_delay_seconds)
+                    };
+                    schedule.retry_at =
+                        Some(now + std::time::Duration::from_secs(schedule.retry_delay));
                 }
             }
+            let deadline = schedule.retry_at.unwrap_or(schedule.next);
+            if now >= deadline && (schedule.revision > saved || schedule.revision == u64::MAX) {
+                ready.push((slot, deadline));
+            }
+        }
+        let Some(&(first, _)) = ready.iter().min_by_key(|&&(slot, deadline)| {
+            (
+                deadline,
+                self.last_automatic.is_some_and(|last| slot <= last),
+                slot,
+            )
+        }) else {
+            return Vec::new();
+        };
+        let isolated = self.schedules[first].isolated_retry;
+        if isolated {
+            self.last_automatic = Some(first);
+        }
+        let mut due = Vec::new();
+        for (slot, _) in ready {
+            let schedule = &mut self.schedules[slot];
+            if slot != first && (isolated || schedule.isolated_retry) {
+                continue;
+            }
+            schedule.retry_at = None;
+            schedule.next = now
+                + std::time::Duration::from_secs(
+                    schedule
+                        .storage
+                        .interval()
+                        .expect("automatic topic has an interval"),
+                );
+            schedule.attempted_revision = Some(schedule.revision);
+            due.push((schedule.name.clone(), schedule.storage.clone()));
         }
         due
     }
@@ -225,31 +317,27 @@ impl ContentRuntime {
         &self,
         requested: Option<&[String]>,
     ) -> Result<Vec<(String, TopicStorage)>> {
-        if let Some(names) = requested {
-            let mut seen = std::collections::HashSet::new();
-            if names.is_empty()
-                || names.iter().any(|name| {
-                    !seen.insert(name)
-                        || !self
-                            .schedules
-                            .iter()
-                            .any(|s| s.name == *name && s.storage.persistent())
-                })
-            {
-                return Err(ApiError::new(
-                    "invalid_content_topics",
-                    "Choose distinct locally persistent topics.",
-                ));
-            }
-        }
+        let requested_names =
+            requested.map(|names| names.iter().collect::<std::collections::HashSet<_>>());
         let selected: Vec<_> = self
             .schedules
             .iter()
             .filter(|s| {
-                s.storage.persistent() && requested.is_none_or(|names| names.contains(&s.name))
+                s.storage.persistent()
+                    && requested_names
+                        .as_ref()
+                        .is_none_or(|names| names.contains(&s.name))
             })
             .map(|s| (s.name.clone(), s.storage.clone()))
             .collect();
+        if let Some(names) = requested
+            && selected.len() != names.len()
+        {
+            return Err(ApiError::new(
+                "invalid_content_topics",
+                "Choose distinct locally persistent topics.",
+            ));
+        }
         if selected.is_empty() {
             return Err(ApiError::new(
                 "invalid_content_topics",
@@ -277,8 +365,14 @@ impl ContentRuntime {
     pub(crate) fn reserve_working(&self, bytes: usize) {
         self.shared.status().working_memory_reserved_bytes = bytes;
     }
-    pub(crate) fn capture_failed(&self, error: &ApiError) {
-        self.shared.status().last_error = Some(format!("{}: {}", error.code, error.detail));
+    pub(crate) fn capture_failed(&self, error: &ApiError, automatic: bool) {
+        let message = format!("{}: {}", error.code, error.detail);
+        if automatic {
+            self.shared
+                .automatic_capacity_failure
+                .store(is_capacity_failure(&message), Ordering::Relaxed);
+        }
+        self.shared.status().last_error = Some(message);
         self.cancel();
     }
     pub(crate) fn cancel(&self) {
@@ -289,16 +383,23 @@ impl ContentRuntime {
         capture: checkpoint::Capture,
         selected: Vec<(String, TopicStorage)>,
         security: Option<crate::security::DurabilityFence>,
+        automatic: bool,
     ) -> Result<()> {
         if self.sender.as_ref().is_none_or(|sender| {
             sender
                 .try_send(Save {
+                    automatic,
                     security,
                     capture,
                     selected,
                 })
                 .is_err()
         }) {
+            if automatic {
+                self.shared
+                    .automatic_capacity_failure
+                    .store(false, Ordering::Relaxed);
+            }
             self.shared.status().last_error = Some("Content writer is unavailable".into());
             self.cancel();
             return Err(ApiError::new(
@@ -309,12 +410,46 @@ impl ContentRuntime {
         Ok(())
     }
 }
+impl ContentRuntime {
+    pub(crate) fn drain(&mut self) -> std::result::Result<(), BoxError> {
+        self.sender.take();
+        let panicked = self
+            .worker
+            .take()
+            .is_some_and(|worker| worker.join().is_err());
+        let status = self.shared.status();
+        if panicked || self.shared.busy.load(Ordering::Acquire) {
+            return Err(
+                "content_drain_failed: writer stopped before completing the queued save".into(),
+            );
+        }
+        let failures: Vec<_> = status
+            .topics
+            .iter()
+            .filter_map(|(name, topic)| {
+                let failure = topic.save_failure.as_ref()?;
+                Some(format!("{name}@{}: {}", failure.revision, failure.error))
+            })
+            .collect();
+        if !failures.is_empty() {
+            let revision = status
+                .topics
+                .values()
+                .filter_map(|topic| topic.save_failure.as_ref())
+                .map(|failure| failure.revision)
+                .max()
+                .unwrap_or(0);
+            return Err(format!("content_drain_failed: queued_revision={revision} saved_revision={} requires_restart={}: {}", status.saved_revision, status.requires_restart, failures.join("; ")).into());
+        }
+        if status.requires_restart {
+            return Err("content_drain_failed: manifest durability is uncertain".into());
+        }
+        Ok(())
+    }
+}
 impl Drop for ContentRuntime {
     fn drop(&mut self) {
-        self.sender.take();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
+        let _ = self.drain();
     }
 }
 pub(crate) mod checkpoint;
@@ -365,7 +500,10 @@ impl Startup {
         }
         #[cfg(unix)]
         {
-            let store = disk::Store::open(&options.directory)?;
+            let store = match &options.store_id {
+                Some(id) => disk::Store::open_bound(&options.directory, id)?,
+                None => disk::Store::open(&options.directory)?,
+            };
             let stored = store.read(options.max_snapshot_bytes + 80)?;
             let secret = secret
                 .map(|secret| {
@@ -389,10 +527,9 @@ impl Startup {
                 )?;
                 (Some(checkpoint), entries)
             } else {
-                store.require_fresh()?;
+                store.check_fresh(options.store_id.is_some())?;
                 (None, topics::Entries::new())
             };
-            store.cleanup_topics(&topics::committed_files(&entries))?;
             Ok(Some(Self {
                 loaded,
                 entries,
@@ -402,11 +539,13 @@ impl Startup {
             }))
         }
     }
-    pub(crate) fn apply_storages(
+    pub(crate) fn validate_storage_encryption(
         &self,
-        config: &mut Config,
-        _configured: &std::collections::HashSet<String>,
-    ) {
+        config: &Config,
+    ) -> std::result::Result<(), BoxError> {
+        check_topic_encryption(&self.entries, &config.topics)
+    }
+    pub(crate) fn apply_storages(&self, config: &mut Config) {
         for topic in &mut config.topics {
             if let Some(entry) = self.entries.get(&topic.name) {
                 topic.storage = entry.storage.clone();
@@ -420,6 +559,9 @@ impl Startup {
         loaded: bool,
         config: &Config,
     ) -> std::result::Result<ContentRuntime, BoxError> {
+        #[cfg(unix)]
+        self.store
+            .cleanup_topics(&topics::committed_files(&self.entries))?;
         let schedules: Vec<_> = config
             .topics
             .iter()
@@ -428,6 +570,10 @@ impl Startup {
                 name: topic.name.clone(),
                 storage: topic.storage.clone(),
                 revision,
+                retry_at: None,
+                retry_delay: 0,
+                attempted_revision: None,
+                isolated_retry: false,
                 next: Instant::now()
                     + std::time::Duration::from_secs(topic.storage.interval().unwrap_or(1)),
             })
@@ -451,6 +597,8 @@ impl Startup {
                         saved_revision: saved.map_or(0, |entry| entry.revision),
                         dirty: true,
                         loaded: saved.is_some(),
+                        autosave_isolated: false,
+                        save_failure: None,
                     },
                 )
             })
@@ -465,22 +613,53 @@ impl Startup {
                 ..Status::default()
             }),
             busy: AtomicBool::new(false),
+            automatic_capacity_failure: AtomicBool::new(false),
         });
         let background = shared.clone();
         let (sender, receiver) = mpsc::sync_channel::<Save>(1);
         let maximum = self.options.max_snapshot_bytes;
+        let retry = self.options.autosave_retry.clone();
         #[cfg(unix)]
         let worker = std::thread::Builder::new()
             .name("mynofy-content".into())
             .spawn(move || {
                 let mut entries = self.entries;
-                while let Ok(Save {
-                    security,
-                    capture,
-                    selected,
-                }) = receiver.recv()
-                {
+                let mut cleanup_at: Option<std::time::Instant> = None;
+                let retry_delay = std::time::Duration::from_secs(1);
+                loop {
+                    if cleanup_at.is_some_and(|deadline| deadline <= std::time::Instant::now()) {
+                        cleanup_at = None;
+                        if !self.store.uncertain() {
+                            let result = self
+                                .store
+                                .cleanup_topics(&topics::committed_files(&entries));
+                            if result.is_err() {
+                                cleanup_at = Some(std::time::Instant::now() + retry_delay);
+                            }
+                            background.status().cleanup_error =
+                                result.err().map(|error| error.to_string());
+                        }
+                    }
+                    let request = match cleanup_at {
+                        Some(deadline) => receiver.recv_timeout(
+                            deadline.saturating_duration_since(std::time::Instant::now()),
+                        ),
+                        None => receiver
+                            .recv()
+                            .map_err(|_| mpsc::RecvTimeoutError::Disconnected),
+                    };
+                    let Save {
+                        automatic,
+                        security,
+                        capture,
+                        selected,
+                    } = match request {
+                        Ok(save) => save,
+                        Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                        Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                    };
                     let revision = capture.checkpoint.revision;
+                    let writer_start = Instant::now();
                     let result = (|| -> std::result::Result<(), BoxError> {
                         if let Some(fence) = security {
                             fence.wait()?;
@@ -503,7 +682,23 @@ impl Startup {
                     };
                     {
                         let mut status = background.status();
+                        status.last_writer_duration_us = Some(
+                            u64::try_from(writer_start.elapsed().as_micros()).unwrap_or(u64::MAX),
+                        );
                         status.requires_restart = self.store.uncertain();
+                        for (name, _) in &selected {
+                            if let Some(topic) = status.topics.get_mut(name) {
+                                topic.save_failure = failure.as_ref().map(|error| SaveFailure {
+                                    revision,
+                                    error: error.clone(),
+                                });
+                            }
+                        }
+                        if let Some(error) = self.store.take_cleanup_error() {
+                            cleanup_at
+                                .get_or_insert_with(|| std::time::Instant::now() + retry_delay);
+                            status.cleanup_error = Some(error);
+                        }
                         if let Some(message) = &failure {
                             status.last_error = Some(message.clone());
                         } else {
@@ -516,6 +711,12 @@ impl Startup {
                             status.last_error = None;
                             status.last_save_time_ms = Some(crate::transport::now_ms());
                         }
+                    }
+                    if automatic {
+                        background.automatic_capacity_failure.store(
+                            failure.as_deref().is_some_and(is_capacity_failure),
+                            Ordering::Relaxed,
+                        );
                     }
                     background.busy.store(false, Ordering::Release);
                     if let Some(message) = failure {
@@ -534,6 +735,8 @@ impl Startup {
             shared,
             schedules,
             automatic,
+            last_automatic: None,
+            retry,
             revision,
             maximum,
         })
@@ -543,14 +746,129 @@ impl Startup {
 #[cfg(unix)]
 pub mod offline;
 
+fn check_topic_encryption(
+    entries: &topics::Entries,
+    configured: &[crate::config::Topic],
+) -> std::result::Result<(), BoxError> {
+    for topic in configured {
+        if let Some(entry) = entries.get(&topic.name)
+            && topic.storage.persistent()
+            && entry.storage.encrypted() != topic.storage.encrypted()
+        {
+            return Err(format!(
+                "Topic {} encryption differs from configuration; migrate it offline with storage topic-encryption",
+                topic.name
+            ).into());
+        }
+    }
+    Ok(())
+}
+
 #[cfg(all(test, unix))]
 mod crash_tests;
 #[cfg(all(test, unix))]
 mod faults;
 
+/// Explicitly bind an offline content store to the configured identity.
+pub fn initialize(config: &crate::config::Config) -> std::result::Result<(), crate::BoxError> {
+    config.validate()?;
+    config.require_local_owner()?;
+    let options = config
+        .content_storage
+        .as_ref()
+        .ok_or("Configure content storage first")?;
+    let id = options
+        .store_id
+        .as_deref()
+        .filter(|id| id.len() == 32 && id.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .ok_or("Set content_storage.store_id to 32 hexadecimal digits")?;
+    #[cfg(unix)]
+    return disk::Store::initialize(&options.directory, id);
+    #[cfg(not(unix))]
+    {
+        let _ = id;
+        Err("Content storage requires Unix".into())
+    }
+}
+
 #[cfg(test)]
 mod status_tests {
     use super::*;
+
+    #[test]
+    fn overdue_isolated_save_gets_the_next_slot() {
+        use std::time::Duration;
+        let now = Instant::now();
+        let names = ["regular-a", "regular-b", "isolated"];
+        let schedules: Vec<_> = names
+            .iter()
+            .enumerate()
+            .map(|(index, name)| Schedule {
+                name: (*name).into(),
+                storage: TopicStorage::Interval {
+                    seconds: 1,
+                    encrypted: false,
+                },
+                revision: 1,
+                next: now,
+                retry_at: (index == 2).then_some(now - Duration::from_secs(1)),
+                retry_delay: 1,
+                attempted_revision: None,
+                isolated_retry: index == 2,
+            })
+            .collect();
+        let topics = schedules
+            .iter()
+            .map(|schedule| {
+                (
+                    schedule.name.clone(),
+                    TopicStatus {
+                        storage: schedule.storage.clone(),
+                        revision: 1,
+                        saved_revision: 0,
+                        dirty: true,
+                        loaded: false,
+                        autosave_isolated: schedule.isolated_retry,
+                        save_failure: None,
+                    },
+                )
+            })
+            .collect();
+        let mut runtime = ContentRuntime {
+            sender: None,
+            worker: None,
+            schedules,
+            automatic: vec![0, 1, 2],
+            last_automatic: None,
+            retry: Default::default(),
+            revision: 1,
+            maximum: 65536,
+            shared: Arc::new(Shared {
+                status: Mutex::new(Status {
+                    topics,
+                    ..Status::default()
+                }),
+                busy: AtomicBool::new(false),
+                automatic_capacity_failure: AtomicBool::new(false),
+            }),
+        };
+        assert_eq!(
+            runtime
+                .due()
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            ["isolated"]
+        );
+        assert_eq!(
+            runtime
+                .due()
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>(),
+            ["regular-a", "regular-b"]
+        );
+    }
 
     #[test]
     fn completed_save_snapshot_observes_published_failure() {
@@ -558,6 +876,7 @@ mod status_tests {
             let shared = Arc::new(Shared {
                 status: Mutex::new(Status::default()),
                 busy: AtomicBool::new(true),
+                automatic_capacity_failure: AtomicBool::new(false),
             });
             let writer = shared.clone();
             let worker = std::thread::spawn(move || {

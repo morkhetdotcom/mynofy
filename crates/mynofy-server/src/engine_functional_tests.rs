@@ -189,6 +189,8 @@ fn run_case(seed: u64, steps: usize) {
     fixture.cfg.limits.client_burst = 1_000_000;
     fixture.cfg.limits.client_requests_per_second = 1_000_000;
     fixture.cfg.limits.max_active_messages = 8 * (1 + seed as usize % 6);
+    fixture.cfg.limits.max_topic_active_messages = Some(fixture.cfg.limits.max_active_messages);
+    fixture.cfg.limits.max_publisher_active_messages = Some(fixture.cfg.limits.max_active_messages);
     fixture.cfg.limits.max_response_bytes = 65536;
     for topic in &mut fixture.cfg.topics {
         topic.policy = Some(Policy {

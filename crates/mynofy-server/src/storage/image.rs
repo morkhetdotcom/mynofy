@@ -40,6 +40,7 @@ fn invalid() -> BoxError {
 }
 impl MessageImage {
     /// Build an isolated image, retaining only selected topic blocks. No wire conversion.
+    #[cfg(test)]
     pub(crate) fn selected(
         owner: &str,
         clients: &[String],
@@ -59,10 +60,47 @@ impl MessageImage {
         limits: ImageLimits,
         indices: Option<&[u32]>,
     ) -> Result<Self> {
+        let slots: Box<dyn Iterator<Item = u32> + '_> = match indices {
+            Some(indices) => Box::new(indices.iter().copied()),
+            None => Box::new(storage.0.iter_slots().map(|(slot, _)| slot)),
+        };
+        Self::selected_slots(owner, clients, topics, storage, selected, limits, slots)
+    }
+
+    pub(crate) fn selected_slots(
+        owner: &str,
+        clients: &[String],
+        topics: &[String],
+        storage: (&Arena, &ContentTypes, &Blobs),
+        selected: &[u16],
+        limits: ImageLimits,
+        slots: impl Iterator<Item = u32>,
+    ) -> Result<Self> {
+        Self::selected_slots_mapped(
+            owner,
+            (clients.to_vec(), |slot| u16::try_from(slot).ok()),
+            topics,
+            storage,
+            selected,
+            limits,
+            slots,
+        )
+    }
+
+    pub(crate) fn selected_slots_mapped(
+        owner: &str,
+        registry: (Vec<String>, impl Fn(usize) -> Option<u16>),
+        topics: &[String],
+        storage: (&Arena, &ContentTypes, &Blobs),
+        selected: &[u16],
+        limits: ImageLimits,
+        slots: impl Iterator<Item = u32>,
+    ) -> Result<Self> {
+        let (clients, producer) = registry;
         let (records, types, blobs) = storage;
         let mut output = Self {
             owner: owner.into(),
-            clients: clients.to_vec(),
+            clients,
             topics: selected
                 .iter()
                 .map(|slot| topics[*slot as usize].clone())
@@ -71,28 +109,35 @@ impl MessageImage {
             types: ContentTypes::default(),
             blobs: Blobs::default(),
         };
-        let mut mapping = vec![None; topics.len()];
-        for (new, old) in selected.iter().enumerate() {
-            mapping[*old as usize] = Some(new as u16);
-        }
+        let mapping = if selected.len() == 1 {
+            Vec::new()
+        } else {
+            let mut mapping = vec![None; topics.len()];
+            for (new, old) in selected.iter().enumerate() {
+                mapping[*old as usize] = Some(new as u16);
+            }
+            mapping
+        };
         let registry_bytes = 512
             + owner.len()
-            + clients
+            + output
+                .clients
                 .iter()
                 .chain(&output.topics)
                 .map(|n| n.len() + 48)
                 .sum::<usize>();
-        let slots: Box<dyn Iterator<Item = u32> + '_> = match indices {
-            Some(indices) => Box::new(indices.iter().copied()),
-            None => Box::new(records.iter_slots().map(|(slot, _)| slot)),
-        };
         for slot in slots {
             let record = records.get(slot).ok_or_else(ApiError::internal)?;
-            let Some(topic) = mapping[record.topic() as usize] else {
+            let topic = if let [only] = selected {
+                (record.topic() == *only).then_some(0)
+            } else {
+                mapping[record.topic() as usize]
+            };
+            let Some(topic) = topic else {
                 continue;
             };
             let relocated = record.relocate(
-                record.producer_slot() as u16,
+                producer(record.producer_slot()).ok_or_else(ApiError::internal)?,
                 topic,
                 types,
                 blobs,
@@ -150,6 +195,97 @@ impl MessageImage {
         }
         Ok(())
     }
+    /// Build a read-only sparse source for worker projection. The slot list
+    /// is the only enumeration of selected records. Pinned chunks can also
+    /// contain unrelated records and must never be serialized.
+    pub(crate) fn pin_selected(
+        owner: &str,
+        clients: &[String],
+        topics: &[String],
+        storage: (&mut Arena, &ContentTypes, &mut Blobs),
+        indices: &[u32],
+        extra_budget: usize,
+    ) -> Option<(Self, usize)> {
+        let (records, types, blobs) = storage;
+        let mut charge = indices
+            .len()
+            .checked_mul(32)?
+            .checked_add(
+                records
+                    .chunks
+                    .len()
+                    .checked_mul(size_of::<Option<arena::Chunk>>())?,
+            )?
+            .checked_add(
+                blobs
+                    .pages
+                    .len()
+                    .checked_mul(size_of::<Option<blobs::Page>>())?,
+            )?
+            .checked_add(types.entries.len())?;
+        if charge > extra_budget {
+            return None;
+        }
+        let mut chunk_ids = HashSet::new();
+        let mut page_ids = HashSet::new();
+        for &slot in indices {
+            let id = slot as usize / arena::CHUNK;
+            if chunk_ids.insert(id) {
+                // Allow both the pinned block and a concurrent detached copy.
+                charge = charge.checked_add(2 * (arena::BYTES + 64))?;
+            }
+            let record = records.get(slot)?;
+            let payload = record.payload();
+            let location = (payload.external_bytes() != 0).then(|| u64_at(payload.data, 8));
+            let ty = (payload.content_type != 0)
+                .then(|| u64_at(&types.entries, (payload.content_type as usize - 1) * 16));
+            for location in [location, ty]
+                .into_iter()
+                .flatten()
+                .filter(|&location| location != 0)
+            {
+                let id = ((location >> 32) - 1) as usize;
+                if page_ids.insert(id) {
+                    charge =
+                        charge.checked_add(2 * (blobs.pages[id].as_ref()?.bytes.len() + 64))?;
+                }
+            }
+            if charge > extra_budget {
+                return None;
+            }
+        }
+        let mut snapshot_records = Arena::new();
+        snapshot_records
+            .chunks
+            .resize_with(records.chunks.len(), || None);
+        for id in chunk_ids {
+            let chunk = records.chunks[id].as_mut()?;
+            chunk.bytes.freeze();
+            snapshot_records.chunks[id] = Some(chunk.clone());
+        }
+        let mut snapshot_blobs = Blobs::default();
+        snapshot_blobs.pages.resize_with(blobs.pages.len(), || None);
+        for id in page_ids {
+            let page = blobs.pages[id].as_mut()?;
+            page.bytes.freeze();
+            snapshot_blobs.pages[id] = Some(page.clone());
+        }
+        Some((
+            Self {
+                owner: owner.to_owned(),
+                clients: clients.to_vec(),
+                topics: topics.to_vec(),
+                records: snapshot_records,
+                types: ContentTypes {
+                    entries: types.entries.clone(),
+                    ..Default::default()
+                },
+                blobs: snapshot_blobs,
+            },
+            charge,
+        ))
+    }
+
     /// Pin initialized blocks in one owner epoch. Later live writes detach only
     /// the affected block; unique writes outside snapshot lifetimes stay ordinary.
     pub(crate) fn capture_shared(

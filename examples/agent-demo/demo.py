@@ -2,6 +2,7 @@
 """Small local demo driver; stdlib only. Business decisions stay with agents."""
 import argparse
 import json
+import secrets
 import os
 from pathlib import Path
 import shlex
@@ -37,7 +38,7 @@ def setup():
     cfg['service'] = {'id': OWNER, 'unix_socket': 'run/mynofy.sock',
                       'admin_socket': 'run/admin.sock'}
     cfg['security_storage'] = {'directory': 'security'}
-    cfg['content_storage'] = {'directory': 'content', 'encryption': 'none',
+    cfg['content_storage'] = {'directory': 'content', 'store_id': secrets.token_hex(16), 'encryption': 'none',
                               'max_snapshot_bytes': 134217728}
     cfg['clients'] = []
     clients = {}
@@ -70,6 +71,8 @@ def setup():
                     '--out', str(STATE / 'config.yaml')], check=True)
     seed.unlink()
     subprocess.run([str(BIN), 'check-config', '--config', str(STATE / 'config.yaml')], check=True)
+    subprocess.run([str(BIN), 'security-init', '--config', str(STATE / 'config.yaml')], check=True)
+    subprocess.run([str(BIN), 'content-init', '--config', str(STATE / 'config.yaml')], check=True)
     (STATE / 'work').mkdir()
     (STATE / 'agent-state').mkdir()
     template = 'agent-demo' if VARIANT == '1' else 'agent-demo-2'

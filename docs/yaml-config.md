@@ -36,11 +36,11 @@ Strings wie `"true"`, `"null"` oder `"0012"` bei Bedarf ausdrücklich quotieren.
 ## Start und bestehende Konfigurationen
 
 ```sh
-cargo run --locked -- check-config --config config/scenarios/unix.yaml
+cargo run --locked -- check-config --config .local/unix/config.yaml
 cargo run --locked -- serve --config .local/unix/config.yaml
 ```
 
-Die gewöhnlichen Unix-Rechteregeln gelten auch für diese Kommandos; privilegierte Linux-Aufrufe benötigen explizite Ziel-UID/GID. Alte JSON-Konfigurationen funktionieren weiter. Die JSON-Versionen der vier Szenariovorlagen bleiben als Kompatibilitätsvorlagen und Test-Fixtures erhalten; Tests prüfen ihre inhaltliche Gleichheit mit YAML.
+Die gewöhnlichen Unix-Rechteregeln gelten auch für diese Kommandos; privilegierte Linux-Aufrufe benötigen explizite Ziel-UID/GID. JSON bleibt als Eingabeformat unterstützt. Ältere Konfigurationen mit implizitem Security-Pfad lassen sich mit `config-convert` einlesen. Vor `serve` den Pfad des tatsächlichen bestehenden Security-Stores prüfen. Die JSON-Versionen der vier Szenariovorlagen bleiben als Kompatibilitätsvorlagen und Test-Fixtures erhalten; Tests prüfen ihre inhaltliche Gleichheit mit YAML.
 
 Zum Wechsel einer vorhandenen Installation:
 

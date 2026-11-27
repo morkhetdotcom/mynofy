@@ -14,6 +14,19 @@ class ConformanceTest {
   static final Path ROOT = Path.of("../..").toAbsolutePath().normalize();
 
   @Test
+  void sharedBootIdentityVectors() throws Exception {
+    var vectors = JsonParser.parseString(Files.readString(ROOT.resolve("protocol/conformance/sdk-v1.json")))
+        .getAsJsonObject().getAsJsonArray("boot_identity");
+    for (var entry : vectors) {
+      var row = entry.getAsJsonObject();
+      var field = row.get("value");
+      String value = field.isJsonNull() ? null : field.getAsString();
+      if (row.get("valid").getAsBoolean()) assertEquals(value, Client.validatedBootId(value));
+      else assertThrows(java.io.IOException.class, () -> Client.validatedBootId(value));
+    }
+  }
+
+  @Test
   void sharedWireAndCryptoVectors() throws Exception {
     JsonObject vectors =
         JsonParser.parseString(Files.readString(ROOT.resolve("protocol/conformance/sdk-v1.json")))

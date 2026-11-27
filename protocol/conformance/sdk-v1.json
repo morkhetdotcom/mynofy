@@ -362,5 +362,13 @@
         }
       }
     }
+  ],
+  "boot_identity": [
+    {"name": "absent", "value": null, "valid": true},
+    {"name": "canonical_16_bytes", "value": "AAECAwQFBgcICQoLDA0ODw==", "valid": true},
+    {"name": "present_empty", "value": "", "valid": false},
+    {"name": "bad_alphabet", "value": "!", "valid": false},
+    {"name": "wrong_length", "value": "AA==", "valid": false},
+    {"name": "not_canonical", "value": "AAECAwQFBgcICQoLDA0ODx==", "valid": false}
   ]
 }

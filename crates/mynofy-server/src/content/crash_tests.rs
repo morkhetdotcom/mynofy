@@ -163,11 +163,14 @@ fn config(root: &Path, mode: ContentEncryption) -> Config {
     };
     config.topics = vec![topic, other];
     config.content_storage = Some(ContentStorage {
+        store_id: None,
         directory: root.join("content"),
         encryption: mode,
         max_snapshot_bytes: 4 * 1024 * 1024,
+        autosave_retry: Default::default(),
     });
     config.security_storage = Some(SecurityStorage {
+        minimum_sequence: None,
         sync: false,
         directory: root.join("security"),
         queue_capacity: 128,
@@ -307,12 +310,12 @@ fn content_boundaries() -> Vec<Case> {
         "topic.written",
         "topic.file_synced",
         "topic.renamed",
-        "topic.dir_synced",
     ] {
         for n in [1, 2] {
             cases.push(case(point, n, Outcome::Old));
         }
     }
+    cases.push(case("topics.dir_synced", 1, Outcome::Old));
     for point in [
         "manifest.truncated",
         "manifest.partial_written",
@@ -567,6 +570,7 @@ fn storage_fault_manifest_and_topic_io_failures_keep_old_or_committed_generation
         case("topic.partial_written", 2, Outcome::Old),
         case("topic.file_sync", 1, Outcome::Old),
         case("topic.rename", 2, Outcome::Old),
+        case("topics.dir_sync", 1, Outcome::Old),
         case("manifest.partial_written", 1, Outcome::Old),
         case("manifest.file_sync", 1, Outcome::Old),
         case("manifest.rename", 1, Outcome::Old),
@@ -595,7 +599,7 @@ fn storage_fault_backup_and_ram_deletion_are_interruptible_without_security_roll
     matrix("backup", ContentEncryption::KeyStdin, backup, "stop");
     let ram = content_boundaries()
         .into_iter()
-        .filter(|case| !case.point.starts_with("topic."))
+        .filter(|case| !case.point.starts_with("topic.") && !case.point.starts_with("topics."))
         .collect();
     matrix("topic-ram", ContentEncryption::KeyStdin, ram, "stop");
     matrix(
@@ -845,4 +849,61 @@ fn storage_fault_reopen_must_confirm_visible_manifest_before_reusing_slots() {
         assert_eq!(snapshot(&fixture.directory.0.join("security")), security);
     }
     verify_generation(&fixture.config, "rekey", Outcome::New);
+}
+
+#[tokio::test]
+async fn normal_prepare_refuses_unfinished_backup_and_accepts_committed_copy() {
+    let fixture = Fixture::new(ContentEncryption::None, "backup");
+    let mut cfg = fixture.config.clone();
+    cfg.service.listen = None;
+    cfg.service.tls = None;
+    cfg.service.unix_socket = Some(fixture.directory.0.join("backup.sock"));
+    cfg.content_storage.as_mut().unwrap().store_id =
+        Some("f1112222333344445555666677778888".into());
+    super::initialize(&cfg).unwrap();
+    let output = fixture.directory.0.join("complete-backup");
+    offline::OfflineStorage::open(cfg.clone(), None)
+        .unwrap()
+        .backup(&output)
+        .unwrap();
+    cfg.content_storage.as_mut().unwrap().directory = output;
+    drop(crate::transport::prepare(cfg.clone(), None).unwrap());
+
+    let incomplete = fixture.directory.0.join("incomplete-backup");
+    let stage = disk::Store::open(&incomplete).unwrap();
+    // Even a legacy fresh marker cannot authorize an empty bound backup.
+    stage
+        .write_id(
+            cfg.content_storage
+                .as_ref()
+                .unwrap()
+                .store_id
+                .as_deref()
+                .unwrap(),
+        )
+        .unwrap();
+    drop(stage);
+    cfg.content_storage.as_mut().unwrap().directory = incomplete;
+    assert!(crate::transport::prepare(cfg, None).is_err());
+}
+
+#[test]
+fn rekey_reports_committed_replacement_when_cleanup_is_pending() {
+    let mode = ContentEncryption::KeyStdin;
+    let fixture = Fixture::new(mode, "rekey");
+    let mut store =
+        offline::OfflineStorage::open(fixture.config.clone(), secret(mode, false)).unwrap();
+    let obstruction = fixture.content().join("references.tmp");
+    std::fs::create_dir(&obstruction).unwrap();
+    let result = store.rekey(secret(mode, true).unwrap()).unwrap_err();
+    assert!(
+        result
+            .to_string()
+            .contains("commit=durable cleanup=pending")
+    );
+    drop(store);
+    assert!(offline::OfflineStorage::open(fixture.config.clone(), secret(mode, false)).is_err());
+    let store = offline::OfflineStorage::open(fixture.config.clone(), secret(mode, true)).unwrap();
+    std::fs::remove_dir(obstruction).unwrap();
+    store.cleanup().unwrap();
 }

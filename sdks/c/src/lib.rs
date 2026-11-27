@@ -603,6 +603,24 @@ pub unsafe extern "C" fn mynofy_client_info(
     })
 }
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn mynofy_client_boot_id(
+    client: *const Client,
+    out: *mut abi::Str,
+    error: *mut abi::Error,
+) -> i32 {
+    boundary(error, || {
+        // SAFETY: live immutable client and writable output.
+        let client = unsafe { abi::reference(client) }?;
+        let boot_id = client
+            .welcome
+            .boot_id
+            .as_deref()
+            .map(Str::new)
+            .unwrap_or_default();
+        unsafe { abi::output(out, boot_id) }
+    })
+}
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mynofy_client_close(client: *const Client) {
     getter(|| {
         if !client.is_null() {

@@ -66,15 +66,28 @@ pub async fn run_unix_prepared(
     bound: BoundUnixSocket,
     prepared: PreparedService,
 ) -> std::result::Result<(), BoxError> {
-    let state = prepared.state;
-    if state.config.service.unix_socket.is_none() || prepared.tls.is_some() {
+    run_unix_prepared_until(bound, prepared, std::future::pending()).await
+}
+
+/// Stop accepting work when the shutdown future completes and report the durable drain.
+pub async fn run_unix_prepared_until(
+    bound: BoundUnixSocket,
+    prepared: PreparedService,
+    shutdown: impl std::future::Future<Output = std::io::Result<()>>,
+) -> std::result::Result<(), BoxError> {
+    tokio::pin!(shutdown);
+    let mut prepared = prepared;
+    if prepared.state.config.service.unix_socket.is_none() || prepared.tls.is_some() {
         return Err("Unix listener requires unix_socket without TLS".into());
     }
-    let mut admin = crate::admin::start(&state.config, state.engine.clone())?;
+    let mut admin = prepared.take_admin()?;
+    let state = prepared.state;
     let mut tasks = JoinSet::new();
     let mut maintenance = Box::pin(tokio::time::sleep(Duration::from_secs(1)));
-    loop {
+    let result = async {
+        loop {
         tokio::select! {
+            stopped=&mut shutdown=>{return stopped.map_err(Into::into);},
             result=&mut admin=>{return result;},
             accepted=bound.listener.accept()=>{
                 let(stream,_)=accepted?;
@@ -85,7 +98,7 @@ pub async fn run_unix_prepared(
                 let state=state.clone();
                 tasks.spawn(async move{
                     let _admission=admission;
-                    let _=websocket_connection(stream,state.engine.clone(),&state.config,Some(&state.network),None).await;
+                    let _=websocket_connection(stream,state.engine.clone(),&state.config,Some(&state.network),None,None,None).await;
                 });
             },
             _=&mut maintenance=>{
@@ -95,5 +108,12 @@ pub async fn run_unix_prepared(
             },
             _=tasks.join_next(),if !tasks.is_empty()=>{},
         }
-    }
+        }
+    }.await;
+    drop(admin);
+    drop(bound);
+    tasks.shutdown().await;
+    state.network.shutdown().await;
+    let drained = finish_shutdown(state.engine.clone()).await;
+    drained.and(result)
 }

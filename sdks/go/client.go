@@ -51,6 +51,7 @@ type Config struct {
 type ConnectionInfo struct {
 	Owner, ClientID string
 	RestartCounter  uint32
+	BootID          string
 }
 type Client struct {
 	ws           *websocket.Conn
@@ -182,7 +183,21 @@ func (c *Client) authenticate(ctx context.Context, expected string) error {
 	}
 	c.info.ClientID = expected
 	c.info.RestartCounter = welcome.GetRestartCounter()
+	bootID, err := validatedBootID(welcome.BootId)
+	if err != nil {
+		return err
+	}
+	c.info.BootID = bootID
 	return nil
+}
+func validatedBootID(value *string) (string, error) {
+	if value == nil {
+		return "", nil
+	}
+	if _, err := unb64(*value, 16); err != nil {
+		return "", fmt.Errorf("invalid owner boot identity: %w", err)
+	}
+	return *value, nil
 }
 func frameFor(kind string, body proto.Message) *pb.Frame {
 	frame := &pb.Frame{Version: proto.Uint32(1)}
@@ -218,6 +233,9 @@ func (c *Client) roundtrip(ctx context.Context, kind string, body proto.Message,
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
 	fail := func(err error) (*pb.Frame, error) {
+		if cause := ctx.Err(); cause != nil && !errors.Is(err, cause) {
+			err = errors.Join(err, cause)
+		}
 		c.Close()
 		return nil, &TransportError{Err: err, OutcomeUnknown: mutation}
 	}
@@ -267,6 +285,31 @@ func (c *Client) roundtrip(ctx context.Context, kind string, body proto.Message,
 	}
 	if kind == "get_message" && response.GetMessageStatus().GetMessage().GetId() != body.(*pb.GetMessage).GetMessageId() {
 		return fail(errors.New("response message ID mismatch"))
+	}
+	switch request := body.(type) {
+	case *pb.Poll:
+		page := response.GetMessages()
+		n, err := limit(request.GetLimit())
+		if err != nil || !validCursor(page.GetNextCursor()) || len(page.GetItems()) > int(n) {
+			return fail(errors.New("invalid poll page"))
+		}
+		for _, item := range response.GetMessages().GetItems() {
+			if item.GetMessage().GetTopic() != request.GetTopic() {
+				return fail(errors.New("poll response topic mismatch"))
+			}
+		}
+	case *pb.ListMessages:
+		if request.Topic != nil {
+			for _, item := range response.GetMessagesPage().GetItems() {
+				if item.GetTopic() != request.GetTopic() {
+					return fail(errors.New("producer page topic mismatch"))
+				}
+			}
+		}
+	case *pb.GetPermissions:
+		if response.GetPermissions_().GetTopic() != request.GetTopic() {
+			return fail(errors.New("permissions response topic mismatch"))
+		}
 	}
 	return response, nil
 }
@@ -377,12 +420,7 @@ func (c *Client) Poll(ctx context.Context, topic, after string, pageLimit uint32
 	if err != nil {
 		return nil, err
 	}
-	page := frame.GetMessages()
-	if !validCursor(page.GetNextCursor()) || len(page.Items) > int(n) {
-		c.Close()
-		return nil, errors.New("invalid poll page")
-	}
-	return page, nil
+	return frame.GetMessages(), nil
 }
 
 type ListOptions struct {

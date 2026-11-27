@@ -57,7 +57,7 @@ asyncio.run(main())
 
 Bei `has_more` weitere Seiten sofort abholen. Poll startet keine Hintergrundschleife.
 Fehlender Cursor liest den aktiven Bestand erneut. Nach bekanntem Service-Neustart
-anhand von `client.info.restart_counter` gespeicherte Cursor verwerfen und mit
+anhand von `client.info.boot_id` bei aktuellen Ownern gespeicherte Cursor verwerfen und mit
 lokalem Arbeitsstand abgleichen; kein automatisches Wiederholen von Fachaktionen.
 Das SDK speichert weder Cursor noch Tickets oder Mandate und führt keine fachliche Bestätigung aus.
 Poll reads without recording reader state. Losing its response leaves client-local progress unchanged.

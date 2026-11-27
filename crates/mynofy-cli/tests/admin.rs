@@ -56,9 +56,9 @@ async fn start(
     config: Config,
 ) -> tokio::task::JoinHandle<Result<(), mynofy_server::BoxError>> {
     let bound = transport::bind_unix(&f.data).unwrap();
-    let task = tokio::spawn(async move { transport::run_unix(bound, config).await });
+    let task = tokio::spawn(async move { support::run_unix_fixture(bound, config).await });
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        while !f.admin.exists() {
+        while !(support::unix_socket_ready(&f.admin) && support::unix_socket_ready(&f.data)) {
             tokio::task::yield_now().await;
         }
     })
@@ -389,7 +389,16 @@ async fn admin_cli_routes_client_key_acl_and_status_commands() {
     }
     let f = fixture();
     let config_file = f.dir.join("config.yaml");
-    std::fs::write(&config_file, f.config.to_yaml().unwrap()).unwrap();
+    let mut config = f.config.clone();
+    config.security_storage = Some(mynofy_server::config::SecurityStorage {
+        minimum_sequence: None,
+        directory: f.dir.join("security"),
+        sync: true,
+        queue_capacity: 128,
+        compact_after_records: 4096,
+    });
+    mynofy_server::initialize_security(&config).unwrap();
+    std::fs::write(&config_file, config.to_yaml().unwrap()).unwrap();
     let mut server = tokio::process::Command::new(env!("CARGO_BIN_EXE_mynofy"))
         .args(["serve", "--config", config_file.to_str().unwrap()])
         .stdout(std::process::Stdio::null())
@@ -398,7 +407,7 @@ async fn admin_cli_routes_client_key_acl_and_status_commands() {
         .spawn()
         .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(2), async {
-        while !f.admin.exists() {
+        while !(support::unix_socket_ready(&f.admin) && support::unix_socket_ready(&f.data)) {
             tokio::task::yield_now().await;
         }
     })
@@ -555,18 +564,16 @@ async fn synchronous_security_survives_sigkill_without_status_barrier() {
 }
 async fn journal_crash_recovery(sync: bool) {
     let mut f = fixture();
-    if !sync {
-        f.config.security_storage = Some(mynofy_server::config::SecurityStorage {
-            sync: false,
-            directory: f.dir.join("config.json.security"),
-            queue_capacity: 128,
-            compact_after_records: 4096,
-        });
-    }
+    f.config.security_storage = Some(mynofy_server::config::SecurityStorage {
+        minimum_sequence: None,
+        sync,
+        directory: f.dir.join("config.json.security"),
+        queue_capacity: 128,
+        compact_after_records: 4096,
+    });
+    mynofy_server::initialize_security(&f.config).unwrap();
     let config = f.dir.join("config.json");
     std::fs::write(&config, serde_json::to_vec(&f.config).unwrap()).unwrap();
-    // Omitted storage configuration must enable durable service confirmations;
-    // the asynchronous branch is an explicit opt-out, never an implicit default.
     assert_eq!(
         Config::load(&config)
             .unwrap()
@@ -901,6 +908,7 @@ async fn synchronous_security_reports_failed_sync_without_blocking_reads_or_roll
     let mut f = fixture();
     let directory = f.dir.join("security");
     f.config.security_storage = Some(mynofy_server::config::SecurityStorage {
+        minimum_sequence: None,
         sync: true,
         directory: directory.clone(),
         queue_capacity: 8,
@@ -993,6 +1001,7 @@ async fn synchronous_rotation_sync_failure_preserves_unknown_commit_outcome() {
     let mut f = fixture();
     let directory = f.dir.join("security");
     f.config.security_storage = Some(mynofy_server::config::SecurityStorage {
+        minimum_sequence: None,
         sync: true,
         directory: directory.clone(),
         queue_capacity: 8,
@@ -1056,6 +1065,15 @@ async fn admin_cli_separates_basic_status_from_explicit_storage_diagnostics() {
     let f = fixture();
     let server = start(&f, f.config.clone()).await;
     let socket = f.admin.to_str().unwrap();
+    let health = cli(&["admin", "health", "--socket", socket]).await;
+    assert!(
+        health.status.success(),
+        "{}",
+        String::from_utf8_lossy(&health.stderr)
+    );
+    let health: Value = serde_json::from_slice(&health.stdout).unwrap();
+    assert_eq!(health["ready"], true);
+    assert_eq!(health.as_object().unwrap().len(), 3);
     let status = cli(&["admin", "status", "--socket", socket]).await;
     assert!(
         status.status.success(),
@@ -1086,4 +1104,107 @@ async fn admin_cli_separates_basic_status_from_explicit_storage_diagnostics() {
     );
     server.abort();
     let _ = server.await;
+}
+
+#[tokio::test]
+async fn sigterm_reports_undurable_security_with_an_open_session() {
+    if support::under_unprivileged_identity(
+        "sigterm_reports_undurable_security_with_an_open_session",
+    ) {
+        return;
+    }
+    let mut f = fixture();
+    let directory = f.dir.join("security");
+    f.config.security_storage = Some(mynofy_server::config::SecurityStorage {
+        minimum_sequence: None,
+        sync: true,
+        directory: directory.clone(),
+        queue_capacity: 8,
+        compact_after_records: 1,
+    });
+    let other_key = crypto::generate_key().unwrap();
+    let public = crypto::public_key(&other_key).unwrap();
+    let mut other = f.config.clients[0].clone();
+    other.client_id = crypto::initial_client_id(&public);
+    other.keys[0].public_key = crypto::encode(&public);
+    f.config.clients.push(other);
+    mynofy_server::initialize_security(&f.config).unwrap();
+    let path = f.dir.join("config.json");
+    std::fs::write(&path, serde_json::to_vec(&f.config).unwrap()).unwrap();
+    let start = || {
+        tokio::process::Command::new(env!("CARGO_BIN_EXE_mynofy"))
+            .args(["serve", "--config"])
+            .arg(&path)
+            .stderr(std::process::Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap()
+    };
+    let ready = || async {
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while !(support::unix_socket_ready(&f.admin) && support::unix_socket_ready(&f.data)) {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    };
+    let owner = start();
+    ready().await;
+    let _open_session = mynofy_client::connect_unix_client(&f.data, &other_key, "local", None)
+        .await
+        .unwrap();
+    let client = f.config.clients[0].client_id.clone();
+    std::fs::create_dir(directory.join("snapshot.tmp")).unwrap();
+    call(
+        &f,
+        A::AclSet {
+            client: client.clone(),
+            topic: "local/events".into(),
+            allow: vec![],
+        },
+    )
+    .await;
+    let reply = admin::request(
+        &f.admin,
+        A::ClientDisable {
+            client: client.clone(),
+            disabled: true,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(reply["error"]["code"], "security_storage_unsynced");
+    assert_eq!(
+        call(
+            &f,
+            A::ClientGet {
+                client: client.clone()
+            }
+        )
+        .await["disabled"],
+        true
+    );
+    assert!(
+        tokio::process::Command::new("kill")
+            .args(["-TERM", &owner.id().unwrap().to_string()])
+            .status()
+            .await
+            .unwrap()
+            .success()
+    );
+    let output = tokio::time::timeout(std::time::Duration::from_secs(4), owner.wait_with_output())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("security_drain_failed: submitted_sequence=2 durable_sequence=1")
+    );
+    std::fs::remove_dir(directory.join("snapshot.tmp")).unwrap();
+    let restarted = start();
+    ready().await;
+    assert_eq!(call(&f, A::ClientGet { client }).await["disabled"], false);
+    drop(restarted);
 }

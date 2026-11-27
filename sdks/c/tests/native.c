@@ -45,6 +45,7 @@ static mynofy_config config(int argc,char **argv,mynofy_key *key) {
 static void roundtrip(mynofy_client *client) {
     const char *topic="local/events";mynofy_response *response=NULL;
     mynofy_connection_info info;ok(mynofy_client_info(client,&info,&error));assert(equal(info.owner,"local"));assert(info.client_id.len>32);
+    mynofy_str boot_id;ok(mynofy_client_boot_id(client,&boot_id,&error));assert(boot_id.len==24);
     ok(mynofy_get_catalog(client,"mynofy",1,&response,&error));assert(mynofy_response_type(response)==MYNOFY_CATALOG);
     mynofy_bytes catalog=mynofy_response_catalog(response);assert(catalog.len>100);release(&response);
     ok(mynofy_get_permissions(client,topic,&response,&error));assert(mynofy_response_type(response)==MYNOFY_PERMISSIONS);

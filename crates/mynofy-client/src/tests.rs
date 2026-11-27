@@ -111,6 +111,7 @@ async fn authentication_rejects_welcome_without_restart_counter() {
                     service_id: "owner".into(),
                     client_id,
                     restart_counter: None,
+                    boot_id: None,
                 })),
             }
             .encode_to_vec()
@@ -307,5 +308,76 @@ async fn shared_reply_vectors_validate_command_semantics_and_poison_invalid_sess
         assert_eq!(exchange_frame(&mut socket, &request).await.is_ok(), valid);
         drop(socket);
         task.await.unwrap();
+    }
+}
+
+#[test]
+fn topic_scoped_replies_reject_mismatched_items_and_permissions() {
+    use protocol::pb;
+    let frame = |body| pb::Frame {
+        version: 1,
+        body: Some(body),
+    };
+    for (request, response) in [
+        (
+            pb::Body::Poll(pb::Poll {
+                id: "r".into(),
+                topic: "expected".into(),
+                ..Default::default()
+            }),
+            pb::Body::Messages(pb::Messages {
+                request_id: "r".into(),
+                items: vec![pb::PolledMessage {
+                    message: pb::StoredMessage {
+                        topic: "unexpected".into(),
+                        ..Default::default()
+                    },
+                }],
+                ..Default::default()
+            }),
+        ),
+        (
+            pb::Body::ListMessages(pb::ListMessages {
+                id: "r".into(),
+                topic: Some("expected".into()),
+                ..Default::default()
+            }),
+            pb::Body::MessagesPage(pb::MessagesPage {
+                request_id: "r".into(),
+                items: vec![pb::MessageSummary {
+                    topic: "unexpected".into(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }),
+        ),
+        (
+            pb::Body::GetPermissions(pb::GetPermissions {
+                id: "r".into(),
+                topic: "expected".into(),
+            }),
+            pb::Body::Permissions(pb::Permissions {
+                request_id: "r".into(),
+                topic: "unexpected".into(),
+                ..Default::default()
+            }),
+        ),
+    ] {
+        let error = validate_response(&frame(request), &frame(response)).unwrap_err();
+        assert!(error.to_string().contains("topic mismatch"));
+    }
+}
+
+#[test]
+fn boot_identity_matches_shared_conformance_vectors() {
+    let vectors: Value =
+        serde_json::from_str(include_str!("../../../protocol/conformance/sdk-v1.json")).unwrap();
+    for row in vectors["boot_identity"].as_array().unwrap() {
+        assert_eq!(
+            validate_boot_id(row["value"].as_str()).is_ok(),
+            row["valid"].as_bool().unwrap(),
+            "{}",
+            row["name"],
+        );
     }
 }

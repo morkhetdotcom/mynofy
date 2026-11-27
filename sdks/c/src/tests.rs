@@ -113,6 +113,7 @@ fn mock(behavior: Behavior, timeout: Duration) -> (Arc<Client>, mpsc::Receiver<p
             service_id: "local".into(),
             client_id: id,
             restart_counter: Some(1),
+            boot_id: None,
         },
         timeout,
         runtime: rt.clone(),

@@ -30,6 +30,8 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     /// None permits a purely in-memory embedded core. Config::load fills a default path.
     pub security_storage: Option<SecurityStorage>,
+    #[serde(skip)]
+    pub require_initialized_security: bool,
     pub service: Service,
     pub clients: Vec<Client>,
     #[serde(default)]
@@ -49,10 +51,30 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct ContentStorage {
     pub directory: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub store_id: Option<String>,
     #[serde(default)]
     pub encryption: ContentEncryption,
     #[serde(default = "content_max_bytes")]
     pub max_snapshot_bytes: u64,
+    #[serde(default)]
+    pub autosave_retry: AutosaveRetry,
+}
+#[derive(Clone, Deserialize, Serialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AutosaveRetry {
+    pub enabled: bool,
+    pub initial_delay_seconds: u64,
+    pub max_delay_seconds: u64,
+}
+impl Default for AutosaveRetry {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            initial_delay_seconds: 1,
+            max_delay_seconds: 60,
+        }
+    }
 }
 fn content_max_bytes() -> u64 {
     128 * 1024 * 1024
@@ -72,6 +94,8 @@ pub struct SecurityStorage {
     #[serde(default = "security_sync")]
     pub sync: bool,
     pub directory: PathBuf,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum_sequence: Option<u64>,
     #[serde(default = "security_queue")]
     pub queue_capacity: usize,
     #[serde(default = "security_compaction")]
@@ -210,12 +234,77 @@ pub struct Peer {
     pub certificate_identity: Option<String>,
     pub topics: Vec<String>,
 }
+pub(crate) const DUPLICATE_PEER_CERTIFICATE_IDENTITY: &str =
+    "Duplicate accepted peer certificate identity";
+
+impl Peer {
+    pub(crate) fn server_name(
+        &self,
+    ) -> std::result::Result<tokio_rustls::rustls::pki_types::ServerName<'_>, &'static str> {
+        use tokio_rustls::rustls::pki_types::{DnsName, ServerName};
+        let identity = self
+            .certificate_identity
+            .as_deref()
+            .unwrap_or(&self.service_id);
+        let invalid = "Invalid accepted peer certificate identity";
+        // TLS treats an absolute DNS name and its relative spelling as equivalent.
+        match ServerName::try_from(identity).map_err(|_| invalid)? {
+            ServerName::DnsName(_) if identity.ends_with('.') => {
+                DnsName::try_from(&identity[..identity.len() - 1])
+                    .map(ServerName::DnsName)
+                    .map_err(|_| invalid)
+            }
+            name => Ok(name),
+        }
+    }
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Upstream {
     pub service_id: String,
     pub url: String,
     pub trust: Trust,
+}
+impl Upstream {
+    pub(crate) fn endpoint(
+        &self,
+    ) -> std::result::Result<(tokio_tungstenite::tungstenite::http::Uri, u16), &'static str> {
+        use tokio_rustls::rustls::pki_types::ServerName;
+        let invalid = "Invalid upstream WebSocket URL";
+        let uri: tokio_tungstenite::tungstenite::http::Uri =
+            self.url.parse().map_err(|_| invalid)?;
+        let authority = uri.authority().ok_or(invalid)?;
+        let host = authority.host();
+        let valid_host =
+            if let Some(address) = host.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+                address.parse::<std::net::Ipv6Addr>().is_ok()
+            } else {
+                ServerName::try_from(host).is_ok()
+            };
+        if uri.scheme_str() != Some("wss")
+            || self.url.contains('#')
+            || authority.as_str().contains('@')
+            || !valid_host
+        {
+            return Err(invalid);
+        }
+        // A missing port defaults to 443. An invalid explicit port must fail.
+        let suffix = authority.as_str().strip_prefix(host).ok_or(invalid)?;
+        let port = if suffix.is_empty() {
+            443
+        } else {
+            let port = suffix.strip_prefix(':').ok_or(invalid)?;
+            if !port.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(invalid);
+            }
+            port.parse::<u16>()
+                .ok()
+                .filter(|port| *port != 0)
+                .ok_or(invalid)?
+        };
+        Ok((uri, port))
+    }
 }
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -235,16 +324,22 @@ pub struct Limits {
     pub max_service_channels: usize,
     pub max_parallel_requests_per_client: usize,
     pub max_active_message_bytes: usize,
+    pub max_publisher_active_bytes: Option<usize>,
+    pub max_publisher_active_messages: Option<usize>,
+    pub max_topic_active_bytes: Option<usize>,
+    pub max_topic_active_messages: Option<usize>,
     pub max_content_working_bytes: usize,
     pub max_active_messages: usize,
     pub poll_page_items: usize,
     pub poll_page_max_items: usize,
     pub max_payload_bytes: usize,
     pub max_response_bytes: usize,
+    pub max_egress_bytes: Option<usize>,
     pub auth_timeout_seconds: u64,
     pub request_timeout_seconds: u64,
     pub idle_timeout_seconds: u64,
     pub max_connections_per_source: usize,
+    pub max_connections_per_ipv6_prefix: Option<usize>,
 }
 impl Default for Limits {
     fn default() -> Self {
@@ -257,16 +352,22 @@ impl Default for Limits {
             max_service_channels: 64,
             max_parallel_requests_per_client: 8,
             max_active_message_bytes: 16 * 1024 * 1024,
+            max_publisher_active_bytes: None,
+            max_publisher_active_messages: None,
+            max_topic_active_bytes: None,
+            max_topic_active_messages: None,
             max_content_working_bytes: 256 * 1024 * 1024,
             max_active_messages: 65_536,
             poll_page_items: 20,
             poll_page_max_items: 100,
             max_payload_bytes: 4096,
             max_response_bytes: 131_072,
+            max_egress_bytes: None,
             auth_timeout_seconds: 5,
             request_timeout_seconds: 10,
             idle_timeout_seconds: 60,
             max_connections_per_source: 32,
+            max_connections_per_ipv6_prefix: Some(64),
         }
     }
 }
@@ -282,6 +383,22 @@ pub fn is_yaml(path: &Path) -> bool {
         })
 }
 impl Config {
+    pub fn require_content_store_id(&self) -> std::result::Result<(), BoxError> {
+        if self
+            .content_storage
+            .as_ref()
+            .is_some_and(|storage| storage.store_id.is_none())
+        {
+            return Err(
+                "Configure content_storage.store_id and initialize the volume with content-init"
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    pub const MAX_INPUT_BYTES: usize = format::MAX_BYTES;
+
     /// Parse either YAML (.yaml/.yml) or strict JSON, without resolving paths or opening storage.
     pub fn parse(path: &Path, raw: &str) -> std::result::Result<Self, BoxError> {
         if raw.len() > format::MAX_BYTES {
@@ -301,6 +418,12 @@ impl Config {
         format::to_yaml(&serde_json::to_value(self)?)
     }
     pub fn load(path: &Path) -> std::result::Result<Self, BoxError> {
+        Self::load_inner(path, false)
+    }
+    pub fn load_explicit_security(path: &Path) -> std::result::Result<Self, BoxError> {
+        Self::load_inner(path, true)
+    }
+    fn load_inner(path: &Path, strict: bool) -> std::result::Result<Self, BoxError> {
         let mut raw = String::new();
         std::fs::File::open(path)?
             .take((format::MAX_BYTES + 1) as u64)
@@ -311,6 +434,10 @@ impl Config {
                 .filter(|p| !p.as_os_str().is_empty())
                 .unwrap_or_else(|| Path::new(".")),
         )?;
+        cfg.require_initialized_security = strict;
+        if cfg.security_storage.is_none() && strict {
+            return Err("Configure an explicit security_storage.directory and initialize it with security-init".into());
+        }
         if cfg.security_storage.is_none() {
             let mut directory = path
                 .file_name()
@@ -318,6 +445,7 @@ impl Config {
                 .to_os_string();
             directory.push(".security");
             cfg.security_storage = Some(SecurityStorage {
+                minimum_sequence: None,
                 sync: security_sync(),
                 directory: parent.join(directory),
                 queue_capacity: security_queue(),
@@ -369,8 +497,17 @@ impl Config {
         if let Some(storage) = &self.content_storage {
             #[cfg(not(unix))]
             return fail("Content storage currently requires Unix");
+            if storage.store_id.as_ref().is_some_and(|id| {
+                id.len() != 32 || !id.bytes().all(|byte| byte.is_ascii_hexdigit())
+            }) {
+                return fail("content_storage.store_id must contain 32 hexadecimal digits");
+            }
             if storage.directory.as_os_str().is_empty()
                 || !(65536..=512 * 1024 * 1024).contains(&storage.max_snapshot_bytes)
+                || storage.autosave_retry.initial_delay_seconds == 0
+                || storage.autosave_retry.max_delay_seconds
+                    < storage.autosave_retry.initial_delay_seconds
+                || storage.autosave_retry.max_delay_seconds > 2_592_000
                 || self
                     .security_storage
                     .as_ref()
@@ -449,7 +586,7 @@ impl Config {
         }
         let mut topics = HashSet::new();
         for t in &self.topics {
-            if t.name.is_empty() || t.name.len() > 256 || !topics.insert(&t.name) {
+            if t.name.is_empty() || t.name.len() > 256 || !topics.insert(t.name.as_str()) {
                 return fail("Invalid/duplicate topic");
             }
             if t.storage
@@ -503,7 +640,6 @@ impl Config {
             u.service_id.is_empty()
                 || u.service_id.len() > 256
                 || u.service_id == self.service.id
-                || !u.url.starts_with("wss://")
                 || u.trust.mode != "ca"
                 || tokio_rustls::rustls::pki_types::ServerName::try_from(
                     u.trust.expected_certificate_identity.as_str(),
@@ -511,6 +647,9 @@ impl Config {
                 .is_err()
         }) {
             return fail("Invalid upstream");
+        }
+        if let Some(upstream) = &self.upstream {
+            upstream.endpoint()?;
         }
         if self.accepted_peers.len() > 10_000 {
             return fail("Too many accepted peers");
@@ -542,31 +681,18 @@ impl Config {
                 || peer.service_id.len() > 256
                 || peer.service_id == self.service.id
                 || !peers.insert(&peer.service_id)
-                || !identities.insert(
-                    peer.certificate_identity
-                        .as_ref()
-                        .unwrap_or(&peer.service_id),
-                )
-                || tokio_rustls::rustls::pki_types::ServerName::try_from(
-                    peer.certificate_identity
-                        .as_ref()
-                        .unwrap_or(&peer.service_id)
-                        .as_str(),
-                )
-                .is_err()
                 || peer.topics.is_empty()
                 || peer.topics.len() > 10000
                 || peer
-                    .certificate_identity
-                    .as_ref()
-                    .is_some_and(|s| s.is_empty())
-                || peer
                     .topics
                     .iter()
-                    .any(|name| !self.topics.iter().any(|t| t.name == *name))
+                    .any(|name| !topics.contains(name.as_str()))
                 || peer.topics.iter().collect::<HashSet<_>>().len() != peer.topics.len()
             {
                 return fail("Invalid accepted peer identity or topic allowlist");
+            }
+            if !identities.insert(peer.server_name()?) {
+                return fail(DUPLICATE_PEER_CERTIFICATE_IDENTITY);
             }
         }
         if (self.upstream.is_some() || !self.accepted_peers.is_empty())
@@ -585,6 +711,11 @@ impl Config {
             return fail("Accepted peers require TCP/TLS and peer_ca_file");
         }
         let l = &self.limits;
+        if l.max_egress_bytes.is_some_and(|bytes| {
+            bytes < l.max_response_bytes || bytes > tokio::sync::Semaphore::MAX_PERMITS
+        }) {
+            return fail("max_egress_bytes must admit at least one maximum-sized response");
+        }
         if l.max_payload_bytes > 4096 {
             return Err(
                 "limits.max_payload_bytes must be at most 4096; migrate older configurations"
@@ -602,10 +733,16 @@ impl Config {
             || l.max_connections == 0
             || l.max_connections > 100_000
             || !(1..=4096).contains(&l.max_service_channels)
+            || l.max_connections_per_ipv6_prefix
+                .is_some_and(|n| !(1..=100_000).contains(&n))
             || l.max_connections_per_source == 0
             || l.max_connections_per_source > 100_000
             || l.max_parallel_requests_per_client == 0
             || l.max_parallel_requests_per_client > 1000
+            || l.max_publisher_active_bytes == Some(0)
+            || l.max_publisher_active_messages == Some(0)
+            || l.max_topic_active_bytes == Some(0)
+            || l.max_topic_active_messages == Some(0)
             || l.max_active_messages == 0
             || l.max_payload_bytes == 0
             || l.max_payload_bytes > 4096
@@ -690,6 +827,7 @@ mod security_tests {
         for (capacity, compact) in [(0, 1), (4097, 1), (1, 0), (1, 1_000_001)] {
             let mut config = baseline.clone();
             config.security_storage = Some(SecurityStorage {
+                minimum_sequence: None,
                 sync: false,
                 directory: "security".into(),
                 queue_capacity: capacity,

@@ -38,6 +38,7 @@ fn fixture(mode: ContentEncryption) -> Fixture {
         json!([{"client_id":id,"allow":["publish","subscribe","inspect_own"]}]);
     let mut cfg: Config = serde_json::from_value(cfg).unwrap();
     cfg.security_storage = Some(SecurityStorage {
+        minimum_sequence: None,
         sync: false,
         directory: dir.join("security"),
         queue_capacity: 128,
@@ -51,12 +52,16 @@ fn fixture(mode: ContentEncryption) -> Fixture {
         }
     }
     cfg.content_storage = Some(ContentStorage {
+        store_id: Some("317050f003c743cb837757face732abc".into()),
         directory: dir.join("content"),
         encryption: mode,
         max_snapshot_bytes: 128 * 1024 * 1024,
+        autosave_retry: Default::default(),
     });
     let config = dir.join("config.yaml");
     std::fs::write(&config, cfg.to_yaml().unwrap()).unwrap();
+    mynofy_server::initialize_security(&cfg).unwrap();
+    mynofy_server::content::initialize(&cfg).unwrap();
     Fixture {
         dir,
         config,
@@ -87,17 +92,21 @@ async fn spawn(f: &Fixture, line: Option<&[u8]>) -> tokio::process::Child {
     child
 }
 async fn ready(f: &Fixture, child: &mut tokio::process::Child) {
+    let sockets = [f.dir.join("admin.sock"), f.dir.join("data.sock")];
     tokio::time::timeout(Duration::from_secs(10), async {
-        while !f.dir.join("admin.sock").exists() {
+        loop {
             assert!(
                 child.try_wait().unwrap().is_none(),
-                "owner stopped before listener creation"
+                "owner stopped before both listeners were ready"
             );
+            if sockets.iter().all(|path| support::unix_socket_ready(path)) {
+                break;
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
     })
     .await
-    .unwrap();
+    .expect("admin and data listeners did not reach mode 0600");
 }
 async fn call(f: &Fixture, command: A) -> Value {
     let reply = admin::request(&f.dir.join("admin.sock"), command)
@@ -333,8 +342,14 @@ fn terminal_secret_input_is_hidden_and_echo_is_restored_on_success_and_error() {
         return;
     }
     let f = fixture(ContentEncryption::PasswordStdin);
-    let script = r#"import os,pty,subprocess,sys,termios,time,select
+    let script = r#"import os,pty,stat,subprocess,sys,termios,time,select
 binary,config,admin,data=sys.argv[1:]
+def ready(path):
+ try:
+  mode=os.lstat(path).st_mode
+ except FileNotFoundError:
+  return False
+ return stat.S_ISSOCK(mode) and stat.S_IMODE(mode)==0o600
 for secret,success in [(b'pty-only-test-secret\n',True),(b'\n',False)]:
  master,slave=pty.openpty()
  original=termios.tcgetattr(slave)
@@ -351,7 +366,7 @@ for secret,success in [(b'pty-only-test-secret\n',True),(b'\n',False)]:
   assert not (termios.tcgetattr(slave)[3] & termios.ECHO), 'echo still enabled'
   os.write(master,secret)
   if success:
-   while not os.path.exists(admin):
+   while not (ready(admin) and ready(data)):
     assert child.poll() is None, 'owner exited'
     assert time.monotonic()<deadline, 'owner not ready'
     time.sleep(0.01)
@@ -582,6 +597,12 @@ async fn cli_restart_progress_and_offline_storage_workflow_preserve_security() {
     let page: Value = serde_json::from_slice(&initial.stdout).unwrap();
     assert_eq!(page["items"].as_array().unwrap().len(), 1);
     let cursor = page["next_cursor"].as_str().unwrap();
+    use std::os::unix::fs::MetadataExt;
+    let inode = std::fs::metadata(&progress).unwrap().ino();
+    let read_only = cli_input(client_args.clone(), b"{\"version\":1,\"type\":\"get_permissions\",\"id\":\"permissions\",\"topic\":\"local/events\"}\n").await;
+    successful(&read_only);
+    assert_eq!(std::fs::metadata(&progress).unwrap().ino(), inode);
+
     drop(client);
     kill(&f, &mut owner).await;
     std::fs::create_dir(f.dir.join("security/snapshot.tmp")).unwrap();
@@ -650,6 +671,15 @@ async fn cli_restart_progress_and_offline_storage_workflow_preserve_security() {
             .success()
     );
     successful(&cli_input(storage_args("check"), new.as_bytes()).await);
+    use std::os::unix::fs::PermissionsExt;
+    for entry in std::fs::read_dir(&backup).unwrap() {
+        std::fs::set_permissions(
+            entry.unwrap().path(),
+            std::fs::Permissions::from_mode(0o400),
+        )
+        .unwrap();
+    }
+    std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o500)).unwrap();
     let mut args = storage_args("restore");
     args.extend([
         "--from".into(),
@@ -658,6 +688,8 @@ async fn cli_restart_progress_and_offline_storage_workflow_preserve_security() {
         "stdin".into(),
     ]);
     successful(&cli_input(args, format!("{new}{old}").as_bytes()).await);
+    std::fs::set_permissions(&backup, std::fs::Permissions::from_mode(0o700)).unwrap();
+
     assert_eq!(
         std::fs::read(f.dir.join("security/snapshot")).unwrap(),
         security
@@ -941,6 +973,8 @@ async fn offline_topic_ram_preserves_unrelated_messages_after_fresh_cli_and_serv
     let mut converted = f.cfg.topics[0].clone();
     converted.name = "converted".into();
     f.cfg.topics.push(converted);
+    std::fs::remove_dir_all(&f.cfg.security_storage.as_ref().unwrap().directory).unwrap();
+    mynofy_server::initialize_security(&f.cfg).unwrap();
     std::fs::write(&f.config, f.cfg.to_yaml().unwrap()).unwrap();
     let mut owner = spawn(&f, None).await;
     ready(&f, &mut owner).await;
@@ -1006,5 +1040,534 @@ async fn offline_topic_ram_preserves_unrelated_messages_after_fresh_cli_and_serv
         "survives conversion"
     );
     drop(client);
+    kill(&f, &mut owner).await;
+}
+
+#[test]
+fn serve_rejects_missing_or_empty_security_store_without_recreating_it() {
+    if support::under_unprivileged_identity(
+        "serve_rejects_missing_or_empty_security_store_without_recreating_it",
+    ) {
+        return;
+    }
+    let f = fixture(ContentEncryption::None);
+    let security = &f.cfg.security_storage.as_ref().unwrap().directory;
+    std::fs::rename(security, f.dir.join("preserved-security")).unwrap();
+    let run = || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_mynofy"))
+            .args(["serve", "--config"])
+            .arg(&f.config)
+            .output()
+            .unwrap()
+    };
+    let missing = run();
+    assert!(!missing.status.success());
+    assert!(!security.exists());
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(security)
+        .unwrap();
+    let empty = run();
+    assert!(!empty.status.success());
+    assert_eq!(std::fs::read_dir(security).unwrap().count(), 0);
+    assert!(!f.dir.join("data.sock").exists());
+}
+
+#[test]
+fn serve_requires_the_configured_content_volume() {
+    if support::under_unprivileged_identity("serve_requires_the_configured_content_volume") {
+        return;
+    }
+    let mut f = fixture(ContentEncryption::None);
+    let storage = f.cfg.content_storage.as_mut().unwrap();
+    let volume = storage.directory.clone();
+    std::fs::rename(&volume, f.dir.join("preserved-content")).unwrap();
+    let run = || {
+        std::process::Command::new(env!("CARGO_BIN_EXE_mynofy"))
+            .args(["serve", "--config"])
+            .arg(&f.config)
+            .output()
+            .unwrap()
+    };
+    assert!(!run().status.success());
+    assert!(!volume.exists());
+    std::fs::DirBuilder::new()
+        .mode(0o700)
+        .create(&volume)
+        .unwrap();
+    assert!(!run().status.success());
+    assert_eq!(std::fs::read_dir(&volume).unwrap().count(), 0);
+    storage.store_id = Some("55555555555555555555555555555555".into());
+    mynofy_server::content::initialize(&f.cfg).unwrap();
+    assert!(!run().status.success());
+    assert!(!f.dir.join("data.sock").exists());
+}
+
+#[tokio::test]
+async fn sigterm_reports_failed_queued_save_and_preserves_previous_generation() {
+    if support::under_unprivileged_identity(
+        "sigterm_reports_failed_queued_save_and_preserves_previous_generation",
+    ) {
+        return;
+    }
+    let mut f = fixture(ContentEncryption::None);
+    let mut automatic = f.cfg.topics[0].clone();
+    automatic.name = "local/automatic".into();
+    automatic.storage = mynofy_server::config::TopicStorage::Interval {
+        seconds: 1,
+        encrypted: false,
+    };
+    f.cfg.topics.push(automatic);
+    std::fs::write(&f.config, f.cfg.to_yaml().unwrap()).unwrap();
+    let mut owner = spawn(&f, None).await;
+    ready(&f, &mut owner).await;
+    call(
+        &f,
+        A::AclSet {
+            client: f.id.clone(),
+            topic: "local/automatic".into(),
+            allow: vec![Action::Publish, Action::Subscribe],
+        },
+    )
+    .await;
+    let socket = f.dir.join("data.sock");
+    let connect = || mynofy_client::connect_unix_client(&socket, &f.key, "local", None);
+    let mut client = connect().await.unwrap();
+    let publish = |payload| json!({"version":1,"type":"publish","id":"pub","topic":"local/events","payload":payload});
+    assert_eq!(
+        mynofy_client::exchange(&mut client, &publish("A"))
+            .await
+            .unwrap()["type"],
+        "result"
+    );
+    let first = call(&f, A::ContentSave { topics: None }).await["revision"]
+        .as_u64()
+        .unwrap();
+    saved(&f, first).await;
+    std::fs::create_dir(f.dir.join("content/state.tmp")).unwrap();
+    assert_eq!(
+        mynofy_client::exchange(&mut client, &publish("B"))
+            .await
+            .unwrap()["type"],
+        "result"
+    );
+    let second = call(
+        &f,
+        A::ContentSave {
+            topics: Some(vec!["local/events".into()]),
+        },
+    )
+    .await["revision"]
+        .as_u64()
+        .unwrap();
+    assert!(second > first);
+    let fixture = &f;
+    let status = move |topic: &'static str| async move {
+        let status = call(fixture, A::Status {}).await;
+        status["content_storage"]["topics"][topic].clone()
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while status("local/events").await["save_failure"]["revision"] != second {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap();
+    std::fs::remove_dir(f.dir.join("content/state.tmp")).unwrap();
+    let automatic = json!({"version":1,"type":"publish","id":"automatic","topic":"local/automatic","payload":"interval"});
+    assert_eq!(
+        mynofy_client::exchange(&mut client, &automatic)
+            .await
+            .unwrap()["type"],
+        "result"
+    );
+    let automatic_revision = tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let saved = status("local/automatic").await["saved_revision"]
+                .as_u64()
+                .unwrap();
+            if saved > second {
+                break saved;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    assert!(
+        tokio::process::Command::new("kill")
+            .args(["-TERM", &owner.id().unwrap().to_string()])
+            .status()
+            .await
+            .unwrap()
+            .success()
+    );
+    let output = tokio::time::timeout(Duration::from_secs(5), owner.wait_with_output())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains(&format!(
+        "content_drain_failed: queued_revision={second} saved_revision={automatic_revision}"
+    )));
+    let mut restarted = spawn(&f, None).await;
+    ready(&f, &mut restarted).await;
+    let mut client = connect().await.unwrap();
+    let page = mynofy_client::exchange(
+        &mut client,
+        &json!({"version":1,"type":"poll","id":"poll","topic":"local/events"}),
+    )
+    .await
+    .unwrap();
+    let items = page["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["message"]["payload"], "A");
+    kill(&f, &mut restarted).await;
+}
+
+#[tokio::test]
+async fn admin_topic_json_selects_names_with_commas() {
+    if support::under_unprivileged_identity("admin_topic_json_selects_names_with_commas") {
+        return;
+    }
+    let mut f = fixture(ContentEncryption::None);
+    let name = "local/events,optional";
+    let mut topic = f.cfg.topics[0].clone();
+    topic.name = name.into();
+    f.cfg.topics.push(topic);
+    std::fs::write(&f.config, f.cfg.to_yaml().unwrap()).unwrap();
+    let mut owner = spawn(&f, None).await;
+    ready(&f, &mut owner).await;
+    let output = tokio::process::Command::new(env!("CARGO_BIN_EXE_mynofy"))
+        .args([
+            "admin",
+            "content",
+            "save",
+            "--topics-json",
+            &json!([name]).to_string(),
+            "--socket",
+        ])
+        .arg(f.dir.join("admin.sock"))
+        .output()
+        .await
+        .unwrap();
+    successful(&output);
+    let revision = serde_json::from_slice::<Value>(&output.stdout).unwrap()["revision"]
+        .as_u64()
+        .unwrap();
+    saved(&f, revision).await;
+    assert_eq!(
+        call(&f, A::Status {}).await["content_storage"]["topics"][name]["saved_revision"],
+        revision
+    );
+    kill(&f, &mut owner).await;
+}
+
+#[tokio::test]
+async fn cli_does_not_announce_readiness_when_admin_bind_fails() {
+    if support::under_unprivileged_identity("cli_does_not_announce_readiness_when_admin_bind_fails")
+    {
+        return;
+    }
+    let f = fixture(ContentEncryption::None);
+    let admin = f.dir.join("admin.sock");
+    std::fs::write(&admin, b"owned by another program").unwrap();
+    let output = tokio::time::timeout(
+        Duration::from_secs(5),
+        spawn(&f, None).await.wait_with_output(),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert!(!output.status.success());
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("listening on"));
+    assert_eq!(std::fs::read(admin).unwrap(), b"owned by another program");
+    assert!(!f.dir.join("data.sock").exists());
+}
+
+async fn mcp_poll_with_progress(
+    socket: &std::path::Path,
+    key: &std::path::Path,
+    previous: Option<(&Value, &Value)>,
+) -> (Value, Value) {
+    use tokio::io::AsyncBufReadExt;
+    let mut process = tokio::process::Command::new(env!("CARGO_BIN_EXE_mynofy"))
+        .args(["mcp", "--socket"])
+        .arg(socket)
+        .args(["--key"])
+        .arg(key)
+        .args(["--owner", "local"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let mut input = process.stdin.take().unwrap();
+    let mut output = tokio::io::BufReader::new(process.stdout.take().unwrap()).lines();
+    let mut info = Value::Null;
+    let mut page = Value::Null;
+    for id in 0..4 {
+        let request = match id {
+            0 => {
+                json!({"jsonrpc":"2.0","id":0,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"integration","version":"1"}}})
+            }
+            1 => json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+            2 => {
+                json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"mynofy_connection_info","arguments":{}}})
+            }
+            _ => {
+                let mut arguments = json!({"topic":"local/events"});
+                if let Some((old, cursor)) = previous
+                    && old["boot_id"] == info["boot_id"]
+                {
+                    arguments["after"] = cursor.clone();
+                }
+                json!({"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"mynofy_poll","arguments":arguments}})
+            }
+        };
+        input
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .unwrap();
+        if id != 1 {
+            let line = tokio::time::timeout(Duration::from_secs(3), output.next_line())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            let reply: Value = serde_json::from_str(&line).unwrap();
+            assert_eq!(reply["id"], id, "{reply}");
+            if id == 2 {
+                info = reply["result"]["structuredContent"].clone();
+            }
+            if id == 3 {
+                page = reply["result"]["structuredContent"].clone();
+            }
+        }
+    }
+    drop(input);
+    assert!(process.wait().await.unwrap().success());
+    (info, page)
+}
+
+#[tokio::test]
+async fn restored_security_counter_cannot_reuse_the_previous_boot_cursor() {
+    if support::under_unprivileged_identity(
+        "restored_security_counter_cannot_reuse_the_previous_boot_cursor",
+    ) {
+        return;
+    }
+    let mut f = fixture(ContentEncryption::None);
+    let socket = f.dir.join("data.sock");
+    let connect = || mynofy_client::connect_unix_client_info(&socket, &f.key, "local", None);
+    let mut first = spawn(&f, None).await;
+    ready(&f, &mut first).await;
+    let (mut client, _) = connect().await.unwrap();
+    let publish = |payload| json!({"version":1,"type":"publish","id":"pub","topic":"local/events","payload":payload});
+    assert_eq!(
+        mynofy_client::exchange(&mut client, &publish("A"))
+            .await
+            .unwrap()["type"],
+        "result"
+    );
+    call(
+        &f,
+        A::AclSet {
+            client: f.id.clone(),
+            topic: "local/events".into(),
+            allow: vec![Action::Publish, Action::Subscribe],
+        },
+    )
+    .await;
+    let revision = call(&f, A::ContentSave { topics: None }).await["revision"]
+        .as_u64()
+        .unwrap();
+    saved(&f, revision).await;
+    drop(client);
+    kill(&f, &mut first).await;
+
+    let security = f.dir.join("security");
+    let snapshot = std::fs::read(security.join("snapshot")).unwrap();
+    let journal = std::fs::read(security.join("journal")).unwrap();
+    f.cfg.security_storage.as_mut().unwrap().minimum_sequence = Some(1);
+    std::fs::write(&f.config, f.cfg.to_yaml().unwrap()).unwrap();
+
+    let mut second = spawn(&f, None).await;
+    ready(&f, &mut second).await;
+    let (mut client, second_boot) = connect().await.unwrap();
+    assert_eq!(
+        mynofy_client::exchange(&mut client, &publish("B"))
+            .await
+            .unwrap()["type"],
+        "result"
+    );
+    let keypath = f.dir.join("client.pk8");
+    std::fs::write(&keypath, &f.key).unwrap();
+    std::fs::set_permissions(
+        &keypath,
+        std::os::unix::fs::PermissionsExt::from_mode(0o600),
+    )
+    .unwrap();
+    let progress = f.dir.join("progress.json");
+    let args = vec![
+        "client".into(),
+        "--socket".into(),
+        socket.display().to_string(),
+        "--owner".into(),
+        "local".into(),
+        "--key".into(),
+        keypath.display().to_string(),
+        "--progress".into(),
+        progress.display().to_string(),
+    ];
+    let initial = cli_input(
+        args.clone(),
+        b"{\"version\":1,\"type\":\"poll\",\"id\":\"old\",\"topic\":\"local/events\"}\n",
+    )
+    .await;
+    successful(&initial);
+    let previous: Value = serde_json::from_slice(&initial.stdout).unwrap();
+    assert_eq!(previous["items"].as_array().unwrap().len(), 2);
+    let (mcp_before, mcp_first_page) = mcp_poll_with_progress(&socket, &keypath, None).await;
+    assert_eq!(
+        mcp_before["boot_id"],
+        second_boot.boot_id.as_deref().unwrap()
+    );
+    assert_eq!(mcp_first_page["boot_id"], mcp_before["boot_id"]);
+    assert_eq!(
+        mcp_first_page["response"]["next_cursor"],
+        previous["next_cursor"]
+    );
+    drop(client);
+    kill(&f, &mut second).await;
+
+    std::fs::write(security.join("snapshot"), snapshot).unwrap();
+    std::fs::write(security.join("journal"), journal).unwrap();
+    let mut restored = spawn(&f, None).await;
+    ready(&f, &mut restored).await;
+    let (mut client, current_boot) = connect().await.unwrap();
+    assert_eq!(second_boot.restart_counter, current_boot.restart_counter);
+    assert!(second_boot.boot_id.is_some());
+    assert!(current_boot.boot_id.is_some());
+    assert_ne!(second_boot.boot_id, current_boot.boot_id);
+    assert_eq!(
+        mynofy_client::exchange(&mut client, &publish("C"))
+            .await
+            .unwrap()["type"],
+        "result"
+    );
+    let request = format!(
+        "{}\n",
+        json!({"version":1,"type":"poll","id":"new","topic":"local/events","after":previous["next_cursor"]})
+    );
+    let output = cli_input(args, request.as_bytes()).await;
+    successful(&output);
+    let replay: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(replay["items"].as_array().unwrap().len(), 2);
+    assert_eq!(replay["items"][1]["message"]["payload"], "C");
+    let (mcp_current, mcp_replay) = mcp_poll_with_progress(
+        &socket,
+        &keypath,
+        Some((&mcp_before, &previous["next_cursor"])),
+    )
+    .await;
+    assert_eq!(
+        mcp_current["restart_counter"],
+        mcp_before["restart_counter"]
+    );
+    assert_ne!(mcp_current["boot_id"], mcp_before["boot_id"]);
+    assert_eq!(mcp_replay["boot_id"], mcp_current["boot_id"]);
+    assert_eq!(
+        mcp_replay["response"]["items"][1]["message"]["payload"],
+        "C"
+    );
+    kill(&f, &mut restored).await;
+}
+
+#[tokio::test]
+async fn progress_over_budget_fails_before_emitting_poll_response() {
+    if support::under_unprivileged_identity(
+        "progress_over_budget_fails_before_emitting_poll_response",
+    ) {
+        return;
+    }
+    let f = fixture(ContentEncryption::None);
+    let mut owner = spawn(&f, None).await;
+    ready(&f, &mut owner).await;
+    let socket = f.dir.join("data.sock");
+    let (mut client, welcome) =
+        mynofy_client::connect_unix_client_info(&socket, &f.key, "local", None)
+            .await
+            .unwrap();
+    let response = mynofy_client::exchange(
+        &mut client,
+        &json!({
+            "version":1,"type":"publish","id":"pub","topic":"local/events","payload":"visible"
+        }),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response["type"], "result");
+
+    let mut state = mynofy_client::progress::ClientProgress {
+        service_id: welcome.service_id,
+        client_id: welcome.client_id,
+        restart_counter: welcome.restart_counter,
+        boot_id: welcome.boot_id,
+        ..Default::default()
+    };
+    let limit = 4 * 1024 * 1024;
+    let mut size = serde_json::to_vec(&state).unwrap().len();
+    let cursor = "00000001".to_owned();
+    for index in 0..10_000 {
+        let prefix = format!("{index:05}");
+        let cost = |name: &str| {
+            serde_json::to_vec(name).unwrap().len() + 11 + usize::from(!state.cursors.is_empty())
+        };
+        let name = (0..=251).rev().find_map(|slashes| {
+            let name = format!("{prefix}{}", "\\".repeat(slashes));
+            (size + cost(&name) <= limit).then_some(name)
+        });
+        let Some(name) = name else { break };
+        size += cost(&name);
+        state.cursors.insert(name, cursor.clone());
+        if limit - size < 15 {
+            break;
+        }
+    }
+    let original = serde_json::to_vec(&state).unwrap();
+    assert_eq!(original.len(), size);
+    assert!((limit - 15..=limit).contains(&size));
+    let keypath = f.dir.join("client.pk8");
+    let progress = f.dir.join("progress.json");
+    use std::os::unix::fs::PermissionsExt;
+    for (path, bytes) in [
+        (&keypath, f.key.as_slice()),
+        (&progress, original.as_slice()),
+    ] {
+        std::fs::write(path, bytes).unwrap();
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    let output = cli_input(
+        vec![
+            "client".into(),
+            "--socket".into(),
+            socket.display().to_string(),
+            "--owner".into(),
+            "local".into(),
+            "--key".into(),
+            keypath.display().to_string(),
+            "--progress".into(),
+            progress.display().to_string(),
+        ],
+        b"{\"version\":1,\"type\":\"poll\",\"id\":\"poll\",\"topic\":\"local/events\"}\n",
+    )
+    .await;
+    assert!(!output.status.success());
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("Progress file exceeds size limit"));
+    assert!(std::fs::read(progress).unwrap() == original);
     kill(&f, &mut owner).await;
 }

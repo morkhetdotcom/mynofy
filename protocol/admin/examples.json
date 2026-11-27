@@ -2,6 +2,44 @@
   {
     "version": 1,
     "command": {
+      "op": "health"
+    }
+  },
+  {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "service_id": "local",
+      "restart_counter": 1,
+      "ready": true
+    }
+  },
+  {
+    "version": 1,
+    "command": {
+      "op": "content_topic_status",
+      "topic": "jobs/review"
+    }
+  },
+  {
+    "version": 1,
+    "ok": true,
+    "result": {
+      "storage": {
+        "mode": "manual",
+        "encrypted": false
+      },
+      "revision": 2,
+      "saved_revision": 1,
+      "dirty": true,
+      "loaded": true,
+      "autosave_isolated": false,
+      "save_failure": null
+    }
+  },
+  {
+    "version": 1,
+    "command": {
       "op": "status"
     }
   },

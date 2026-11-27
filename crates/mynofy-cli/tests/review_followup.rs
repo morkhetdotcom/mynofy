@@ -1,4 +1,5 @@
 #![cfg(unix)]
+mod support;
 #[cfg(test)]
 mod fixtures {
     use mynofy_server::{
@@ -88,6 +89,7 @@ mod security_tests {
             std::env::temp_dir().join(format!("mynofy-review2-journal-{}", std::process::id()));
         assert!(!directory.exists());
         cfg.security_storage = Some(SecurityStorage {
+            minimum_sequence: None,
             sync: false,
             directory: directory.clone(),
             queue_capacity: 4,
@@ -253,7 +255,7 @@ mod transport_tests {
         });
         let owner = cfg.service.id.clone();
         let bound = transport::bind_unix(&socket).unwrap();
-        let server = tokio::spawn(transport::run_unix(bound, cfg));
+        let server = tokio::spawn(crate::support::run_unix_fixture(bound, cfg));
         let mut ws = mynofy_client::connect_unix_client(&socket, &key, &owner, None)
             .await
             .unwrap();

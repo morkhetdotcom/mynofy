@@ -1,6 +1,9 @@
 //! Runtime peer policy is security state; TLS material and routes remain startup configuration.
 use super::*;
-use crate::{config::Peer, security::Change};
+use crate::{
+    config::{DUPLICATE_PEER_CERTIFICATE_IDENTITY, Peer},
+    security::Change,
+};
 fn invalid() -> ApiError {
     ApiError::new("invalid_request", "Invalid peer policy.")
 }
@@ -73,7 +76,13 @@ impl Engine {
         change: Change,
         peer: Option<&str>,
     ) -> Result<()> {
-        next.validate().map_err(|_| invalid())?;
+        next.validate().map_err(|detail| {
+            if detail == DUPLICATE_PEER_CERTIFICATE_IDENTITY {
+                ApiError::new("invalid_request", DUPLICATE_PEER_CERTIFICATE_IDENTITY)
+            } else {
+                invalid()
+            }
+        })?;
         let revision = self
             .link_changes
             .borrow()

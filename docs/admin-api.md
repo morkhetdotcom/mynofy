@@ -5,12 +5,20 @@ Die Verwaltungs-API ist implementiert und verwendet einen eigenen Unix-Socket. S
 ## Basic status and explicit storage diagnostics
 
 ```sh
-# Routine monitoring: no full message-storage scan.
+# Liveness and readiness without inventory scans.
+mynofy admin health --socket .local/unix/run/mynofy-admin.sock
+
+# Detailed service and storage status.
 mynofy admin status --socket .local/unix/run/mynofy-admin.sock
 
 # On-demand record, payload, arena and index statistics.
 mynofy admin storage stats --socket .local/unix/run/mynofy-admin.sock
+
+# Inspect save progress for one persistent topic.
+mynofy admin content status TOPIC --socket .local/unix/run/mynofy-admin.sock
 ```
+
+`health` returns `ready`, `service_id` and `restart_counter`. It checks the local admin endpoint and broker readiness. Use `status` for storage or network diagnostics.
 
 `status` reports service identity, client/key/session/topic counts,
 `resident_messages`, charged message bytes, limits, security/content persistence
@@ -149,9 +157,11 @@ Keine neue Registry-Abhängigkeit. Die übrigen zurückgestellten Prototypschrit
 
 ## Content speichern
 
-`mynofy admin content save --socket PATH` sendet `{"version":1,"command":{"op":"content_save"}}`. Die Antwort `{"queued":true,"revision":N}` bestätigt die erfasste und eingereihte RAM-Kopie. Schreiben/Verschlüsseln läuft danach ohne Core-Lock; im `status` unter `content_storage` `saved_revision`, `save_in_progress`, `dirty` und `last_error` prüfen. Höchstens ein Save gleichzeitig, sonst `content_save_busy`; ohne Konfiguration `content_storage_disabled`. Der Pfad kommt ausschließlich aus der CFG. Es gibt kein Admin-Load/Restore/Reload. [Einrichtung und Grenzen](content-storage.md).
+`mynofy admin content save --socket PATH` sendet `{"version":1,"command":{"op":"content_save"}}`. Die Antwort `{"queued":true,"revision":N}` bestätigt die erfasste und eingereihte RAM-Kopie. Schreiben/Verschlüsseln läuft danach ohne Core-Lock; mit `mynofy admin content status TOPIC --socket PATH` den Abschluss anhand der gespeicherten Revision prüfen. Höchstens ein Save gleichzeitig, sonst `content_save_busy`; ohne Konfiguration `content_storage_disabled`. Der Pfad kommt ausschließlich aus der CFG. Es gibt kein Admin-Load/Restore/Reload. [Einrichtung und Grenzen](content-storage.md).
 
-Mit `--topics TOPIC,TOPIC` beziehungsweise `{"op":"content_save","topics":["jobs/status","machines/status"]}` wird eine ausdrücklich ausgewählte Gruppe zum selben Zeitpunkt erfasst. Ohne Auswahl werden alle persistenten Topics gemeinsam gesichert; RAM-Topics sind ausgeschlossen. Intervall-Saves erfassen nur fällige, veränderte Intervall-Topics und lassen manuelle Stände unverändert. Status `content_storage.topics` zeigt Strategie, aktuelle/gespeicherte Revision, dirty und loaded pro persistentem Topic. `saved_revision` auf Owner-Ebene ist die letzte erfolgreiche Save-Auftragsrevision und bedeutet bei einer Teilauswahl nicht, dass alle Topics sauber sind. Leere, doppelte, unbekannte oder RAM-Auswahlen ergeben `invalid_content_topics`.
+Mit `--topics-json '["jobs/status","machines/status"]'` lässt sich eine atomare Gruppe angeben. Das JSON-Array bewahrt Kommas innerhalb eines Namens und steht auch bei `admin peers set` zur Verfügung. `--topics TOPIC,TOPIC` bleibt die Kurzform für Namen ohne Kommas. Das Limit sind 16 KiB für den vollständig codierten Admin-Request ohne Zeilenumbruch. Separate Teilgruppen sind separate Commits.
+
+Ohne Auswahl werden alle persistenten Topics gemeinsam gesichert. Intervall-Saves erfassen fällige, veränderte Intervall-Topics. Für eine eingereihte Revision N muss bei jedem angeforderten Topic `content_storage.topics[NAME].saved_revision >= N` gelten. `save_failure` enthält Revision und Diagnose eines noch offenen Fehlers für dieses Topic. Die globale `saved_revision` kann durch einen erfolgreichen Save anderer Topics steigen. Leere, doppelte, unbekannte oder RAM-Auswahlen ergeben `invalid_content_topics`.
 
 ## Topic-Speicher aktivieren
 
@@ -170,3 +180,13 @@ All completed responses use the same JSONL framing: one JSON object followed by
 LF and connection shutdown, including `security_storage_unsynced` errors. A
 transport interruption or deadline can still truncate a response; never interpret
 such a partial frame as a successful mutation confirmation.
+
+
+Vier Admin-Kommandos können gleichzeitig ausgeführt werden oder auf ihre
+Security-Bestätigung warten. Insgesamt sind sechs Verbindungen zulässig.
+Bei vier wartenden Befehlen kann `status` die übrigen Verbindungen nutzen.
+Auf diesem Socket teilen sich alle Verbindungen die Eingangsphase. Zwei
+unvollständige Anfragen können die übrigen Plätze bis zum Ende ihrer
+Lesephase belegen. Die Frist für das Einlesen beträgt
+zwei Sekunden ab Beginn der Verarbeitung. Dieselben UID-, Eingabe-, Zeit-
+und Rate-Limits gelten für alle Verbindungen.

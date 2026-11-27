@@ -165,7 +165,7 @@ fn setup_scripts_generate_valid_yaml_without_python_yaml_dependency() {
             demo.canonicalize().unwrap().join("security")
         );
         assert!(!demo.join("config-seed.json").exists());
-        assert!(!demo.join("security").exists());
+        assert!(demo.join("security/snapshot").is_file());
         assert!(demo.join("client.pk8").exists());
         assert_eq!(std::fs::metadata(cfg).unwrap().mode() & 0o777, 0o600);
         assert!(
@@ -179,4 +179,126 @@ fn setup_scripts_generate_valid_yaml_without_python_yaml_dependency() {
                 .success()
         );
     }
+}
+
+#[test]
+fn security_init_rejects_positive_recovery_floor_before_creating_store() {
+    if support::under_unprivileged_identity(
+        "security_init_rejects_positive_recovery_floor_before_creating_store",
+    ) {
+        return;
+    }
+    let f = Directory::new();
+    let path = f.0.join("floor.json");
+    let mut config: serde_json::Value =
+        serde_json::from_str(include_str!("../../../config/scenarios/unix.json")).unwrap();
+    config["security_storage"] =
+        serde_json::json!({"directory":"security-floor","minimum_sequence":1});
+    std::fs::write(&path, serde_json::to_vec(&config).unwrap()).unwrap();
+    let result = std::process::Command::new(env!("CARGO_BIN_EXE_mynofy"))
+        .args(["security-init", "--config"])
+        .arg(&path)
+        .output()
+        .unwrap();
+    assert!(!result.status.success());
+    assert!(String::from_utf8_lossy(&result.stderr).contains("positive minimum_sequence"));
+    assert!(!f.0.join("security-floor").exists());
+}
+
+#[test]
+fn failed_private_output_can_retry_at_same_path() {
+    if support::under_unprivileged_identity("failed_private_output_can_retry_at_same_path") {
+        return;
+    }
+    let f = Directory::new();
+    let input = f.0.join("input.json");
+    std::fs::write(&input, include_str!("../../../config/scenarios/unix.json")).unwrap();
+    let output = Command::new("python3")
+        .args([
+            "-c",
+            r#"
+import os, pathlib, resource, signal, subprocess, sys
+binary, source = sys.argv[1:]
+root = pathlib.Path(source).parent
+def limit():
+    signal.signal(signal.SIGXFSZ, signal.SIG_IGN)
+    resource.setrlimit(resource.RLIMIT_FSIZE, (32, 32))
+cases = [('config.json', ['config-convert', '--config', source]), ('key.pk8', ['keygen'])]
+for name, command in cases:
+    output = root / name
+    args = [binary, *command, '--out', str(output)]
+    failed = subprocess.run(args, preexec_fn=limit, capture_output=True)
+    assert failed.returncode == 1, failed
+    assert not output.exists(), output
+    assert not list(root.glob('.mynofy-output-*.tmp'))
+    retry = subprocess.run(args, capture_output=True)
+    assert retry.returncode == 0, retry
+    data = output.read_bytes()
+    assert output.stat().st_mode & 0o777 == 0o600
+    refused = subprocess.run(args, capture_output=True)
+    assert refused.returncode != 0 and output.read_bytes() == data
+"#,
+            env!("CARGO_BIN_EXE_mynofy"),
+        ])
+        .arg(input)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn static_serve_check_and_start_require_explicit_storage_configuration() {
+    if support::under_unprivileged_identity(
+        "static_serve_check_and_start_require_explicit_storage_configuration",
+    ) {
+        return;
+    }
+    let f = Directory::new();
+    let input = f.0.join("input.json");
+    let modern = f.0.join("modern.json");
+    std::fs::write(&input, include_str!("../../../config/scenarios/unix.json")).unwrap();
+    let run = |command: &str, path: &std::path::Path, output: Option<&std::path::Path>| {
+        let mut run = Command::new(env!("CARGO_BIN_EXE_mynofy"));
+        run.args([command, "--config"]).arg(path);
+        if let Some(path) = output {
+            run.arg("--out").arg(path);
+        }
+        run.output().unwrap()
+    };
+    let incompatible = run("check-config", &input, None);
+    assert!(!incompatible.status.success());
+    assert!(String::from_utf8_lossy(&incompatible.stderr).contains("Static serve check failed"));
+    assert!(
+        run("config-convert", &input, Some(&modern))
+            .status
+            .success()
+    );
+    let valid = run("check-config", &modern, None);
+    assert!(valid.status.success());
+    assert!(String::from_utf8_lossy(&valid.stdout).contains("Valid static serve configuration"));
+
+    let mut config: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&modern).unwrap()).unwrap();
+    config["content_storage"] =
+        serde_json::json!({"directory":"content","encryption":"password_stdin"});
+    std::fs::write(&modern, serde_json::to_vec(&config).unwrap()).unwrap();
+    for command in ["check-config", "serve"] {
+        // No secret is provided. Serve must report the static error before asking for it.
+        let result = run(command, &modern, None);
+        let error = String::from_utf8_lossy(&result.stderr);
+        assert!(!result.status.success());
+        assert!(
+            error.contains("content_storage.store_id"),
+            "{command}: {error}"
+        );
+    }
+    config["content_storage"]["store_id"] = "317050f003c743cb837757face732abc".into();
+    std::fs::write(&modern, serde_json::to_vec(&config).unwrap()).unwrap();
+    assert!(run("check-config", &modern, None).status.success());
+    assert!(!f.0.join("input.json.security").exists());
+    assert!(!f.0.join("content").exists());
 }

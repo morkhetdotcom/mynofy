@@ -59,6 +59,7 @@ for i,name in enumerate(names):
 PY
 for node in edge hub owner; do
     "$mynofy_bin" config-convert --config "$demo_dir/$node-seed.json" --out "$demo_dir/$node.yaml"
+    "$mynofy_bin" security-init --config "$demo_dir/$node.yaml"
     rm -- "$demo_dir/$node-seed.json"
 done
 printf 'Created %s; start owner.yaml, hub.yaml, edge.yaml in separate terminals. Ports: 8092, 8091, 8090.\n' "$demo_dir"

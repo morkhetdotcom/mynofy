@@ -21,6 +21,12 @@ from ._catalog import CATEGORIES, ACTIONS, STATUSES
 from .keys import Key, auth_bytes, b64, decode
 
 
+class _DirectWss(connect):
+    def process_redirect(self, exc):
+        # Returning the original exception prevents another network connection.
+        return exc
+
+
 class ProtocolError(Exception):
     pass
 
@@ -47,6 +53,7 @@ class ConnectionInfo:
     owner: str
     client_id: str
     restart_counter: int
+    boot_id: str | None = None
 
 
 def _strict_object(pairs):
@@ -102,6 +109,15 @@ def _payload(value, content_type):
     return result
 
 
+def _validate_boot_id(value: str | None) -> str | None:
+    if value is not None:
+        try:
+            decode(value, 16)
+        except ValueError as error:
+            raise ProtocolError('Invalid owner boot identity') from error
+    return value
+
+
 class Client:
     def __init__(self, ws, key, owner, expected_client, timeout):
         self._ws, self._key, self._owner = ws, key, owner
@@ -128,7 +144,7 @@ class Client:
         context = ssl.create_default_context(cafile=str(ca_file) if ca_file is not None else None)
         context.minimum_version = ssl.TLSVersion.TLSv1_3
         # Do not inherit ambient HTTP/SOCKS proxies or weaken CA/hostname checks.
-        ws = await connect(url, ssl=context, proxy=None, **options)
+        ws = await _DirectWss(url, ssl=context, proxy=None, **options)
         return await cls._authenticated(ws, key, owner, client_id, timeout)
 
     @classmethod
@@ -171,7 +187,8 @@ class Client:
             proof = await self._request('auth_proof', pb.AuthProof(auth_id=hello.request_id, signature=signature), 'auth_welcome')
             if proof.service_id != owner or proof.client_id != self._expected_client or not proof.HasField('restart_counter'):
                 raise ProtocolError('Owner/client welcome mismatch')
-            self.info = ConnectionInfo(owner, proof.client_id, proof.restart_counter)
+            self.info = ConnectionInfo(owner, proof.client_id, proof.restart_counter,
+                                       _validate_boot_id(proof.boot_id if proof.HasField('boot_id') else None))
             return self
         except BaseException:
             await self.close()
@@ -233,6 +250,13 @@ class Client:
                     raise ProtocolError('Incomplete publish result')
                 if kind == 'get_message' and result.message.id != body.message_id:
                     raise ProtocolError('Response message ID mismatch')
+                if kind == 'poll' and any(message.topic != body.topic for message in messages):
+                    raise ProtocolError('Poll response topic mismatch')
+                if kind == 'list_messages' and body.HasField('topic') and any(
+                        item.topic != body.topic for item in result.items):
+                    raise ProtocolError('Producer page topic mismatch')
+                if kind == 'get_permissions' and result.topic != body.topic:
+                    raise ProtocolError('Permissions response topic mismatch')
                 return result
         except BrokerError:
             raise

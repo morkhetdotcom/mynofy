@@ -238,12 +238,16 @@ pub(crate) struct Status {
     pub pending_records: usize,
     pub last_error: Option<String>,
 }
+#[cfg(all(test, unix))]
+pub(crate) type WriteGate = (Mutex<bool>, Condvar);
 struct Shared {
     progress: Condvar,
     status: Mutex<Status>,
     pending: AtomicUsize,
     stopping: AtomicBool,
     alive: AtomicBool,
+    #[cfg(all(test, unix))]
+    write_gate: Mutex<Option<Arc<WriteGate>>>,
 }
 impl Shared {
     fn status(&self) -> std::sync::MutexGuard<'_, Status> {
@@ -323,7 +327,13 @@ pub(crate) struct Journal {
     #[cfg(unix)]
     budget: budget::Budget,
 }
-impl Journal {
+pub(crate) struct Startup {
+    #[cfg(unix)]
+    store: disk::Store,
+    #[cfg(unix)]
+    options: crate::config::SecurityStorage,
+}
+impl Startup {
     pub(crate) fn open(config: &mut Config) -> std::result::Result<Option<Self>, BoxError> {
         let Some(options) = config.security_storage.clone() else {
             return Ok(None);
@@ -335,12 +345,27 @@ impl Journal {
         }
         #[cfg(unix)]
         {
-            let mut store = disk::Store::open(
+            let mut store = disk::Store::open_mode(
                 &options.directory,
                 &config.service.id,
                 State::from_config(config),
+                config.require_initialized_security,
+                disk::TailPolicy::Defer,
+                options.minimum_sequence,
             )?;
             store.state.restore(config)?;
+            Ok(Some(Self { store, options }))
+        }
+    }
+    pub(crate) fn start(self, config: &Config) -> std::result::Result<Journal, BoxError> {
+        #[cfg(not(unix))]
+        {
+            let _ = config;
+            Err("Security journal requires Unix".into())
+        }
+        #[cfg(unix)]
+        {
+            let Self { mut store, options } = self;
             store.state.restart_counter = store.state.restart_counter.wrapping_add(1);
             let restart_counter = store.state.restart_counter;
             // Leave headroom for counter digit growth as well as the snapshot envelope.
@@ -362,6 +387,8 @@ impl Journal {
                 pending: AtomicUsize::new(0),
                 stopping: AtomicBool::new(false),
                 alive: AtomicBool::new(true),
+                #[cfg(all(test, unix))]
+                write_gate: Mutex::new(None),
             });
             let (sender, receiver) = mpsc::channel();
             let background = shared.clone();
@@ -379,7 +406,7 @@ impl Journal {
                     let _alive = Alive(background.clone());
                     store.run(receiver, background, options.compact_after_records);
                 })?;
-            Ok(Some(Self {
+            Ok(Journal {
                 sender: Some(sender),
                 worker: Some(worker),
                 shared,
@@ -388,9 +415,11 @@ impl Journal {
                 restart_counter,
                 owner: config.service.id.clone(),
                 budget,
-            }))
+            })
         }
     }
+}
+impl Journal {
     pub(crate) fn durability_fence(&self) -> DurabilityFence {
         DurabilityFence {
             shared: self.shared.clone(),
@@ -472,18 +501,50 @@ impl Journal {
         status
     }
 }
-impl Drop for Journal {
-    fn drop(&mut self) {
+impl Journal {
+    #[cfg(all(test, unix))]
+    pub(crate) fn set_write_gate(&self, gate: Arc<WriteGate>) {
+        *self.shared.write_gate.lock().unwrap() = Some(gate);
+    }
+
+    pub(crate) fn drain(&mut self) -> std::result::Result<(), BoxError> {
         {
             let _status = self.shared.status();
             self.shared.stopping.store(true, Ordering::Release);
             self.shared.progress.notify_all();
         }
         self.sender.take();
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
+        let panicked = self
+            .worker
+            .take()
+            .is_some_and(|worker| worker.join().is_err());
+        let status = self.shared.status();
+        if panicked || status.durable_sequence < status.submitted_sequence {
+            return Err(format!(
+                "security_drain_failed: submitted_sequence={} durable_sequence={}",
+                status.submitted_sequence, status.durable_sequence
+            )
+            .into());
         }
+        Ok(())
     }
+}
+impl Drop for Journal {
+    fn drop(&mut self) {
+        let _ = self.drain();
+    }
+}
+#[cfg(unix)]
+fn check_recovery_floor(floor: Option<u64>, recovered: u64) -> std::result::Result<(), BoxError> {
+    if let Some(floor) = floor
+        && recovered < floor
+    {
+        return Err(format!(
+            "Recovered security sequence {recovered} is below configured minimum_sequence {floor}"
+        )
+        .into());
+    }
+    Ok(())
 }
 #[cfg(unix)]
 mod disk;
@@ -495,23 +556,86 @@ pub(crate) struct OfflineLock {
 #[cfg(unix)]
 impl OfflineLock {
     pub(crate) fn open(config: &mut Config) -> std::result::Result<Self, BoxError> {
+        Self::open_mode(config, false)
+    }
+
+    pub(crate) fn open_mode(
+        config: &mut Config,
+        preview: bool,
+    ) -> std::result::Result<Self, BoxError> {
         let options = config
             .security_storage
             .as_ref()
             .ok_or("Offline maintenance requires security storage")?;
-        let mut store = disk::Store::open(
+        let mut store = disk::Store::open_mode(
             &options.directory,
             &config.service.id,
             State::from_config(config),
+            preview || config.require_initialized_security,
+            if preview {
+                disk::TailPolicy::Preview
+            } else {
+                disk::TailPolicy::Repair
+            },
+            options.minimum_sequence,
         )?;
         store.state.restore(config)?;
         Ok(Self { _store: store })
     }
 }
 
+pub(crate) fn initialize(config: &Config) -> std::result::Result<(), BoxError> {
+    #[cfg(unix)]
+    {
+        let options = config
+            .security_storage
+            .as_ref()
+            .ok_or("Security storage must be explicit")?;
+        if options.minimum_sequence.is_some_and(|floor| floor > 0) {
+            return Err("security-init cannot meet a positive minimum_sequence; restore a qualifying Security store".into());
+        }
+        disk::Store::initialize(
+            &options.directory,
+            &config.service.id,
+            State::from_config(config),
+        )
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = config;
+        Err("Security storage requires Unix".into())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn restored_peer_policy_rejects_equivalent_certificate_identities() {
+        use crate::config::{DUPLICATE_PEER_CERTIFICATE_IDENTITY, Peer};
+
+        let mut config: Config =
+            serde_json::from_str(include_str!("../../../config/scenarios/local.json")).unwrap();
+        let mut state = State::from_config(&config);
+        for (service_id, certificate_identity) in
+            [("edge", "2001:db8::1"), ("other", "2001:0db8:0:0:0:0:0:1")]
+        {
+            state.apply(&Change::Peer {
+                service_id: service_id.into(),
+                value: Some(Peer {
+                    service_id: service_id.into(),
+                    certificate_identity: Some(certificate_identity.into()),
+                    topics: vec![config.topics[0].name.clone()],
+                }),
+            });
+        }
+        assert_eq!(
+            state.restore(&mut config).unwrap_err().to_string(),
+            DUPLICATE_PEER_CERTIFICATE_IDENTITY
+        );
+    }
+
     #[tokio::test]
     async fn confirmation_wait_keeps_runtime_responsive_and_waits_for_its_sequence() {
         let shared = Arc::new(Shared {
@@ -520,6 +644,8 @@ mod tests {
             pending: AtomicUsize::new(1),
             stopping: AtomicBool::new(false),
             alive: AtomicBool::new(true),
+            #[cfg(all(test, unix))]
+            write_gate: Mutex::new(None),
         });
         let fence = DurabilityFence {
             shared: shared.clone(),
@@ -558,6 +684,8 @@ mod tests {
                 pending: AtomicUsize::new(0),
                 stopping: AtomicBool::new(false),
                 alive: AtomicBool::new(true),
+                #[cfg(all(test, unix))]
+                write_gate: Mutex::new(None),
             })
         }
         let state = shared(1);
@@ -653,6 +781,8 @@ mod tests {
             pending: AtomicUsize::new(0),
             stopping: AtomicBool::new(false),
             alive: AtomicBool::new(true),
+            #[cfg(all(test, unix))]
+            write_gate: Mutex::new(None),
         });
         let (sender, receiver) = mpsc::channel();
         let mut journal = Journal {

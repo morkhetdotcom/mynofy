@@ -8,6 +8,7 @@ use std::{
     io::Write,
 };
 const HEADER: usize = 128;
+#[derive(Clone)]
 pub(crate) struct TopicState {
     pub head: u64,
     pub policy: Policy,
@@ -27,6 +28,7 @@ pub(crate) struct Capture {
     pub checkpoint: Checkpoint,
     /// None when a sparse selection was already compacted during capture.
     pub persistent_topics: Option<Vec<String>>,
+    pub indices: Option<Vec<u32>>,
 }
 impl Capture {
     pub(crate) fn finish(
@@ -54,7 +56,7 @@ impl Capture {
         // actual serialized headers and aggregate files, never live RAM topics.
         // Keep all producer bindings for unselected, previously committed topics.
         // Checkpoint::select would trim that registry to the selected producers.
-        let mut image = MessageImage::selected(
+        let mut image = MessageImage::selected_indexed(
             &source.image.owner,
             &source.image.clients,
             &source.image.topics,
@@ -65,6 +67,7 @@ impl Capture {
             ),
             &slots,
             Checkpoint::image_limits(maximum),
+            self.indices.as_deref(),
         )?;
         for name in persistent_topics {
             if !image.topics.contains(&name) {
@@ -143,6 +146,61 @@ impl Checkpoint {
         indices: Option<&[u32]>,
     ) -> crate::protocol::Result<Self> {
         self.project(selected, maximum, indices, true)
+    }
+    /// Build a single persisted topic from its already indexed record slots.
+    pub(super) fn select_topic(
+        &self,
+        topic: u16,
+        slots: &[u32],
+        maximum: u64,
+    ) -> crate::protocol::Result<Self> {
+        let mut used = std::collections::BTreeSet::new();
+        for &slot in slots {
+            let record = self
+                .image
+                .records
+                .get(slot)
+                .ok_or_else(crate::protocol::ApiError::internal)?;
+            if record.topic() != topic {
+                return Err(crate::protocol::ApiError::internal());
+            }
+            used.insert(record.producer_slot());
+        }
+        let mut mapping = std::collections::HashMap::with_capacity(used.len());
+        let mut clients = Vec::with_capacity(used.len());
+        let mut produced = Vec::with_capacity(used.len());
+        for old in used {
+            let client = self
+                .image
+                .clients
+                .get(old)
+                .ok_or_else(crate::protocol::ApiError::internal)?;
+            let count = self
+                .produced
+                .get(old)
+                .ok_or_else(crate::protocol::ApiError::internal)?;
+            mapping.insert(old, clients.len() as u16);
+            clients.push(client.clone());
+            produced.push(*count);
+        }
+        let image = MessageImage::selected_slots_mapped(
+            &self.image.owner,
+            (clients, |slot| mapping.get(&slot).copied()),
+            &self.image.topics,
+            (&self.image.records, &self.image.types, &self.image.blobs),
+            &[topic],
+            Self::image_limits(maximum),
+            slots.iter().copied(),
+        )?;
+        Ok(Self {
+            image,
+            revision: self.revision,
+            next_message: self.next_message,
+            reserved_ids: self.reserved_ids,
+            cutoff: self.cutoff,
+            produced,
+            topics: vec![self.topics[usize::from(topic)].clone()],
+        })
     }
     /// Keep bindings used by topic files that the caller reuses without rewriting.
     pub(super) fn select_shared_registry(

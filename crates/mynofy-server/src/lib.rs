@@ -35,3 +35,10 @@ pub mod content;
 mod test_support;
 
 mod links;
+
+/// Initialize a new security store explicitly before serving.
+pub fn initialize_security(config: &config::Config) -> Result<(), BoxError> {
+    config.validate()?;
+    config.require_local_owner()?;
+    security::initialize(config)
+}

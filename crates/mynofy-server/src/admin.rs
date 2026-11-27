@@ -105,6 +105,10 @@ pub enum Command {
         topics: Option<Vec<String>>,
     },
     Status {},
+    Health {},
+    ContentTopicStatus {
+        topic: String,
+    },
     StorageStats {},
     Export {},
 }
@@ -127,7 +131,7 @@ pub enum ResultBody {
     Data(Value),
     Configuration(Box<Config>),
 }
-type AdminFuture = Pin<Box<dyn Future<Output = Result<(), BoxError>> + Send>>;
+pub(crate) type AdminFuture = Pin<Box<dyn Future<Output = Result<(), BoxError>> + Send>>;
 pub(crate) fn start(config: &Config, engine: Arc<Mutex<Engine>>) -> Result<AdminFuture, BoxError> {
     #[cfg(unix)]
     if let Some(path) = &config.service.admin_socket {
@@ -164,12 +168,20 @@ mod tests {
             operations.insert(op.to_owned());
             let _: Request = serde_json::from_value(encoded).unwrap();
         }
-        assert_eq!(
-            operations.len(),
+        let schema_operations: std::collections::HashSet<_> =
             schema["$defs"]["request"]["properties"]["command"]["oneOf"]
                 .as_array()
                 .unwrap()
-                .len()
-        );
+                .iter()
+                .map(|entry| {
+                    entry["$ref"]
+                        .as_str()
+                        .unwrap()
+                        .strip_prefix("#/$defs/")
+                        .unwrap()
+                        .to_owned()
+                })
+                .collect();
+        assert_eq!(operations, schema_operations);
     }
 }

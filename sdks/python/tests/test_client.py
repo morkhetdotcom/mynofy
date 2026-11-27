@@ -22,6 +22,17 @@ TOPIC = 'local/events'
 
 
 class Vectors(unittest.TestCase):
+    def test_boot_identity_shared_vectors(self):
+        from mynofy.client import _validate_boot_id
+        vectors = json.loads((ROOT / 'protocol/conformance/sdk-v1.json').read_text())
+        for row in vectors['boot_identity']:
+            with self.subTest(row=row['name']):
+                if row['valid']:
+                    self.assertEqual(_validate_boot_id(row['value']), row['value'])
+                else:
+                    with self.assertRaises(ProtocolError):
+                        _validate_boot_id(row['value'])
+
     def test_wire_and_auth_vectors_are_shared_with_rust(self):
         vectors = json.loads((ROOT / 'protocol/conformance/sdk-v1.json').read_text())
         def convert(value):
@@ -117,7 +128,9 @@ class Fixture:
         cfg['limits']['client_requests_per_second'] = 1000
         cfg['limits']['auth_timeout_seconds'] = 1
         self.config = self.dir / 'config.json'
+        cfg["security_storage"] = {"directory": "security"}
         self.config.write_text(json.dumps(cfg))
+        subprocess.run([str(BIN), "security-init", "--config", str(self.config)], check=True)
 
     async def start(self):
         self.proc = subprocess.Popen([str(BIN), 'serve', '--config', str(self.config)],
@@ -230,6 +243,7 @@ class Integration(unittest.IsolatedAsyncioTestCase):
                 async with await f.connect() as client:
                     self.assertEqual(client.info.client_id, f.key.client_id)
                     self.assertIsInstance(client.info.restart_counter, int)
+                    self.assertEqual(len(decode(client.info.boot_id, 16)), 16)
                     catalog = await client.get_catalog()
                     self.assertEqual(catalog['catalog_id'], 1)
                     rights = await client.get_permissions(TOPIC)
@@ -307,6 +321,45 @@ class Integration(unittest.IsolatedAsyncioTestCase):
                 await f.connect(client_id='client:wrong')
             async with await f.connect() as client:
                 self.assertEqual(len((await client.poll(TOPIC)).items), 0)
+
+    async def test_wss_rejects_redirect_before_contacting_target(self):
+        import ssl
+        from http import HTTPStatus
+        from websockets.exceptions import InvalidStatus
+
+        fixture = Fixture('wss')
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        context.load_cert_chain(fixture.dir/'ca.pem', fixture.dir/'s.key')
+        target_contacted = False
+
+        def target_request(connection, request):
+            nonlocal target_contacted
+            target_contacted = True
+            return connection.respond(HTTPStatus.FORBIDDEN, 'unexpected request')
+
+        async def unused_handler(_):
+            self.fail('unexpected authenticated upgrade')
+
+        try:
+            async with serve(unused_handler, '127.0.0.1', 0, ssl=context,
+                             process_request=target_request) as target:
+                port = target.sockets[0].getsockname()[1]
+
+                def redirect(connection, request):
+                    response = connection.respond(HTTPStatus.TEMPORARY_REDIRECT, 'redirect')
+                    response.headers['Location'] = f'wss://localhost:{port}/'
+                    return response
+
+                async with serve(unused_handler, '127.0.0.1', 0, ssl=context,
+                                 process_request=redirect) as origin:
+                    port = origin.sockets[0].getsockname()[1]
+                    with self.assertRaises(InvalidStatus) as raised:
+                        await Client.connect_wss(f'wss://localhost:{port}/', owner='local',
+                                                 key=fixture.key, ca_file=fixture.dir/'ca.pem')
+                    self.assertEqual(raised.exception.response.status_code, HTTPStatus.TEMPORARY_REDIRECT)
+        finally:
+            fixture.stop()
+        self.assertFalse(target_contacted)
 
     async def test_wss_rejects_untrusted_ca_and_incorrect_hostname(self):
         async with service('wss') as f:

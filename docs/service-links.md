@@ -9,7 +9,7 @@ Pro Topic gibt es genau einen verantwortlichen Dienst. Er verwaltet aktive Nachr
 ## Zwei Schritte zur Verbindung
 
 1. **Authentifizieren:** TLS prüft die Identität beider Gegenstellen und den Besitz ihrer privaten Schlüssel.
-2. **Registrieren:** Auf der authentifizierten WebSocket-Verbindung identifizieren sich die Dienste mit `service_hello` und `service_welcome`. Beide gleichen die angegebene `service_id` mit ihrer lokalen Zuordnung zur kryptografischen Identität ab.
+2. **Registrieren:** Auf der authentifizierten WebSocket-Verbindung identifizieren sich die Dienste mit `service_hello` und `service_welcome`. Beide gleichen die angegebene `service_id` mit ihrer lokalen Zuordnung zur kryptografischen Identität ab. Die Registrierung verlangt auf beiden Seiten `link_version: 2`.
 
 Der [Client-Keypair-Handshake](client-auth.md) und die Client-ACL sind hiervon getrennt: Ein Peer-Zertifikat erteilt keine Client- oder Producer-Rechte. Der ursprüngliche Client authentifiziert sich selbst beim Topic-Owner; Zwischeninstanzen vermitteln den Kanal und dürfen keine Client-Identität delegieren. Die [Owner-Sitzung](topic-routing.md) ist vom Peer-Handshake getrennt.
 
@@ -36,18 +36,18 @@ Das separate [Peer-Schema](../protocol/v1/service-frame.schema.json) beschreibt 
 
 | Typ | Richtung | Pflichtfelder zusätzlich zu `version` und `type` |
 | --- | --- | --- |
-| `service_hello` | Verbindungsinitiator → Gegenstelle | `id`, `service_id` |
-| `service_welcome` | Gegenstelle → Verbindungsinitiator | `request_id`, `service_id` |
+| `service_hello` | Verbindungsinitiator → Gegenstelle | `id`, `service_id`, `link_version` |
+| `service_welcome` | Gegenstelle → Verbindungsinitiator | `request_id`, `service_id`, `link_version` |
 | `error` | Gegenstelle → Verbindungsinitiator | `code`, `detail`; optional `request_id` |
 
 Beispiel nach erfolgreichem TLS-Handshake:
 
 ```json
-{"version":1,"type":"service_hello","id":"hello-1","service_id":"workstation-a"}
+{"version":1,"type":"service_hello","link_version":2,"id":"hello-1","service_id":"workstation-a"}
 ```
 
 ```json
-{"version":1,"type":"service_welcome","request_id":"hello-1","service_id":"office-hub"}
+{"version":1,"type":"service_welcome","link_version":2,"request_id":"hello-1","service_id":"office-hub"}
 ```
 
 `request_id` muss dem `id` des Hello entsprechen. `version: 1` bezeichnet die akzeptierte Protokollversion; eine andere Version wird abgewiesen. Es gibt zunächst keine Versionsaushandlung, Rollenmeldung, automatische Topic-Ankündigung oder globale Dienstregistrierung.
@@ -64,3 +64,8 @@ Beispiel nach erfolgreichem TLS-Handshake:
 ## Nachrichtenrouting und Endempfang
 
 Die [Routensuche](topic-routing.md) und [implementierten Tunnel-Frames](service-network.md) verbinden konfigurierte Owner. Eine innere TLS-Sitzung schützt die Client-Kommunikation bis zum Owner. Kanalnummern identifizieren nur lokale Transportströme; sie sind keine Message- oder Bestätigungs-IDs. Jeder Client authentifiziert sich eigenständig beim Owner. Der Owner führt weiterhin Nachricht/Client-Paare, auch wenn viele Clients denselben Peer-Link benutzen. Ein Hop-Transport ersetzt keinen Empfänger-ACK und überträgt kein Producer-Eigentum.
+
+
+Der reguläre Dienststopp bricht einen laufenden gemeinsamen Upstream-Aufbau
+ab und wartet auf dessen Task sowie auf den Upstream-Manager. Das gilt auch
+bei weiterlaufender Runtime eines eingebetteten Owners.

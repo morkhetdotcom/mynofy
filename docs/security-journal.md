@@ -42,7 +42,7 @@ only the service transports perform the asynchronous confirmation wait.
 
 ## Einrichtung
 
-`Config::load` akzeptiert YAML und JSON und aktiviert den Speicher für den CLI-Dienst automatisch: Neben `config.json` entsteht `config.json.security/`. Ein eigener Pfad ist möglich:
+Für den CLI-Dienst ist `security_storage.directory` in YAML oder JSON ausdrücklich zu konfigurieren:
 
 ```json
 "security_storage": {
@@ -52,11 +52,33 @@ only the service transports perform the asynchronous confirmation wait.
 }
 ```
 
-Relative Pfade beziehen sich auf das Konfigurationsverzeichnis. Bei einem Formatwechsel den bisherigen Security-Pfad mit `config-convert` erhalten; ein bloßes Umbenennen ändert den abgeleiteten Standardpfad. [Migration](yaml-config.md). Der Elternpfad muss existieren und dem endgültigen Dienstbenutzer das Erstellen des Verzeichnisses erlauben. Ein fehlendes Security-Verzeichnis wird mit Modus 0700 angelegt; das bestehende Security-Verzeichnis selbst muss derselben UID gehören, privat und darf kein Symlink sein. Dateien sind private reguläre Dateien mit Modus 0600 und ohne zusätzliche Hardlinks. Ein exklusives Betriebssystem-Dateilock verhindert zwei Instanzen im selben Speicherverzeichnis. Der gesamte Zugriff geschieht nach dem CLI-Rechteabbau.
+Relative Pfade beziehen sich auf das Konfigurationsverzeichnis. Ein neuer
+Store wird einmal als endgültiger Dienstbenutzer mit
+`mynofy security-init --config FILE` angelegt. `serve` verweigert fehlende,
+leere oder einem anderen Owner zugeordnete Stores. Die Initialisierung baut
+den Store im selben Elternverzeichnis auf und veröffentlicht ihn erst nach
+Synchronisierung aller Bestandteile. Bei einer Wiederholung werden eindeutige
+Staging-Reste verworfen und der Store aus der aktuellen Konfiguration neu aufgebaut.
+Unerwartete Dateien und bereits veröffentlichte Stores führen zum Abbruch.
+Während der Einrichtung braucht der Dienstbenutzer Schreibrechte im
+Elternverzeichnis. Provisioniere den Store in einem privaten, schreibbaren
+Parent und setze danach die vorgesehenen Betriebsrechte.
+
+Bei einem Upgrade auf den bisherigen Store verweisen. Für Altinstallationen
+mit implizitem Pfad war das üblicherweise `<config-Dateiname>.security`.
+Bei Verlust den aktuellsten konsistenten Security-Store desselben Owners
+bei gestopptem Dienst wiederherstellen. Bei älteren Sicherungen Widerrufe
+und ACL-Änderungen seit der Sicherung vor Wiederinbetriebnahme nachziehen.
+Der Elternpfad muss existieren, das Verzeichnis muss privat und der
+Dienst-UID zugeordnet sein. Dateien sind private reguläre Dateien mit
+Modus 0600 und ohne zusätzliche Hardlinks. Ein exklusives Dateilock
+verhindert zwei Instanzen im selben Store.
 
 Der Dateispeicher verwendet sichere Unix-APIs aus dem bereits vorhandenen offiziellen `rustix`-Crate. Linux ist getestet; native macOS-Validierung bleibt für GitHub CI vorgemerkt. Andere Plattformen unterstützen dieses Backend derzeit nicht.
 
-Die einbindbare Core-API bleibt ohne Dateisystemzugriffe nutzbar: Ein direkt konstruiertes `Config` mit `security_storage: None` erzeugt keinen Writer und keinen Speicher. `Config::load` setzt dagegen stets einen Speicherpfad, auch bei fehlendem oder `null`-Feld. Einbettende Anwendungen wählen den Pfad selbst. `check-config` löst den Pfad auf, öffnet aber weder Journal noch Lock.
+Die einbindbare Core-API bleibt ohne Dateisystemzugriffe nutzbar: Ein direkt konstruiertes `Config` mit `security_storage: None` erzeugt keinen Writer und keinen Speicher. `Config::load` setzt dagegen stets einen Speicherpfad, auch bei fehlendem oder `null`-Feld. Eingebettete Netzwerk-Listener verlangen ebenfalls einen initialisierten Owner-Store.
+Ein bewusst flüchtiger Listener kann über `transport::prepare_volatile` vorbereitet
+werden, wenn Content und Security rein im RAM bleiben. `check-config` löst den Pfad auf, öffnet aber weder Journal noch Lock.
 
 ## Sicherheitszustand und Baseline
 
@@ -143,3 +165,33 @@ includes queued changes and reserves space for the owner/envelope and counter
 growth; deletions release capacity. Individual records retain their separate
 16-KiB check. Normal disk I/O remains asynchronous. See the
 [storage and restart guide](restart-and-storage.md).
+
+
+### Recovery floor and planned shutdown
+
+A deployment may set `security_storage.minimum_sequence` from a trusted
+record of the last acceptable durable security sequence. Startup and offline
+content maintenance reject a replay below that value. Keep the reference
+outside the restored security volume. After restoring an older generation,
+review ACLs and revocations before admitting clients.
+
+The Admin listener reserves time to send a structured failure after a
+durability wait. A supervised shutdown reports a drain that lasts over ten
+seconds. The process continues to hold its store locks while I/O finishes.
+
+
+`check-config` validates configuration statically. A positive
+`minimum_sequence` requires a qualifying recovered store, so
+`security-init` rejects that setting before writing a new store.
+Normal SIGTERM stops acceptance, closes sessions and drains the writers.
+If the accepted security sequence exceeds the durable sequence after drain,
+`serve` exits with an error and logs `security_drain_failed` with both
+sequence numbers. Embedded owners can pass a shutdown future to
+`run_prepared_until` or `run_unix_prepared_until` to receive the same result.
+
+
+Der Replay-Präfix wird gegen `minimum_sequence` geprüft. Beim Dienststart
+wird der akzeptierte Präfix erst nach erfolgreicher gemeinsamer Prüfung von
+Content und Security kompaktiert. Eine Ablehnung bis zu diesem Punkt erhält
+die Journal-Bytes. Explizite Offline-Wartung kann ein unvollständiges Ende
+eines akzeptierten Präfixes reparieren.

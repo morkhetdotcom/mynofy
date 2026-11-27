@@ -2,12 +2,14 @@
 use super::*;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
-#[derive(Clone, Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct ClientProgress {
     pub service_id: String,
     pub client_id: String,
     pub restart_counter: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub boot_id: Option<String>,
     pub cursors: BTreeMap<String, String>,
     #[serde(default)]
     pub reset_missing_cursors: bool,
@@ -16,6 +18,7 @@ pub struct RestartClient<S> {
     socket: WebSocketStream<S>,
     progress: ClientProgress,
     changed: bool,
+    cursor_changed: bool,
 }
 impl<S: AsyncRead + AsyncWrite + Unpin> RestartClient<S> {
     /// Bind a previously saved state to a successfully authenticated connection.
@@ -42,10 +45,18 @@ impl<S: AsyncRead + AsyncWrite + Unpin> RestartClient<S> {
                     .into(),
             );
         }
-        // Zero denotes an owner without a durable restart epoch. Replay conservatively.
-        let changed = counter == 0
-            || progress.restart_counter.is_some_and(|old| old != counter)
-            || (progress.restart_counter.is_none() && !progress.cursors.is_empty());
+        super::validate_boot_id(welcome.boot_id.as_deref())?;
+        super::validate_boot_id(progress.boot_id.as_deref())?;
+        let changed = match (&progress.boot_id, &welcome.boot_id) {
+            (Some(old), Some(current)) => old != current,
+            (None, None) => {
+                counter == 0
+                    || progress.restart_counter.is_some_and(|old| old != counter)
+                    || (progress.restart_counter.is_none() && !progress.cursors.is_empty())
+            }
+            (None, Some(_)) => progress.restart_counter.is_some() || !progress.cursors.is_empty(),
+            (Some(_), None) => true,
+        };
         if changed {
             progress.cursors.clear();
             progress.reset_missing_cursors = true;
@@ -53,10 +64,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin> RestartClient<S> {
         progress.service_id = welcome.service_id;
         progress.client_id = welcome.client_id;
         progress.restart_counter = Some(counter);
+        progress.boot_id = welcome.boot_id;
         Ok(Self {
             socket,
             progress,
             changed,
+            cursor_changed: false,
         })
     }
     /// Read position, not a processing checkpoint. Persist only after completing work,
@@ -68,6 +81,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> RestartClient<S> {
     /// unknown, so true need not mean a restart actually happened.
     pub fn restart_detected(&self) -> bool {
         self.changed
+    }
+    /// Reports a cursor update since the previous call.
+    pub fn take_cursor_change(&mut self) -> bool {
+        std::mem::take(&mut self.cursor_changed)
     }
     pub fn into_parts(self) -> (WebSocketStream<S>, ClientProgress) {
         (self.socket, self.progress)
@@ -129,9 +146,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin> RestartClient<S> {
                     "Poll response does not match request or contains an invalid cursor".into(),
                 );
             }
-            self.progress
-                .cursors
-                .insert(topic.clone(), page.next_cursor.clone());
+            if self.progress.cursors.get(&topic) != Some(&page.next_cursor) {
+                self.progress
+                    .cursors
+                    .insert(topic, page.next_cursor.clone());
+                self.cursor_changed = true;
+            }
         }
         Ok(response)
     }
@@ -158,6 +178,7 @@ mod tests {
             service_id: "owner".into(),
             client_id: "client".into(),
             restart_counter: Some(counter),
+            boot_id: None,
         }
     }
     #[tokio::test]
@@ -168,6 +189,7 @@ mod tests {
                 service_id: "owner".into(),
                 client_id: "client".into(),
                 restart_counter: Some(counter),
+                boot_id: None,
                 cursors: [("a".into(), "00000001".into())].into_iter().collect(),
                 reset_missing_cursors: false,
             };
@@ -183,6 +205,7 @@ mod tests {
             service_id: "owner".into(),
             client_id: "client".into(),
             restart_counter: Some(u32::MAX),
+            boot_id: None,
             reset_missing_cursors: false,
             cursors: [
                 ("a".into(), "00000009".into()),
@@ -240,6 +263,7 @@ mod tests {
         let (socket, mut peer) = sockets().await;
         let progress = ClientProgress {
             restart_counter: Some(8),
+            boot_id: None,
             ..Default::default()
         };
         let mut client = RestartClient::new(socket, welcome(9), progress).unwrap();
@@ -310,6 +334,7 @@ mod interruption_tests {
             service_id: "owner".into(),
             client_id: "client".into(),
             restart_counter: Some(2),
+            boot_id: None,
             reset_missing_cursors: true,
             ..Default::default()
         };
@@ -322,6 +347,7 @@ mod interruption_tests {
                 client_id: "client".into(),
                 service_id: "owner".into(),
                 restart_counter: Some(2),
+                boot_id: None,
             },
             progress,
         )

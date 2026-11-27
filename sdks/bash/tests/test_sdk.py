@@ -284,7 +284,9 @@ class Fixture:
         cfg['clients'] = [dict(client_id=k['client_id'], keys=[dict(algorithm='ed25519', public_key=k['public_key'], valid_until='2035-01-01T00:00:00Z')]) for k in [self.key, self.other]]
         cfg['topics'][0]['acl'] = [dict(client_id=self.key['client_id'], allow=['publish', 'subscribe', 'inspect_own'])]
         cfg['limits'].update(client_burst=1000, client_requests_per_second=1000)
+        cfg['security_storage'] = {'directory': 'security'}
         config = self.dir / 'config.json';config.write_text(json.dumps(cfg))
+        subprocess.run([str(BIN), 'security-init', '--config', str(config)], check=True)
         self.log = (self.dir / 'stderr').open('w')
         self.process = subprocess.Popen([str(BIN), 'serve', '--config', str(config)], stdout=subprocess.DEVNULL, stderr=self.log)
         deadline = time.monotonic() + 5

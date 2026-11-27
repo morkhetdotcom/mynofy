@@ -47,7 +47,22 @@ public final class Client implements AutoCloseable {
     }
   }
 
-  public record ConnectionInfo(String owner, String clientId, int restartCounter) {}
+  static String validatedBootId(String value) throws IOException {
+    if (value != null) {
+      try {
+        Key.decode(value, 16);
+      } catch (IllegalArgumentException error) {
+        throw new IOException("invalid owner boot identity", error);
+      }
+    }
+    return value;
+  }
+
+  public record ConnectionInfo(String owner, String clientId, int restartCounter, String bootId) {
+    public ConnectionInfo(String owner, String clientId, int restartCounter) {
+      this(owner, clientId, restartCounter, null);
+    }
+  }
 
   public static final class BusyException extends IllegalStateException {
     BusyException() {
@@ -134,7 +149,8 @@ public final class Client implements AutoCloseable {
           || !welcome.getClientId().equals(config.clientId())
           || !welcome.hasRestartCounter()) throw new IOException("owner/client welcome mismatch");
       c.info =
-          new ConnectionInfo(config.owner(), welcome.getClientId(), welcome.getRestartCounter());
+          new ConnectionInfo(config.owner(), welcome.getClientId(), welcome.getRestartCounter(),
+              validatedBootId(welcome.hasBootId() ? welcome.getBootId() : null));
       return c;
     } catch (InterruptedException e) {
       c.close();
@@ -223,6 +239,23 @@ public final class Client implements AutoCloseable {
               .getId()
               .equals(body.getField(body.getDescriptorForType().findFieldByName("message_id"))))
         throw new IOException("response message ID mismatch");
+      if (body instanceof Wire.Poll.Builder poll) {
+        var page = response.getMessages();
+        if (!cursor(page.getNextCursor()) || page.getItemsCount() > poll.getLimit())
+          throw new IOException("invalid poll page");
+        for (var item : response.getMessages().getItemsList()) {
+          if (!poll.getTopic().equals(item.getMessage().getTopic()))
+            throw new IOException("poll response topic mismatch");
+        }
+      } else if (body instanceof Wire.ListMessages.Builder list && list.hasTopic()) {
+        for (var item : response.getMessagesPage().getItemsList()) {
+          if (!list.getTopic().equals(item.getTopic()))
+            throw new IOException("producer page topic mismatch");
+        }
+      } else if (body instanceof Wire.GetPermissions.Builder permissions
+          && !permissions.getTopic().equals(response.getPermissions().getTopic())) {
+        throw new IOException("permissions response topic mismatch");
+      }
       return response;
     } catch (BrokerException e) {
       throw e;
@@ -267,12 +300,7 @@ public final class Client implements AutoCloseable {
     if (after != null && !cursor(after)) throw new IllegalArgumentException("invalid poll cursor");
     var request = Wire.Poll.newBuilder().setTopic(topic).setLimit(limit);
     if (after != null) request.setAfter(after);
-    var result = exchange("poll", request, "messages", false).getMessages();
-    if (!cursor(result.getNextCursor()) || result.getItemsCount() > limit) {
-      close();
-      throw new TransportException(new IOException("invalid poll page"), false);
-    }
-    return result;
+    return exchange("poll", request, "messages", false).getMessages();
   }
 
   /** Unsigned u64 IDs use Java long bit patterns, including negative values. */

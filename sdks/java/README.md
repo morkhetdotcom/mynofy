@@ -21,7 +21,7 @@ Im eigenen Maven-Projekt:
 <dependency>
   <groupId>dev.mynofy</groupId>
   <artifactId>mynofy-client</artifactId>
-  <version>0.2.0-SNAPSHOT</version>
+  <version>0.3.0-SNAPSHOT</version>
 </dependency>
 ```
 
@@ -193,3 +193,5 @@ It is immutable, survives authorized key rotation and storage restore, and is
 separate from any sender or actor claim inside the payload. Match workflow roles
 to this value. This is an assertion over the protected owner connection, not a
 portable cryptographic message signature.
+
+For cursor continuity, compare `ConnectionInfo.bootId()` between authenticated sessions. A null value indicates a legacy owner.
