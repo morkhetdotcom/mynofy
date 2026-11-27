@@ -1,87 +1,97 @@
-# Funktionstests und reproduzierbare Mutationstests
+# Core functional and reproducible mutation tests
 
-Der lokale Owner-Core wird mit einem unabhängigen Referenzmodell, Vergleichen zwischen Protokollpfaden und begrenzten Mutationstests geprüft. Die Tests sind Teil von `cargo test --locked --workspace` und benötigen keine zusätzlichen Registry-Abhängigkeiten oder externen Fuzzing-Werkzeuge. Testgeneratoren und feste Testidentitäten sind ausschließlich unter `cfg(test)` eingebunden.
+The owner core is tested against a small reference model, equivalent protocol paths and bounded mutations. The workspace suite runs these tests without external fuzzing tools.
 
-## Geprüfte Abläufe
+## State model and encoder equivalence
 
-Der Zustandsmodelltest mischt Publish, Poll, ACK/NACK, Get/List, Ablauf, kleine Cleanup-Budgets, Uhr-Rücksprünge, Rechteentzug und Reconnects für zwei Clients und zwei Topics. Zeit wird kontrolliert, ohne Sleeps oder Laufzeitgrenzen. Verschiedene Seeds verwenden unterschiedliche Nachrichten-/Paarquoten.
+The state model mixes publish, poll, producer inspection, expiration, bounded cleanup, clock rollback, ACL changes and reconnects. It also attempts deletion of populated topics, recreates empty topics and tests old cursors against new messages. It checks permissions, record and index consistency, and owner, topic and producer accounting. The simulated clock avoids timing sleeps. Different seeds select different active-message limits.
 
-Ein einfaches Modell aus Nachrichten, Berechtigungen und Bestätigungspaaren liefert unabhängig vom Core die erwarteten Inhalte und Endzustände. Nach jedem Schritt prüft der Test unter anderem:
+The protocol comparison compares JSON-facing commands with typed Protobuf, and compares direct response bytes with the generated encoder. Coverage includes expiration, event parameter boundaries and payloads through 4,096 bytes, plus rejection of 4,097 bytes. The focused poll-budget test also checks page membership, cursor and continuation at the budget boundary.
 
-- aktive Nachrichten bleiben bis zur absoluten Ablaufzeit erhalten; eigene Inhalte bleiben nach Topic-Rechteverlust einsehbar;
-- Poll-Auswahl und producerseitiges Paging liefern die erwartete Reihenfolge und respektieren aktuelle Rechte;
-- wiederholte Polls behalten die Paarreferenz; fremde/abgelaufene Referenzen werden abgewiesen; Endbestätigungen sind idempotent oder ergeben einen Konflikt;
-- Statuszähler und Sichtbarkeit von `inspect_own` entsprechen dem Modell;
-- Rechteänderungen invalidieren bestehende Sitzungen; deren Commands erzeugen keine Nachrichten;
-- Nachrichten-/Paarquoten, aktive Bytebelegung, Topic-/Producer-/ID-Indizes und Paarzuordnungen stimmen mit dem residenten beziehungsweise aktiven Bestand überein;
-- begrenzte physische Bereinigung darf abgelaufene Records vorübergehend behalten, aber keine aktiven Daten verlieren oder abgelaufene Daten wieder sichtbar machen.
+<a id="datenstrukturen-und-parser"></a>
 
-Ein zweiter Test führt dieselben Requests über JSON, typisiertes Protobuf und die direkte Protobuf-Ausgabe aus. Er vergleicht JSON-Ergebnisse und die bytegenaue direkte Ausgabe mit dem generierten Encoder. Bytes bis einschließlich 4096 und ungültige 4097 Byte, numerische Events, Parametergrenzen, Unicode-Request-IDs, Polling, ACK/NACK und Ablauf sind enthalten. Zufällige interne Owner-Generationen und Vergabestartwerte werden für diesen Vergleich ausdrücklich angeglichen.
+## Data Structures and Parsers
 
-## Datenstrukturen und Parser
+Check the additional reference and mutation tests:
 
-Die zusätzlichen Referenz-/Mutationstests prüfen:
-
-| Bereich | Prüfung |
+| area | Check |
 | --- | --- |
-| Geordnete Indizes | Vergleich mit `BTreeMap` bei Insert/Replace/Remove/Get/Mutation, offenen/geschlossenen Bereichsgrenzen, U64-Rändern, Reclaim und Wechsel zwischen kleinen Vektoren und Bitmap-Blöcken. |
-| Ablaufindex | Vergleich mit einfacher Referenztabelle bei gemischter Einfügefolge, gleichen/exakten Fristen, Deadline 0/U64::MAX, Pop und Reclaim. |
-| JSON-/Protobuf-Frames | Mutierte Bytes auf nicht authentifizierten Sessions dürfen keine Inhalte oder Bestätigungspaare erzeugen; ausgegebene binäre Fehler bleiben dekodierbar. |
-| YAML/JSON-Konfiguration | Mutierte gültige/ungültige Vorlagen werden abgewiesen oder als akzeptierte Werte/Configs erneut ausgegeben, eingelesen und verglichen. |
-| Binäre Nachrichtenabbilder | Mutation, Abschneiden, Einfügen, Duplizieren und zufällige Bytes; akzeptierte Abbilder werden vollständig materialisiert und bytegenau erneut geschrieben. Zusätzlich Short-Read-Reader mit 1–31 Byte pro Read. |
-| Vollständige Checkpoints | Mutation der Kontrolltabellen und eingebetteten Abbilder; akzeptierte Checkpoints müssen erneut bytegleich geschrieben werden können. |
-| Topic-Manifest | Größen, Topic-/Clientbindungen, Einträge und Referenzen prüfen; Parseraufrufe verändern weder Manifest noch referenzierte Topic-Dateien. |
-| Verschlüsselte Umschläge | Roundtrip unterschiedlicher Klartextlängen, falscher Schlüssel, Größenlimit, Modusverwechslung und mutierte Header/Ciphertexte/Tags; eine akzeptierte Entschlüsselung darf keine veränderten authentifizierten Bytes enthalten. |
+| Ordered indexes | Comparison with `BTreeMap` at Insert/Replace/Remove/Get/Mutation, open and closed range limits, U64 margins, reclaim and change between small vectors and bitmap blocks. |
+| expiration index | Comparison with simple reference table with mixed insert sequence, equal and exact deadlines, deadline 0/U64:: MAX, pop and reclaim. |
+| JSON-/Protobuf-Frames | Mutated bytes on non-authenticated sessions must not generate content; output binary errors remain decodeable. |
+| YAML/JSON-configuration | Mutated valid/invalid templates are rejected or re-issued, read in and compared as accepted values/Configs. |
+| Binary message images | Mutation, truncation, insertion, duplication and random bytes; accepted images are fully materialized and rewritten to byte accuracy; and short-read readers with 1-31 bytes per read. |
+| Full checkpoints | Mutation of the control tables and embedded images; accepted checkpoints must be re-written in the same way. |
+| Topic-Manifest | Check sizes, Topic-/client bindings, entries and references; parser calls do not change manifests or referenced topic files. |
+| Encrypted envelopes | Round trips of different plain text lengths, incorrect key, size limit, mode confusion, and mutated headers, ciphertext and tags; an accepted decryption must not contain modified authenticated bytes. |
 
-Bei einem Teil der Nachrichtenabbild-/Checkpoint-/Manifest-Mutationen werden die jeweiligen Framing-Prüfsummen neu berechnet. Dadurch werden Strukturprüfungen hinter dem Prüfsummenvergleich erreicht. Gezielt veränderte gültige Byte-Payloads stellen sicher, dass der Image-Parser auch tatsächlich neue gültige Inhalte akzeptiert. Die kryptografischen Tags werden nicht nachträglich repariert.
+In the case of a part of the message image-/Checkpoint-/Manifest-Mutationen, the respective
+framing checksums are recalculated, thereby achieving structural checks after the checksum
+comparison. Targeted changed valid byte payloads ensure that the image parser actually accepts
+new valid content. The cryptographic tags are not repaired subsequently.
 
-Die Zufallsentscheidungen und Operationsfolgen verwenden einen festen, einstellbaren Seed. Kryptografische Nonces/Challenges kommen weiterhin aus dem vorhandenen Provider. Das sind begrenzte, seedgesteuerte Modell- und Mutationstests mit expliziten Orakeln; sie liefern weder vollständige Pfadabdeckung noch einen Beweis für beliebige Eingaben. Automatisches Shrinking von Fehlerfällen ist nicht implementiert.
+The random choices and sequences of operations use a fixed, adjustable seed. Cryptographic
+Nonces/Challenges continues to come from the existing provider. These are limited, seed-driven
+model and mutation tests with explicit oracles; they provide neither full path coverage nor
+proof of arbitrary input. Automatic failure shrinking is not implemented.
 
-## Ausführen und Fehler wiederholen
+<a id="ausführen-und-fehler-wiederholen"></a>
 
-Schneller Standardlauf mit 16 Modell-Seeds × 600 Schritten und überwiegend 2048 Fällen pro zusätzlichem Test:
+## Perform and repeat errors
+
+Fast standard run with 16 model seeds × 600 steps and mostly 2048 cases per additional test:
 
 ```sh
 cargo test --locked -p mynofy-server functional -- --nocapture
 ```
 
-Erweiterter Lauf mit 64 Modell-Seeds × 1000 Schritten und 16.384 Fällen pro zusätzlicher Kampagne:
+Extended run with 64 model seeds × 1000 steps and 16,384 cases per additional campaign:
 
 ```sh
 ./scripts/test-core-functional.sh
 ```
 
-Der JSON/Protobuf-Vergleich ist auf 1500 Requests pro Lauf begrenzt. Der Short-Read-Test verwendet fünf feste Readergrößen. Die übrigen acht Kampagnen verwenden jeweils `MYNOFY_FUZZ_CASES`.
+The JSON/Protobuf-Vergleich is limited to 1500 requests per run. The short-read test uses five
+fixed reader sizes. The remaining eight campaigns use `MYNOFY_FUZZ_CASES` each.
 
-Anderer Start-Seed, einschließlich U64-Seed-Umlauf:
+Other start seed, including U64 seed orbit:
 
 ```sh
 MYNOFY_TEST_SEED=0xffffffffffffffe0 ./scripts/test-core-functional.sh
 ```
 
-Eigene Laufgröße:
+Own run size:
 
 ```sh
 MYNOFY_MODEL_SEEDS=32 MYNOFY_MODEL_STEPS=1000 MYNOFY_FUZZ_CASES=8192 \
   ./scripts/test-core-functional.sh
 ```
 
-Der Modelltest meldet bei Fehler den konkreten Seed und die letzten 24 Operationen. Einzelnen Fall wiederholen:
+The model test reports the specific seed and the last 24 operations in the event of errors.
 
 ```sh
 MYNOFY_TEST_SEED=0x6d796e6f66790001 MYNOFY_MODEL_SEEDS=1 MYNOFY_MODEL_STEPS=1000 \
   cargo test --locked -p mynofy-server seeded_reference_model -- --nocapture
 ```
 
-Für Parserfehler zusätzlich die ursprüngliche `MYNOFY_FUZZ_CASES`-Einstellung übernehmen und den betreffenden Testnamen filtern. Seed, Case-Index und derselbe Quellstand gehören zur Fehlerbeschreibung.
+For parser errors, additionally apply the original `MYNOFY_FUZZ_CASES` setting and filter the
+relevant test name. Seed, case index and the same source status belong to the error description.
 
-## Abgrenzung und nächste Schritte
+<a id="abgrenzung-und-nächste-schritte"></a>
 
-Diese Erweiterung testet bestehendes Verhalten. Neue Neustarterkennung, Offline-Rekey/Backup-Werkzeuge, Speicherumbauten und Performancearbeiten sind nicht Teil dieses Schritts. Bestehende Prozess-/Transporttests bleiben in der vollständigen Suite erhalten; neue Transport-Dauertests wurden nicht vorgezogen. Native macOS-Prüfung bleibt für GitHub CI vorgesehen.
+## Delimitation and next steps
 
-Die Nutzerreihenfolge lautet: zuerst Funktionstests einschließlich Modell-/Mutationstests abschließen, danach Neustart und Speicher behandeln, anschließend Performance messen und gezielt optimieren.
+This extension tests existing behavior. New restart detection, Offline-Rekey/Backup-Werkzeuge,
+memory conversions and performance work are not part of this step. Existing
+Prozess-/Transporttests remain in the full suite; new continuous transport tests have not been
+brought forward. Native macOS testing remains for GitHub CI.
 
-## Validierter Stand
+The user order is: first complete function tests including Modell-/Mutationstests, then restart
+and treat memory, then measure performance and optimize targeted.
+
+## Validation status
 
 
-Der verlinkte Prüfbericht hält den Stand vor der anschließenden [Neustart- und Speicherwartung](restart-and-storage.md) fest; sein Quell-Fingerprint ist historisch und wird nicht als Fingerprint späterer Änderungen ausgegeben.
+The linked test report records the status before the subsequent [Restart and memory
+maintenance](restart-and-storage.md); its source fingerprint is historical and is not issued as
+a fingerprint of subsequent changes.

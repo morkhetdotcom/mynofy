@@ -1,51 +1,87 @@
-# Neustarterkennung und Offline-Speicherwartung
+<a id="neustarterkennung-und-offline-speicherwartung"></a>
 
-## Service-ID und Neustartzähler
+# Restart detection and offline memory maintenance
 
-`service.id` bleibt die dauerhafte Identität; es gibt keine zusätzliche Instanz-ID. Der Dienst lädt den Security-Speicher, erhöht dessen `restart_counter: u32` mit Umlauf und synchronisiert den neuen Stand, bevor ein Listener Clients annehmen kann. Fehlgeschlagene Starts dürfen Werte verbrauchen. Ein Fehler bei diesem Speicherschritt bricht den Start ab. Normale Security-Änderungen bleiben wie bisher asynchron; der Startzähler ist die ausdrücklich beschlossene synchrone Ausnahme.
+<a id="service-id-und-neustartzähler"></a>
 
-Der Zähler liegt im vorhandenen Security-Snapshot. Ältere Snapshots ohne Feld beginnen beim ersten aktualisierten Start mit 1. Beim Überlauf folgt auf 4294967295 die 0. Clients prüfen **Ungleichheit**, nicht Größenordnung. Nach exakt 2^32 unbeobachteten Starts bleibt der Wert mehrdeutig. Ein direkter eingebetteter `Engine` ohne Security-Backend bleibt dateifrei und verwendet 0; für dauerhafte Neustarterkennung das Security-Backend konfigurieren. Die CLI verlangt für `serve` einen expliziten, bereits initialisierten Security-Store.
+## Service ID and restart counter
 
-Auth-Welcome enthält jetzt:
+`service.id` remains the permanent identity; there is no additional instance ID. The service loads the security memory, increases its `restart_counter: u32` with circulation and synchronizes the new state before a listener can accept clients. Failed starts may consume values. An error in this memory step cancels the start. Normal security changes remain asynchronous as before; the start counter is the explicitly agreed synchronous exception.
+
+The counter is in the existing security snapshot. Older snapshots without a field start with 1
+on the first updated start, followed by 4294967295, the 0. Clients check **inequality**, not
+order of magnitude. After exactly 2^32 unobserved starts, the value remains ambiguous. A direct
+embedded `Engine` without a security backend remains file-free and uses 0; for permanent restart
+detection, configure the security backend. CLI requires an explicit, already initialized
+security store for `serve`.
+
+Auth-Welcome now includes:
 
 ```json
 {"version":1,"type":"auth_welcome","request_id":"auth-proof","client_id":"client:ed25519:…","service_id":"local","restart_counter":12}
 ```
 
-Der Admin-Status liefert denselben Zähler. Aktuelle Owner senden im
-`AuthWelcome` zusätzlich eine zufällige 128-Bit-`boot_id`, die bei jedem
-Start neu entsteht und außerhalb der gespeicherten Snapshots liegt.
-Gespeicherte Cursor verwenden diese Kennung zur Fortsetzung. Ein Restore
-kann den Zähler wiederholen und erhält dennoch eine frische Boot-ID. Er erscheint nicht in jedem Nachrichtenrecord oder Cursor. Das achtstellige Cursorformat bleibt unverändert. Im Protobuf ist das Feld optional repräsentiert, um fehlende Werte von gültiger 0 unterscheiden zu können; der Client verlangt beim Authentifizieren ausdrücklich seine Anwesenheit. Server und Clients gemeinsam aktualisieren.
+The admin status provides the same counter. Current owners also send a random 128-bit `boot_id`
+in the `AuthWelcome`, which is new at each start and lies outside the stored snapshots. Stored
+cursors use this identifier for continuation. A restorer can repeat the counter and still
+receive a fresh boot ID. It does not appear in every message record or cursor. The eight-digit
+cursor format remains unchanged. In the prototype, the field is optionally represented in order
+to distinguish missing values of valid 0; the client explicitly requests its presence when
+authenticating.
 
-## Client-Fortschritt und Replay
+<a id="client-fortschritt-und-replay"></a>
 
-Der verwaltete SDK-Client `mynofy_client::progress::RestartClient` erhält eine authentifizierte Verbindung, deren Welcome und einen `ClientProgress`. `connect_client_info` beziehungsweise `connect_unix_client_info` liefern Socket und Welcome zusammen. Fortschritt ist an Service-ID und stabile Client-ID gebunden; die Anwendung bewahrt ihn für den nächsten Verbindungsaufbau auf.
+## Client progress and replay
 
-Bei geänderter Boot-ID werden gespeicherte Topic-Cursor verworfen. Eine
-bereits gebundene Fortschrittsdatei aus einer älteren Version wird bei der
-ersten Verbindung mit einem aktuellen Owner zurückgesetzt. Bei älteren
-Ownern ohne Boot-ID greift der bisherige Zähler. Nach einem Restore mit
-älterem Owner oder älterem Client gespeicherte Positionen ausdrücklich
-verwerfen. Anwendungen mit eigener Cursor-Verwaltung vergleichen beim
-Verbindungsaufbau die Boot-ID. Der erste erfolgreiche Poll je Topic startet ohne bisherigen Cursor, auch wenn der Aufrufer einen alten, noch syntaktisch gültigen Cursor übergibt. Ein abgewiesener Poll verbraucht diesen Replay nicht. `poll(topic, limit)` verwendet danach den aktualisierten eigenen Fortschritt. Legacy confirmation records are discarded during offline migration. Nachrichten dürfen erneut erscheinen; automatische Neuveröffentlichung, erneute Ausführung oder genau einmalige Verarbeitung werden daraus nicht abgeleitet.
+The managed SDK client `mynofy_client::progress::RestartClient` receives an authenticated
+connection, its welcome and a `ClientProgress`. `connect_client_info` and
+`connect_unix_client_info` respectively provide socket and welcome together. progress is tied to
+service ID and stable client ID; the application keeps it for the next connection setup.
 
-Die bisherigen Funktionen `connect_client`, `connect_unix_client`, `exchange` und `exchange_frame` bleiben direkte Socket-APIs ohne verwalteten Fortschritt. Ein Wrapper ist nötig, damit kein globaler unbeschränkter Zustand pro Owner/Client entsteht. Er begrenzt den eigenen Fortschritt auf 10.000 Topics. Es gibt keinen automatischen Verbindungs-/Command-Retry.
+If the boot ID is changed, stored topic cursors are discarded. An already bound progress file
+from an older version is reset on the first connection to a current owner. In the case of older
+owners without a boot ID, the previous counter engages. Positions stored after a restore with an
+older owner or older client are explicitly discarded. Applications with their own cursor
+management compare the boot ID when setting up the connection. The first successful poll for
+each topic starts without a previous cursor, even if the caller hands over an old, still
+syntactically valid cursor. A rejected poll does not consume this replay. `poll(topic, limit)`
+then uses the updated own progress. Legacy confirmation records are discarded during offline
+migration. Messages may reappear; automatic republication, re-execution or exact one-time
+processing are not derived from this.
 
-Die CLI kann ihren Fortschritt zwischen Aufrufen speichern:
+Previous functions `connect_client`, `connect_unix_client`, `exchange` and `exchange_frame`
+Direct socket APIs are left without managed progress. A wrapper is necessary so that no global
+unrestricted state per Owner/Client It limits your progress to 10,000 topics.
+connection or command retries.
+
+The CLI can save its progress between calls:
 
 ```sh
 mynofy client --socket run/mynofy.sock --key client.pk8 --owner local \
   --progress .local/client-progress.json
 ```
 
-Alternativ dieselbe Option beim WSS-Client verwenden. JSONL-Requests und Antworten bleiben gleich. Die Fortschrittsdatei enthält Owner, Client-ID, Counter, Boot-ID und Cursor, keine Credentials. Privates reguläres File, No-Follow, Verzeichnisprüfung, exklusives Lock, begrenztes Einlesen und atomare synchronisierte Ersetzung schützen den Zustand. Die generische JSONL-CLI setzt beim Poll am selben Owner den gespeicherten Cursor nur ein, wenn der Aufrufer ihn als `after` übergibt. Verwende dazu den letzten `next_cursor` des Topics. Fehlt `after`, beginnt der Poll am Anfang der verfügbaren Historie. `RestartClient::poll` ergänzt den gespeicherten Cursor eigenständig. Parallelverwendung derselben Fortschrittsdatei wird abgewiesen. Auch ein noch ausstehender Cursor-Reset bleibt über einen Client-Abbruch hinweg gespeichert. Geänderten Poll-Fortschritt schreibt die CLI erst nach erfolgreichem stdout-Flush; unveränderte Antworten lösen keinen Dateitausch aus; eine atomare Verbindung zur Verarbeitung durch den Empfänger entsteht dadurch nicht. Ohne `--progress` bleibt der bisherige direkte CLI-Modus erhalten. Der Adapter beginnt ohnehin ohne Cursor und bleibt ohne dauerhaften Workflow-Checkpoint.
+Alternatively, use the same option for the WSS client. JSONL -Requests and responses remain the
+same. The progress file contains owner, client ID, counter, boot ID and cursor, no credentials.
+Private regular file, no follower, exclusive lock, limited read-in and atomic synchronized
+replacement protects the state. The generic JSONL - CLI sets the stored cursor for the poll on
+the same owner only if the caller passes it as `after`. For this purpose, use the last
+`next_cursor` of the topic. If `after` is missing, the poll starts at the beginning of the
+available history. `RestartClient::poll` adds the stored cursor independently. Parallel use of
+the same progress file is rejected. Also, a pending cursor reset remains stored over a client
+termination. Changed poll progress writes the CLI only after a successful stdout flush;
+unchanged responses do not trigger a file swapping; an atomic connection for processing by the
+receiver does not arise. Without `--progress`, the previous direct CLI mode is preserved. The
+adapter starts anyway without a cursor and remains without a permanent workflow checkpoint.
 
-## RAM → Storage im laufenden Dienst
+<a id="ram--storage-im-laufenden-dienst"></a>
 
-Das globale `content_storage` mit Verzeichnis und gegebenenfalls gemeinsamem Start-Secret muss bereits beim Start konfiguriert sein. Auch dann bleiben Topics standardmäßig RAM. Das Backend wird nicht dynamisch installiert oder nachgeladen.
+## RAM → Storage in the current service
 
-Über den getrennten lokalen Admin-Socket kann ein RAM-Topic aktiviert werden:
+The global `content_storage` with directory and possibly common start secret must already be
+configured at start. Even then, topics remain as standard RAM.
+
+Using the separate local admin socket, a RAM topic can be activated:
 
 ```sh
 mynofy admin topics storage jobs/status --mode manual --encrypted true \
@@ -55,26 +91,39 @@ mynofy admin topics storage machines/status --mode interval --seconds 60 \
   --encrypted false --socket run/mynofy-admin.sock
 ```
 
-Der Wechsel wirkt sofort im RAM. Er startet keinen impliziten Save; bei `interval` greift der konfigurierte nächste Termin. Der erste erfolgreiche Save sichert sämtliche dann noch aktiven Nachrichten des Topics, einschließlich der vor dem Wechsel entstandenen. Ohne erfolgreichen Save fällt die Laufzeitaktivierung beim Neustart auf die bisherige CFG-/gespeicherte Baseline zurück. Mit erfolgreichem Save stellt der Start die im Manifest gespeicherte Strategie wieder her, auch wenn die ursprüngliche CFG noch RAM enthält.
+The change takes effect immediately in the RAM. It does not start an implicit save; at
+`interval` the configured next appointment. The first successful save saves all the still active
+messages of the topic, including those created before the change. Without a successful save, the
+runtime activation falls back on the previous CFG-/gespeicherte baseline. With a successful
+save, the start restores the strategy stored in the manifest, even if the original CFG still
+contains RAM.
 
 ```sh
 mynofy admin content save --topics jobs/status --socket run/mynofy-admin.sock
 mynofy admin status --socket run/mynofy-admin.sock
 ```
 
-Nur RAM → manual/interval ist online erlaubt. Weitere Storage-/Parameterwechsel und Storage → RAM werden online abgewiesen. Während eines laufenden Saves wird die Aktivierung ebenfalls abgewiesen, um keine widersprüchlichen erfassten Strategien zu erhalten. Der normale Save-Status unterscheidet weiterhin Queue-Annahme und dauerhaften Abschluss. Es gibt keine automatische CFG-Rückschreibung.
+Only RAM → manual/interval is allowed online. Further Storage-/parameter changes and storage →
+RAM are rejected online. During a running save, activation is also rejected to avoid conflicting
+captured strategies. The normal save status still distinguishes queue acceptance and permanent
+completion. There is no automatic CFG writeback.
 
-Vor dem Wiederanlauf prüft `mynofy check-config --config config.yaml`
-die statische `serve`-Konfiguration einschließlich explizitem Security-Pfad
-und Store-ID für Content. Eine ältere Datei mit implizitem Security-Pfad kann
-`config-convert` weiterhin einlesen. Dateibindungen, Journal, Schlüssel und
-Listener werden erst bei den jeweiligen Betriebsbefehlen geprüft.
+Before restarting, `mynofy check-config --config config.yaml` checks the static `serve`
+configuration including explicit security path and store ID for content. An older file with
+implicit security path can still read `config-convert`. File bindings, journal, keys and
+listeners are only checked for the respective operating commands.
 
 ## Offline-Werkzeuge
 
-Alle folgenden Kommandos öffnen keine Listener. Sie halten das Content-Lock und das bestehende Security-Lock; bei laufendem Dienst scheitern sie. Der Security-Zähler wird dabei nicht erhöht. Sicherheitszustand, Schlüsselwiderrufe und ACLs werden nicht aus einem Inhaltsbackup ersetzt. Vorhandene Security-Journale werden wie beim Start gelesen; ein abgerissener letzter Record darf nach der bestehenden Recovery-Regel gekürzt werden.
+All of the following commands do not open listeners; they hold the content lock and the existing
+security lock; they fail when the service is running; the security counter is not increased;
+security status, key recalls and ACLs are not replaced from a content backup; existing security
+journals are read as at startup; a torn-off last record may be shortened according to the
+existing recovery rule.
 
-### Prüfen
+<a id="prüfen"></a>
+
+### Testing
 
 ```sh
 mynofy storage check --config config.yaml
@@ -82,9 +131,13 @@ mynofy storage inspect --config config.yaml
 mynofy storage cleanup --config config.yaml
 ```
 
-`inspect` ergänzt Topic-Metadaten ohne Payloads; `cleanup` entfernt nach erfolgreicher Prüfung nur verwaiste interne Slots und Staging-Dateien. Einzelheiten und [gezielte Abbruchtests](storage-interruption-tests.md).
+`inspect` complements topic metadata without payloads; `cleanup` After successful testing, remove only orphaned internal slots and staging files. [gezielte Abbruchtests](storage-interruption-tests.md).
 
-Liest, entschlüsselt und prüft Manifest, alle referenzierten Topic-Abbilder, Owner-/Clientbindungen, Vergabemetadaten und aktive konfigurierte Quoten. Liefert eine kleine JSON-Zusammenfassung. Fehlende, defekte oder inkompatible Daten werden nicht als gültiger Leerstand behandelt. Alte einzelne Owner-Checkpoints vom Format `MYNCP001` mit `storage preview-legacy --config config.yaml` prüfen und anschließend mit `storage migrate-legacy --config config.yaml` ins Topic-Format überführen.
+Read, decrypt and check manifest, all referenced topic images, Owner-/client bindings,
+assignment metadata and active configured odds. Provides a small JSON summary. Missing,
+defective or incompatible data are not treated as valid vacancy. Old individual owner
+checkpoints from `MYNCP001` with `storage preview-legacy --config config.yaml` and then
+transferred to topic format with `storage migrate-legacy --config config.yaml`.
 
 ### Backup
 
@@ -92,7 +145,12 @@ Liest, entschlüsselt und prüft Manifest, alle referenzierten Topic-Abbilder, O
 mynofy storage backup --config config.yaml --out backups/content-001
 ```
 
-Das Ziel muss ein **neues** Verzeichnis sein; bestehende Ziele werden nicht überschrieben. Gesichert wird der letzte gespeicherte Content-Stand: Manifest, referenzierte Topic-Dateien und ein mindestens gleich hoher technischer Referenzstand. Unverschlüsselte Topics bleiben unverschlüsselt; verschlüsselte Dateien behalten ihren bestehenden Umschlag. Das Backup enthält keine Security-Konfiguration, TLS-Dateien oder Client-Privatschlüssel. Ein fehlerhaft abgebrochenes Ziel kann unvollständig existieren; ohne gültiges Manifest ist es kein erfolgreiches Backup. Die Quelle bleibt unverändert.
+The destination must be a **new** directory; existing destinations are not overwritten; the last
+stored content status is backed up: manifest, referenced topic files and at least the same
+technical reference status. Unencrypted topics remain unencrypted; encrypted files retain their
+existing envelope. The backup does not contain any security configuration, TLS files or client
+private keys. An erroneously aborted destination may exist incompletely; without a valid
+manifest, it is not a successful backup; the source remains unchanged.
 
 ### Restore
 
@@ -100,106 +158,124 @@ Das Ziel muss ein **neues** Verzeichnis sein; bestehende Ziele werden nicht übe
 mynofy storage restore --config config.yaml --from backups/content-001
 ```
 
-Stellt Inhalte desselben `service.id` wieder her. Die aktuelle Security bleibt maßgeblich; fehlende erforderliche Identitäten werden nicht aus dem Backup angelegt. There is no delivery-ID allocator or retained confirmation state. Ein neuer leerer Content-Zielordner ist zulässig; ein vorhandener beschädigter Stand wird nicht stillschweigend als leer behandelt.
+Recovers content of the same `service.id`. Current security remains relevant; missing required
+identities are not created from the backup. There is no delivery-ID allocator or retained
+confirmation state. A new empty content destination folder is allowed; an existing damaged
+status is not tacitly treated as empty.
 
-Der Restore schreibt zunächst in unreferenzierte Topic-Slots und ersetzt erst dann das Manifest. Fehler vor diesem Commit lassen den bisherigen Inhaltsstand nutzbar. Ein bereits erhöhter technischer Vergabestand darf bei einem fehlgeschlagenen Restore als sichere Lücke zurückbleiben. Bei einem Sync-Fehler nach Manifest-Rename bleibt die bestehende Regel: Haltbarkeit unbestätigt, keine weiteren Schreiboperationen auf dem geöffneten Store bis zum Neustart.
+The restorer first writes into unreferenced topic slots and only then replaces the manifest.
+Error before this commit allows the previous content status to be used. An already increased
+technical status may remain as a secure gap in the event of a failed restore. In the case of a
+sync error by manifest rename, the existing rule remains: durability unconfirmed, no further
+write operations on the open store until restart.
 
-Verwendet das Backup ein älteres Secret desselben Passwort-/Key-Modus:
+If the backup uses an older secret of the same Passwort-/Key-Modus:
 
 ```sh
 mynofy storage restore --config config.yaml --from backups/content-001 \
   --backup-secret stdin
 ```
 
-Zuerst wird das aktuelle Ziel-Secret, danach das Backup-Secret über stdin gelesen. Das importierte Backup wird beim Commit mit dem aktuellen Ziel-Secret gespeichert. Unterschiedliche globale Verschlüsselungsmodi sind in diesem Schritt kein impliziter Migrationspfad.
+First, the current destination secret, then the backup secret is read via stdin, and the
+imported backup is stored when committing to the current destination secret, and different
+global encryption modes are not an implicit migration path in this step.
 
-### Gemeinsames Secret wechseln
+<a id="gemeinsames-secret-wechseln"></a>
+
+### Changing Secrets Together
 
 ```sh
 mynofy storage rekey --config config.yaml
 ```
 
-Liest das aktuelle Secret, das neue Secret und dessen Bestätigung ausschließlich über stdin; Terminaleingaben sind verdeckt. Eine ungleiche Bestätigung bricht vor dem Schreiben ab. Bei umgeleitetem stdin entsprechend drei Zeilen liefern. Der Modus `password_stdin` beziehungsweise `key_stdin` bleibt erhalten. Alle verschlüsselten Topics und das Manifest wechseln gemeinsam; unverschlüsselte Topics behalten ihre Strategie. Die CFG wird nicht verändert. Alte, separat erzeugte Backup-Verzeichnisse behalten ihr bisheriges Secret.
+Read the current secret, the new secret and its confirmation only via stdin; terminal inputs are
+hidden. Unequal confirmation cancels before writing. Provide three lines if stdin is redirected.
+The mode `password_stdin` or `key_stdin` is preserved. All encrypted topics and the manifest
+change together; unencrypted topics keep their strategy. The CFG is not changed. Old, separately
+created backup directories keep their previous secret.
 
-Ein fehlgeschlagener Commit vor Manifest-Rename lässt das alte Secret nutzbar. Erst nach dem gemeinsamen Commit werden die ersetzten Slots entfernt. Bei unbestätigtem Post-Rename-Sync muss der tatsächlich sichtbare Stand beim erneuten Öffnen geprüft werden; kein automatischer Rückfall auf Klartext oder ein zweites Secret.
+A failed commit before Manifest Rename makes the old Secret usable. Only after the joint commit
+will the replaced slots be removed. If the post-Rename sync is unconfirmed, the actual visible
+status must be checked upon reopening; no automatic relapse to plaintext or a second secret.
 
 ### Storage → RAM
 
-Zuerst den Dienst stoppen und für das Topic in der CFG `storage: {mode: ram}` setzen. Danach:
+First stop the service and set for the topic in the CFG `storage: {mode: ram}`.
 
 ```sh
 mynofy storage topic-ram --config config.yaml --topic jobs/status
 ```
 
-Das Kommando entfernt das Topic aus dem gespeicherten Content und löscht seine internen Topic-Dateien; es bleibt keine automatische Inhaltskopie dieses Topics im Store erhalten. Andere Topics und Security bleiben erhalten. Ein späterer Dienststart verwendet für dieses Topic die RAM-Baseline. Ein CFG-Edit allein setzt keine bereits gespeicherte Storage-Strategie zurück: Er wäre nicht von der ursprünglichen RAM-Baseline vor einer erfolgreichen Online-Aktivierung unterscheidbar. Eigenständig angelegte externe Backup-Verzeichnisse werden nicht automatisch verändert.
+The command removes the topic from the stored content and deletes its internal topic files; no
+automatic copy of the content of this topic is retained in the store. Other topics and security
+are retained. A later service launch uses the RAM baseline for this topic. A CFG edit alone does
+not reset an already stored storage strategy: it would not be distinguishable from the original
+RAM baseline before successful online activation.
 
-## Tests und verbleibende Grenzen
+<a id="tests-und-verbleibende-grenzen"></a>
 
-Unit-Tests prüfen den synchronen Counter, Fehler beim Schreiben, U32-Umlauf, Aktivierung mit/ohne Save, vorbestehende Inhalte, Online-Ablehnung des Rückwechsels, Offline-Locks, atomare Fehlerfälle von Restore/Rekey, Restore in einen leeren Store, unveränderte aktuelle Security und niemals zurückgesetzte Vergabestände. SDK-Tests prüfen Counter-Ungleichheit einschließlich Umlauf, mehrere Topics, erfolglose Polls, Bindung an den Owner und Ablehnung eines Welcome ohne Counter. Ein echter CLI-Prozesstest deckt Aktivierung, Save, hartes Beenden, fehlgeschlagenen Boot-Counter-Write vor Bindung, Cursor-Replay nach Neustart, Backup, Rekey, Restore mit altem Backup-Secret und Offline-RAM-Löschung ab.
+## Testing and remaining limits
 
-Linux ist hier geprüft; native macOS-CI bleibt offen. Physische Stromausfälle werden damit nicht behauptet. Performance-Messungen und weitere Speicheroptimierungen folgen als eigener nächster Schritt.
+Unit tests check the synchronous counter, write error, U32 turnaround, activation with and without a save,
+pre-existing content, online rejection of the switchback, offline locks, atomic error cases of
+Restore/Rekey, restore to an empty store, unchanged current security and never reset balances.
+SDK tests check counter inequality including turnaround, multiple topics, unsuccessful polls,
+binding to the owner and rejection of a welcome without counter. A real CLI process test covers
+activation, save, hard quit, failed boot counter write before binding, cursor replay after
+restart, backup, rekey, restore with old backup secret and offline RAM deletion.
 
-Abschließend bestanden auf Linux 176 Workspace-Tests, die erweiterte Funktionstestkampagne (64.000 Modellschritte und acht Kampagnen mit je 16.384 Fällen), Formatprüfung, Clippy mit Warnungen als Fehler sowie die isolierten Client- und Protokollprüfungen.
+Linux is tested here; native macOS-CI remains open. Physical power outages are not claimed.
+Performance measurements and further memory optimizations follow as a separate next step.
 
-Die anschließende [Offline-Härtung und Abbruchmatrix](storage-interruption-tests.md) ergänzt Inspect/Cleanup, wiederaufnehmbare Erstinitialisierung und vorgezogene Save-Ablehnung bei unbestätigtem Commit. Das vorstehende Testergebnis beschreibt den Stand vor dieser Erweiterung; der aktuelle Prüfbericht ist dort verlinkt.
+Finally, Linux passed 176 workspace tests, the advanced feature test campaign (64,000 model
+steps and eight campaigns with 16,384 cases each), format checking, Clippy with warnings as
+errors, and the isolated client and protocol checks.
 
-Ein dateifreier eingebetteter Owner meldet 0 ohne dauerhafte Neustartgarantie. `RestartClient` verwirft bei jedem Welcome mit 0 gespeicherte Cursor; auch ein persistenter Umlauf auf 0 führt sicherheitshalber zum Replay. Direkte Socket-Nutzer müssen dieselbe Regel selbst anwenden.
+The subsequent [Offline curing and abort matrix](storage-interruption-tests.md) supplements
+Inspect/Cleanup, resumable initial initialization and early save rejection in the case of
+unconfirmed commit. The above test result describes the status before this extension; the
+current test report is linked there.
 
-Progress saves create a private, randomly named staging file exclusively in the
-checked parent directory. An existing `<progress-path>.tmp` neighbor is preserved.
-Ordinary failures clean up only the current save's own staging file; an abrupt
-kill can leave an orphaned file, which later saves do not adopt or truncate.
+A file-free embedded owner reports 0 without a permanent restart guarantee. `RestartClient`
+discards cursors stored with 0 each welcome; even a persistent circulation to 0 leads to the
+replay for safety.
 
-Both CLI JSONL client modes limit each input line to 64 KiB including its optional
-newline and terminate locally on overflow, even if stdin remains open. Explicit
-`expires: null` is invalid command input; omit `expires` to use owner policy.
-Backup and Admin file output report parent-directory synchronization failures
-rather than claiming a durable newly created name.
+Progress saves create a private, randomly named staging file exclusively in the checked parent directory. An existing `<progress-path>.tmp` neighbor is preserved. Ordinary failures clean up only the current save's own staging file; an abrupt kill can leave an orphaned file, which later saves do not adopt or truncate.
+
+Both CLI JSONL client modes limit each input line to 64 KiB including its optional newline and terminate locally on overflow, even if stdin remains open. Explicit `expires: null` is invalid command input; omit `expires` to use owner policy. Backup and Admin file output report parent-directory synchronization failures rather than claiming a durable newly created name.
 
 ## Restore target integrity and retained producer bindings
 
-A normal restore requires either a valid existing manifest (whose observed expiry
-cutoff is preserved) or a genuinely fresh destination marked as such. A previously
-committed store with a missing manifest is not a fresh destination: restore fails
-without replacing its files, because its previous cutoff is unknown. Recover the
-missing manifest from a consistent store copy, or deliberately choose a separate
-fresh destination. Restoring into a new destination does not preserve a lost
-destination's expiry history. Current security is never restored from content.
+A normal restore requires either a valid existing manifest (whose observed expiry cutoff is preserved) or a genuinely fresh destination marked as such. A previously committed store with a missing manifest is not a fresh destination: restore fails without replacing its files, because its previous cutoff is unknown. Recover the missing manifest from a consistent store copy, or deliberately choose a separate fresh destination. Restoring into a new destination does not preserve a lost destination's expiry history. Current security is never restored from content.
 
-Offline `topic-ram` keeps the shared producer registry referenced by untouched
-topic files, including producers whose messages have expired. This preserves
-other topics' ability to reopen and bind messages to their original producers;
-it does not re-enable credentials or grant permissions.
+Offline `topic-ram` keeps the shared producer registry referenced by untouched topic files, including producers whose messages have expired. This preserves other topics' ability to reopen and bind messages to their original producers; it does not re-enable credentials or grant permissions.
 
 
-Die CLI meldet `listening on …` erst nach dem Binden des Datenlisteners
-und des konfigurierten Admin-Sockets. Ein Neustartzähler-Sprung bestätigt
-die persistente Vorbereitung und kann auch bei späterem Bindefehler auftreten.
+The CLI reports `listening on …` only after tying the data lister and the configured admin
+socket. A restart counter jump confirms the persistent preparation and can also occur in the
+event of a later tying error.
 
 
-Die verwaltete CLI-Fortschrittsdatei ist auf 4 MiB codiertes JSON begrenzt.
-Escaping langer Topic-Namen kann diese Grenze bereits vor 10.000 Cursor-Einträgen
-erreichen. Überschreitet ein neuer Cursor das Budget, beendet die CLI den Poll
-mit einem Fehler vor der stdout-Ausgabe und behält die bisherige Datei.
+The managed CLI progress file is limited to 4 MiB encoded JSON. Escaping long topic names can
+reach this limit before 10,000 cursor entries. If a new cursor exceeds the budget, the CLI ends
+the poll with an error before the stdout output and keeps the previous file.
 
 
-### Rückwechsel auf eine ältere CLI
+<a id="rückwechsel-auf-eine-ältere-cli"></a>
 
-Eine aktuelle verwaltete CLI speichert die Boot-ID mit dem Cursor. Die
-CLI aus v0.1.0 kann eine Datei mit diesem Feld nicht laden.
-Beim Rückwechsel einen neuen, bisher unbenutzten `--progress`-Pfad angeben
-und den ersten Poll ohne `after` ausführen. Die bisherige Datei kann für
-die aktuelle CLI erhalten bleiben. Bereits ausgeführte Fachschritte
-anhand des eigenen dauerhaften Workflow-Zustands abgleichen.
+### Change back to an older CLI
 
-### Kapazitätsprofil der Fortschrittsdatei
+A current managed CLI stores the boot ID with the cursor. The CLI from v0.1.0 cannot load a file
+with this field. When changing back, specify a new, previously unused `--progress` path and run
+the first poll without `after`. The previous file can be preserved for the current CLI.
 
-Eine Cursoränderung schreibt und synchronisiert das ganze Register. Die
-Kosten wachsen mit der codierten Datei und der Latenz des lokalen
-Dateisystems. Der Review maß für 20 Einzelseiten im Median 152 ms mit
-einem gespeicherten Cursor und 268 ms mit 6.001 Cursorn
-(rund 1,5 MiB). Jeweils drei lokale Release-Läufe einschließlich
-Prozessstart und Broker-I/O. Bei vielen Topics dieses Profil am
-Zieldatenträger messen. Getrennte Fortschrittsdateien können getrennte
-Topic-Sets abbilden. Die CLI prüft das Bytebudget vor stdout und
-veröffentlicht die Datei erst nach erfolgreichem Flush.
+<a id="kapazitätsprofil-der-fortschrittsdatei"></a>
+
+### Capacity profile of the progress file
+
+A cursor change writes and synchronizes the entire register. The costs increase with the encoded
+file and the latency of the local file system. The review measured for 20 individual pages in
+the median 152 ms with a stored cursor and 268 ms with 6,001 cursors (about 1.5 MiB). Three
+local release runs including process start and Broker-I/O. Measure this profile on the target
+disk for many topics. Separate progress files can map separate topic sets. The CLI checks the
+byte budget before stdout and publishes the file only after successful flush.

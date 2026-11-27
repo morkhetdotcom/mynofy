@@ -1,44 +1,43 @@
 # Sprach-SDKs
 
-Client-Unterstützung bedeutet einbindbare SDKs, nicht eine Agenten-Runtime.
-Sprachen teilen das vorhandene Protobuf-/Auth-Protokoll und gemeinsame
-[Konformitätsvektoren](../protocol/conformance/sdk-v1.json); Workflow, Mandat,
-Tickets und lokale Fachzustände bleiben Anwendungssache.
+Client support means connectable SDKs, not an agent runtime. languages share the existing
+Protobuf and authentication protocol and common [Conformity vectors](../protocol/conformance/sdk-v1.json);
+workflow, mandate, tickets and local specialist states remain a matter of use.
 
-| Sprache | Stand |
+| Language | Support |
 | --- | --- |
-| Rust | Vorhandene [Rust client crate](../crates/mynofy-client), Referenz für direkten und getunnelten Zugang |
-| Python | [Eigenständiges asyncio-SDK](../sdks/python/README.md), direkter WSS-/Unix-Zugang |
-| Go | [Natives SDK](../sdks/go/README.md), direkter WSS-/Unix-Zugang |
-| Java | [SDK ab Java 17](../sdks/java/README.md), direkter WSS-/Unix-Zugang |
-| Bash | [Shell-Bibliothek](../sdks/bash/README.md) über Rust-CLI, direkter und getunnelter Zugang |
-| C | [Native C-ABI](../sdks/c/README.md) über Rust-Client, direkte und getunnelte Verbindungen |
+| Rust | Existing [Rust client crate](../crates/mynofy-client), reference for direct and tunneled access |
+| Python | [standalone asyncio-SDK](../sdks/python/README.md), direct WSS and Unix access |
+| Go | [Natives SDK](../sdks/go/README.md), direct WSS and Unix access |
+| Java | [SDK for Java 17 and later](../sdks/java/README.md), direct WSS and Unix access |
+| Bash | [Shell-Bibliothek](../sdks/bash/README.md) via Rust- CLI, direct and tunneled access |
+| C | [Native C-ABI](../sdks/c/README.md) via Rust client, direct and tunneled connections |
 
-## Gemeinsame Grundoperationen
+<a id="gemeinsame-grundoperationen"></a>
 
-Verbindung mit Owner-/Client-Identitätsprüfung, Publish, Poll mit explizitem
-Cursor, ACK/NACK, eigene Nachrichten, Berechtigungen und Katalog. Clientseitiger
-Schlüsselwechsel erhält die stabile Client-ID. SDKs dürfen keine fremden Rechte
-aus Rollenbehauptungen ableiten oder unklare Publishes automatisch wiederholen.
+## Common basic operations
 
-Die [Wire-Vektoren](../protocol/conformance/sdk-v1.json) prüfen Bytes, typisierte
-Events, große `u64`/`i64`, Request-/Response-Felder und Auth-/Rotations-Transkripte.
-Rust erzeugt und prüft sie, Python, Go und Java lesen dieselben Daten. Spätere SDKs verwenden
-sie ebenfalls; die Vektoren sind keine zusätzliche Wire-Spezifikation.
+Connection with Owner-/Client-identity verification, Publish, Poll with explicit cursor, own messages, permissions and catalog. Client-side key change receives the stable client ID.
+SDKs must not derive any foreign rights from role claims or automatically repeat unclear
+publishes.
 
-## Verifizierter Python-Umfang
+The [Wire-Vektoren](../protocol/conformance/sdk-v1.json) check bytes, typed events, large `u64`
+/ `i64`, Request-/Response-Fields and Auth-/Rotations-Transkripte. Rust generates and checks
+them, Python, Go and Java read the same data.
 
-Python verwendet drei direkte Laufzeitabhängigkeiten: offizielle Protobuf-Runtime,
-`websockets` und `pyca/cryptography`. Keine CLI-Unterprozesse im SDK und keine
-neuen Rust-Registry-Abhängigkeiten. Generierte Bindings liegen im Paket; der
-Compiler `grpcio-tools` ist nur Entwicklungswerkzeug.
+<a id="verifizierter-python-umfang"></a>
 
-Tests verwenden selbst gestartete Rust-Services: Unix und TLS 1.3/WSS, Owner/
-Clientauth, ACL-Fehler, Katalog, Bytes und Events einschließlich Integergrenzen,
-Paging/Cursor, ACK/NACK und Rotation mit anschließender Rust-CLI-Anmeldung.
-Deterministische Fehlerpeers prüfen verlorene Mutationsergebnisse, Timeout,
-Antwortbindung, Cancellation und Schließen während eines Requests. Der Python-
-Testlauf ist separat von `cargo test --workspace` auszuführen.
+## Verified python scope
+
+Python uses three direct runtime dependencies: Official Protobuf Runtime, `websockets` and
+`pyca/cryptography`. No CLI subprocesses in the SDK and no new Rust Registry dependencies.
+Generated bindings are in the package; the compiler `grpcio-tools` is just a development tool.
+
+Tests use self-launched Rust services: Unix and TLS 1.3/WSS, Owner/ Clientauth, ACL errors,
+catalogs, bytes and events, including integer boundaries, Paging/Cursor and rotation
+with subsequent rust- CLI Deterministic error peers check lost mutation results, timeout,
+response binding, cancellation and closing during a request. `cargo test --workspace` to be
+executed.
 
 ```sh
 python3 -m venv .venv
@@ -47,83 +46,86 @@ python -m pip install -e './sdks/python[dev]'
 ./scripts/test-python-sdk.sh
 ```
 
-Für reproduzierbare Entwicklungsabhängigkeiten steht
-[requirements-test.lock](../sdks/python/requirements-test.lock) bereit; es enthält
-auch Build-/Generatorwerkzeuge. Das installierte Laufzeitpaket benötigt sie nicht.
+For reproducible development dependencies
+[requirements-test.lock](../sdks/python/requirements-test.lock) is available; it also contains
+build and generator tools. The installed runtime package does not need it.
 
-Echte native macOS-Prüfung folgt mit der geplanten CI. Peer-Tunnel, automatische
-Polling-/Zustandshelfer und Admin-Zugang gehören nicht zur ersten Python-Version.
-Der vorhandene Rust-Client ist für Owner-Tunnel weiter der vollständige Zugang.
+True native macOS testing follows with the planned CI. Peer tunnel, automatic
+Polling-/state helper and admin access are not part of the first Python version. The existing
+Rust client is still the full access for owner tunnels.
 
-## Verifizierter Go-Umfang
+<a id="verifizierter-go-umfang"></a>
 
-Das [Go-SDK](../sdks/go/README.md) unterstützt dieselben direkten Grundoperationen
-und den clientinitiierten Schlüsselwechsel. Drei direkte Abhängigkeiten:
-`coder/websocket`, offizielle Protobuf-Runtime und `golang.org/x/sys` für Peer-UIDs.
-Kryptografie und TLS verwenden die Go-Standardbibliothek. Keine CLI-Unterprozesse
-und keine Compiler-/Generatorabhängigkeiten zur Laufzeit; Go ab 1.26.
+## Verified Go scope
 
-`scripts/test-go-sdk.sh` führt native Rust-Service-Tests und deterministische
-Fehlerpeers mit dem Go-Race-Detector aus. Rust-generierte Schlüssel sind in Go
-lesbar; Go-generierte Schlüssel nach Rotation in Rust und optional Python.
-Darwin/ARM64 wird crosskompiliert; das ersetzt keinen nativen macOS-Test.
-Peer-Tunnel, Admin-Zugang und Polling-/Zustandshilfen sind wie bei Python ausgenommen.
-Erste Versionen aller sechs Sprachzugänge sind implementiert. Die CI im privaten Entwicklungsrepository
-konfiguriert ihre gemeinsamen Linux-/macOS-Prüfungen; der erste Runnerlauf steht aus.
+The [Go-SDK](../sdks/go/README.md) supports the same direct basic operations and
+client-initiated key change. Three direct dependencies: `coder/websocket`, official protobuf
+runtime and `golang.org/x/sys` for peer UIDs. Cryptography and TLS use the Go standard library.
+No CLI subprocesses and no Compiler-/generator dependencies at runtime; Go from 1.26.
 
-## Verifizierter Java-Umfang
+`scripts/test-go-sdk.sh` performs native Rust service tests and deterministic
+Rust-generated keys are readable in Go; Go-generated keys after rotation in Rust and optionally
+Python. Darwin/ARM64 is crosscompiled; this does not replace a native macOS test. Peer tunnels,
+admin access and Polling-/state helpers are excluded as in Python. First versions of all six
+voice accesses are implemented. The CI in the private development repository configures their
+common Linux-/macOS-checks; the native integration runs are also part of CI.
 
-Das [Java-SDK](../sdks/java/README.md) ab Java 17 deckt die direkten Grundoperationen
-und den clientinitiierten Schlüsselwechsel ab. Zwei direkte Laufzeitabhängigkeiten:
-Java-WebSocket und offizielle Protobuf-Runtime, dazu die transitive SLF4J-API.
-Kryptografie/TLS aus dem JDK; keine zusätzlichen nativen oder Krypto-Pakete.
-JSON-Hilfen, Protobuf-JSON und JUnit nur im Test. Katalogdefinition bleibt JSON-Bytes.
+<a id="verifizierter-java-umfang"></a>
 
-`scripts/test-java-sdk.sh` prüft echte Rust-Services, gemeinsame Wire-Vektoren und
-Fehlerpeers einschließlich Thread-Interrupt, Antwortverlust und Größenlimit.
-Rust-v2-Schlüssel direkt importieren; Java-v2-Export in Rust und optional Python
-prüfen. PKCS#8 v1 benötigt zusätzlich den Public Key, weil das JDK keine direkte
-Seed→Public-Key-API anbietet. Linux-Unix-Transport mit Peer-Prüfung getestet;
-macOS bleibt für CI offen. Owner-Tunnel und Admin wie bei Python/Go ausgenommen.
+## Verified Java Scope
 
-## Verifizierter Bash-Umfang
+The [Java-SDK](../sdks/java/README.md) from Java 17 covers the direct basic operations and the
+client-initiated key change. Two direct runtime dependencies: Java WebSocket and official
+protobuf runtime, plus the transitive SLF4J - API. Kryptografie/TLS from the JDK; no additional
+native or cryptography packages. JSON -Helps, protobuf- JSON and JUnit only in the test. Catalog
+definition remains JSON -Bytes.
 
-Die [Bash-Bibliothek](../sdks/bash/README.md) kapselt die vorhandene CLI mit
-Komfortfunktionen für Publish/Poll, ACK/NACK, eigene Nachrichten, Rechte, Katalog,
-Keygen und Rotation. jq ausschließlich für Strings/Antwortprüfung; große Zahlen
-als unveränderte Dezimaltexte erhalten. Keine neuen Rust-/Kryptoabhängigkeiten.
+`scripts/test-java-sdk.sh` checks real Rust services, common wire vectors and
+Error peers including thread interrupt, response loss and size limit. import Rust v2 keys
+directly; check Java v2 export in Rust and optionally Python. PKCS #8 v1 also requires the
+public key because the JDK does not offer direct seed→public keyAPI. Linux Unix transport tested
+with peer check; macOS remains open for CI. Owner tunnel and admin as excluded at Python/Go.
 
-Komfortaufrufe öffnen jeweils eine Verbindung und prüfen Request-ID/Antworttyp.
-Broker-Fehler, CLI-Ausfall, ungültige Antworten und Eingabefehler haben getrennte
-Exitcodes. Private temporäre Antwortdateien und Operationsprozesse werden beim
-regulären Ende/abfangbaren Operationssignal bereinigt. Ein JSONL-Passthrough hält
-bei Bedarf eine CLI-Verbindung offen; dessen rohe Exit-/Antwortsemantik bleibt.
-Die CLI liefert dort keine separaten Welcome-/Neustart-Metadaten.
+<a id="verifizierter-bash-umfang"></a>
 
-`scripts/test-bash-sdk.sh` prüft gemeinsame Request-/Rust-Wire-Vektoren, echte
-Unix-/WSS-Dienste, Auth/ACL, Bytes/Events, Integergrenzen, Paging, ACK/NACK, Rotation,
-Batch und TLS-Fehler. Doubles ergänzen Quoting, Antwortbindung, Exitcodes und Abbruch.
-Owner-Tunnel-Flags geprüft; reale Mehrhop-Prüfung weiterhin in der Rust-/CLI-Suite.
+## Verified bash scope
 
-Die Bash-Suite besteht unter Bash 3.2 und 5.2 auf Linux; das ersetzt keinen
-nativen macOS-Test.
+Die [Bash-Bibliothek](../sdks/bash/README.md) Encapsulates the existing CLI with comfort
+functions for Publish/Poll, own messages, rights, catalog, keygen and rotation. jq
+exclusively for Strings/response validation; large numbers obtained as unchanged decimal texts.
+Rust and cryptography dependencies.
 
-## Verifizierter C-Umfang
+Convenience calls each open a connection and check Request-ID/Antworttyp. broker error, CLI
+failure, invalid responses and input errors have separate exit codes. Private temporary response
+files and operation processes are cleaned up in the regular Ende/abfangbaren operation signal. A
+JSONL passthrough keeps an CLI connection open if required; the raw Exit-/Antwortsemantik
+remains. CLI does not provide separate Welcome-/Neustart-Metadaten.
 
-Das [C-SDK](../sdks/c/README.md) ist eine separate Workspace-Adapter-Crate über dem
-Rust-Client. Shared-/Static-Library mit C11-Header, ohne Server-/CLI-Abhängigkeit
-oder zusätzliche Registry-Pakete. Typed Publish/Poll ohne JSON-Zwischenschritt,
-unveränderliche Response-Views statt zusätzlicher Payload-Kopien, native U64/I64.
-Keys und Responses haben explizite Freigaben; der Client hält eigene Credentials.
+`scripts/test-bash-sdk.sh` checks common Request-/Rust-Wire-Vektoren, real
+Unix-/WSS-services, Auth/ACL, Bytes/Events, integer boundaries, paging, rotation, batch and
+TLS errors. Doubles add quoting, response binding, exit codes and cancellation. Owner tunnel
+flags checked; real multihop check still in the Rust-/CLI-Suite.
 
-Ein gemeinsamer I/O-Pool mit zwei Threads für alle aktiven C-Clients, Freigabe nach
-dem letzten Client. Eine Operation pro Handle, Busy ohne Queue und paralleles
-Close; keine Freigabe eines Handles während anderer Aufrufe. C-Pointerkonvertierung
-ist die eng begrenzte Ausnahme zum sonstigen Verzicht auf eigenen unsafe-Code.
+The Bash suite exists under Bash 3.2 and 5.2 on Linux; this does not replace a native macOS
+test.
 
-`scripts/test-c-sdk.sh`: Rust-FFI-Unit-Tests plus separat kompiliertes C-Programm an
-echten Unix-/WSS-Services, Auth/ACL, Integergrenzen, Bytes/Events, Cursor, ACK/NACK,
-Response-Lebensdauer, Threadabbau und Key-Rotation/Rust-CLI-Interop. ASan/UBSan
-prüfen zusätzlich den C-Consumer; Rust bleibt dabei uninstrumentiert. Owner-Tunnel
-nutzen den bestehenden Rust-Backendpfad und dessen Mehrhop-Integrationstests.
-Native macOS-ABI-Prüfung ist in der CI im privaten Entwicklungsrepository konfiguriert; erster nativer Lauf noch offen.
+<a id="verifizierter-c-umfang"></a>
+
+## Verified C perimeter
+
+The [C-SDK](../sdks/c/README.md) is a separate workspace adapter crate over the Rust client.
+Shared-/Static-Library with C11 header, without Server-/CLI-dependency or additional registry
+packets. Typed Publish/Poll without JSON intermediate step, immutable response views instead of
+additional payload copies, native U64/I64. keys and responses have explicit releases; the client
+holds its own credentials.
+
+A common I/O-Pool with two threads for all active C clients, sharing after the last client. One
+operation per handle, Busy without queue and parallel close; no sharing of a handle during other
+calls. C-Pointer conversion is the narrow exception to otherwise waiving your own unsafe code.
+
+`scripts/test-c-sdk.sh`: Rust FFI unit tests plus separately compiled C program
+real Unix-/WSS-Services, Auth/ACL, integer boundaries, Bytes/Events, cursor, response
+lifetime, thread degradation and Key-Rotation/Rust-CLI-Interop. ASan/UBSan additionally check
+the C-consumer; Rust remains uninstrumented. Owner tunnels use the existing Rust backend path
+and its multihop integration tests. Native macOS- ABI check is configured in the CI in the
+private development repository; first native run still open.

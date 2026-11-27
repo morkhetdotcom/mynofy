@@ -1,6 +1,10 @@
-# Lokale Admin-API
+<a id="lokale-admin-api"></a>
 
-Die Verwaltungs-API ist implementiert und verwendet einen eigenen Unix-Socket. Sie verwaltet Identitäten, Schlüssel und ACLs im laufenden Owner. Sie ist weder Teil des Nachrichtenprotokolls noch über Topics, REST oder den WSS-Port erreichbar. Sie funktioniert neben einem WSS-Datenlistener oder einem lokalen Daten-Unix-Socket.
+# Local admin API
+
+The administration API is implemented and uses its own Unix socket. It manages identities, keys
+and ACLs in the current owner. It is not part of the message log, nor is it accessible via
+topics, REST or the WSS port. It works alongside a WSS data lister or a local data unix socket.
 
 ## Basic status and explicit storage diagnostics
 
@@ -22,15 +26,10 @@ mynofy admin content status TOPIC --socket .local/unix/run/mynofy-admin.sock
 
 `status` reports service identity, client/key/session/topic counts,
 `resident_messages`, charged message bytes, limits, security/content persistence
-health and service links. `resident_messages` is the constant-time resident record
-count, including expired records awaiting normal bounded cleanup. It is not an
-exact active-message count. Session validation and configured metadata processing
-remain; this is not a constant-time claim for arbitrary metadata sizes.
+health and service links. `resident_messages` is the constant-time resident record count, including expired records awaiting normal bounded cleanup. It is not an exact active-message count. Session validation and configured metadata processing remain; this is not a constant-time claim for arbitrary metadata sizes.
 
 `storage_stats` scans resident messages to report active/expired counts, payload
-bytes, record layout, allocated arena/pages and index sizes. It holds the owner
-lock for a consistent view, so use it on demand rather than as a frequent health
-check. Both commands are read-only and do not wait for security durability.
+bytes, record layout, allocated arena/pages and index sizes. It holds the owner lock for a consistent view, so use it on demand rather than as a frequent health check. Both commands are read-only and do not wait for security durability.
 
 Admin JSON request (on the separate protected Unix socket):
 
@@ -38,20 +37,21 @@ Admin JSON request (on the separate protected Unix socket):
 {"version":1,"command":{"op":"storage_stats"}}
 ```
 
-The former `status.result.storage` object moves to `storage_stats.result`;
-the CLI prints that result directly. Update scripts that consumed detailed storage
-fields to use the explicit command. Routine save/journal monitoring keeps using
-`status` and its `content_storage` / `security_storage` fields.
+The former `status.result.storage` object moves to `storage_stats.result`; the CLI prints that result directly. Update scripts that consumed detailed storage fields to use the explicit command. Routine save/journal monitoring keeps using `status` and its `content_storage` / `security_storage` fields.
 
 ## Aktivieren
 
-In der bestehenden Startkonfiguration unter `service` ergänzen:
+In the existing start configuration under `service` add:
 
 ```json
 "admin_socket": "run/mynofy-admin.sock"
 ```
 
-Die übrigen Service-Felder für den Datenlistener bleiben erforderlich. Der Admin-Pfad muss vom Daten-Socket getrennt sein. Relative Dateipfade werden beim Laden relativ zum Konfigurationsverzeichnis aufgelöst; Export-Snapshots enthalten aufgelöste absolute Pfade. Ohne `admin_socket` startet kein Admin-Listener. Die Setup-Skripte `setup-local.sh` und `setup-unix.sh` setzen den Pfad bei neu erstellten Demos; vorhandene lokale Konfigurationen werden nicht geändert.
+The remaining service fields for the data lister remain necessary. The admin path must be
+separated from the data socket. Relative file paths are resolved relative to the configuration
+directory when loaded; export snapshots contain resolved absolute paths. Without `admin_socket`,
+no admin lister starts. The setup scripts `setup-local.sh` and `setup-unix.sh` set the path for
+newly created demos; existing local configurations are not changed.
 
 ```sh
 cargo run --locked -- serve --config .local/unix/config.json
@@ -59,32 +59,46 @@ cargo run --locked -- admin status --socket .local/unix/run/mynofy-admin.sock
 cargo run --locked -- admin help
 ```
 
-Der Socket hat Modus `0600`. Neu angelegte Verzeichnisse haben Modus `0700`; ein vorhandenes Elternverzeichnis darf nicht für Gruppe oder andere schreibbar sein. Der Dienst prüft zusätzlich die UID des verbundenen Prozesses gegen die Socket-Owner-UID. Vorhandene Dateien, Symlinks und alte Socket-Einträge werden beim Start nicht überschrieben. Beim Beenden werden nur selbst angelegte, anhand Gerät/Inode identifizierte Socket-Dateien entfernt; Ersatzdateien bleiben erhalten. Ein nicht bindbarer konfigurierter Admin-Socket lässt den Dienststart fehlschlagen.
+The socket has mode `0600`. Newly created directories have mode `0700`; an existing parent
+directory must not be writeable for group or others. The service also checks the UID of the
+connected process against the socket owner UID. Existing files, symlinks and old socket entries
+are not overwritten at startup. When quitting, only self-created socket files identified by
+device/inode are removed; replacement files are retained. A non-bindable configured admin socket
+makes the service start fail.
 
-Die Verwaltungsberechtigung folgt damit der Betriebssystem-Identität: Prozesse unter derselben UID wie der Dienst dürfen administrieren. Es gibt zunächst keine weiteren Admin-Rollen oder Admin-Tokens. Ein normales Client-Keypair oder eine Topic-ACL erteilt keinen Admin-Zugriff. Der CLI-Client prüft Socket-Dateityp, Modus und die UID des verbundenen Servers. Die Implementierung nutzt Unix-APIs unter `cfg(unix)`; die Tests liefen auf Linux, kein nativer macOS-Test wurde durchgeführt.
+The management permission thus follows the operating system identity: processes under the same
+UID as the service are allowed to administer. There are no other admin roles or admin tokens at
+first. A normal client keypair or a topic ACL does not grant admin access. The CLI client checks
+socket file type, mode and the UID of the connected server. The implementation uses Unix APIs
+under `cfg(unix)`; the tests were run on Linux, no native macOS test was performed.
 
 ## Kommandos
 
-Alle Aufrufe benötigen `--socket PATH`; die folgenden Beispiele verwenden einen verkürzten Platzhalter `PATH`.
+All calls need `--socket PATH`; the following examples use a shortened placeholder `PATH`.
 
 | CLI | Funktion |
 | --- | --- |
-| `mynofy admin clients list --socket PATH` | Client-Identitäten mit Name, Sperre, Revision, Schlüsselanzahl und Zahl gültiger Sessions auflisten. |
-| `mynofy admin clients get CLIENT --socket PATH` | Public Keys, Token-IDs, Ablauf/Gültigkeit und Sessioninformationen ansehen. |
-| `mynofy admin clients add --public-key FILE --socket PATH` | Neue stabile Identität aus dem ersten Public Key registrieren, zunächst ohne Topic-Rechte. |
-| `mynofy admin clients disable CLIENT --socket PATH` | Client sperren und dessen Sessions invalidieren. |
-| `mynofy admin clients enable CLIENT --socket PATH` | Client wieder zulassen; neue Anmeldung erforderlich. |
-| `mynofy admin keys revoke TOKEN --socket PATH` | Einen registrierten Schlüssel widerrufen und dessen Sessions/Challenges invalidieren. |
-| `mynofy admin keys add CLIENT --public-key FILE --socket PATH` | Einen vom Betreiber ausdrücklich zugeordneten Schlüssel hinzufügen, etwa zur Neueinrichtung nach Schlüsselverlust. |
-| `mynofy admin acl get CLIENT TOPIC --socket PATH` | Rechte eines Clients auf einem exakten lokalen Topic abfragen. |
-| `mynofy admin acl set CLIENT TOPIC --allow publish,subscribe --socket PATH` | Das vollständige Rechte-Set für dieses Paar ersetzen. |
-| `mynofy admin acl set CLIENT TOPIC --allow none --socket PATH` | Alle Rechte dieses Paars entfernen. |
-| `mynofy admin status --socket PATH` | Client-/Session-/Topiczahlen, Ressourcenbelegung, Limits und Bereinigungsrückstand abfragen. |
-| `mynofy admin export --socket PATH --out NEW_FILE` | Aktuellen Identitäts-/ACL-Stand als neue Startkonfiguration exportieren. |
+| `mynofy admin clients list --socket PATH` | List client identities with name, lock, revision, key number and number of valid sessions. |
+| `mynofy admin clients get CLIENT --socket PATH` | View public keys, token IDs, expiry and validity and session information. |
+| `mynofy admin clients add --public-key FILE --socket PATH` | Register new stable identity from the first public key, initially without topic rights. |
+| `mynofy admin clients disable CLIENT --socket PATH` | Lock the client and invalidate its sessions. |
+| `mynofy admin clients enable CLIENT --socket PATH` | Re-allow client; new registration required. |
+| `mynofy admin keys revoke TOKEN --socket PATH` | Revoke a registered key and invalidate its Sessions/Challenges. |
+| `mynofy admin keys add CLIENT --public-key FILE --socket PATH` | Add a key explicitly assigned by the operator, for example for resetting after key loss. |
+| `mynofy admin acl get CLIENT TOPIC --socket PATH` | Request rights of a client on an exact local topic. |
+| `mynofy admin acl set CLIENT TOPIC --allow publish,subscribe --socket PATH` | Replace the full rights set for this pair. |
+| `mynofy admin acl set CLIENT TOPIC --allow none --socket PATH` | Remove all rights of this pair. |
+| `mynofy admin status --socket PATH` | Client-/Session-/Topiczahlen, resource occupancy, limits and adjustment backlog. |
+| `mynofy admin export --socket PATH --out NEW_FILE` | Export current identity/ACL status as a new start configuration. |
 
-`clients list` unterstützt `--limit 1..100` (Standard 20) und `--after SLOT`. Die Antwort enthält `items` und gegebenenfalls `next_after`. Dieser administrative Fortsetzungsindex ist keine Client-ID und kein Topic-Cursor; neue Abfragen nach einem Dienstneustart beginnen ohne `--after`. `clients get` zeigt höchstens 100 Session-IDs sowie Gesamtanzahl und `sessions_truncated`.
+`clients list` supports `--limit 1..100` (default 20) and `--after SLOT`. The response contains `items` and, if applicable, `next_after`. This administrative continuation index is not a client ID and is not a topic cursor; new requests for a service restart start without `--after`. `clients get` shows a maximum of 100 session IDs and total number and `sessions_truncated`.
 
-Öffentliche Schlüsseldateien enthalten entweder das JSON-Ergebnis von `keygen` oder den rohen Base64-kodierten 32-Byte-Public-Key. PEM/Zertifikate und private Schlüsseldateien sind dafür nicht vorgesehen. Bei JSON wird `public_key` gelesen; eine vorhandene `algorithm`-Angabe muss `ed25519` sein. Die Schlüsselbefehle akzeptieren optional `--valid-until RFC3339_UTC_Z`; ohne Angabe gilt die konfigurierte `rotation.key_validity_seconds` ab Owner-Zeit. Ein Datum muss in der Zukunft liegen. `clients add` unterstützt zusätzlich `--name NAME` mit höchstens 256 UTF-8-Bytes.
+Public key files contain either the JSON result of `keygen` or the raw base64-encoded 32-byte
+public key. PEM/Zertifikate and private key files are not intended for this. `public_key` is
+read at JSON; an existing `algorithm` specification must be `ed25519`. The key commands accept
+`--valid-until RFC3339_UTC_Z`; without specification, the configured
+`rotation.key_validity_seconds` applies from owner time. `clients add` additionally supports
+`--name NAME` with a maximum of 256 UTF -8 bytes.
 
 ```sh
 cargo run --locked -- keygen --out review-agent.pk8 > review-agent-public.json
@@ -93,25 +107,54 @@ cargo run --locked -- admin clients add \
   --public-key review-agent-public.json --name review-agent
 ```
 
-Die Antwort liefert die neue `client_id`. Danach dieser Identität die benötigten Rechte geben und den normalen Client mit dessen privater Schlüsseldatei anmelden. Die Registrierung ersetzt nicht den Schlüsselbesitznachweis im normalen Auth-Handshake. Höchstens 10.000 Identitäten und acht registrierte Schlüssel pro Identität sind zulässig. Doppelte Identitäten beziehungsweise bereits registrierte Public Keys werden abgewiesen.
+The answer provides the new `client_id`. After that, give the required rights to this identity
+and log in the normal client with its private key file. Registration does not replace the proof
+of key ownership in the normal Auth handshake. No more than 10,000 identities and eight
+registered keys per identity are allowed. Duplicate identities or already registered public keys
+are rejected.
 
-`keys add` fügt einen Schlüssel hinzu und widerruft keinen anderen automatisch. Für verlorene/kompromittierte Schlüssel empfiehlt sich die explizite Folge: Client sperren, alten Token widerrufen, neuen Public Key zuordnen, Client wieder zulassen. Die stabile Client-ID und ACL bleiben erhalten. Bei der Datenanmeldung mit einem administrativ zugeordneten neuen Key muss `--client-id` die bestehende stabile Identität angeben. Die gewöhnliche authentifizierte Rotation bleibt das bevorzugte Verfahren, wenn der bisherige Schlüssel noch verfügbar und gültig ist.
+`keys add` adds one key and does not automatically revoke another. verlorene/kompromittierte Key recommends the explicit sequence: lock client, revoke old tokens, assign new public key, re-allow client. Stable client ID and ACL remain intact. `--client-id` must specify the existing stable identity when logging in with an administratively assigned new key. The usual authenticated rotation remains the preferred procedure if the previous key is still available and valid.
 
-## Atomare Wirkung
+## Atomare effect
 
-Mutationen laufen unter demselben Core-Lock wie Nachrichtenoperationen. Eingaben und Kapazitäten werden vor der Änderung geprüft. ACL-Änderungen erhöhen die Revision und invalidieren betroffene Client-Sessions und Schlüsselwechsel. Eine Sperre verwirft ebenfalls die bisherigen Sessions und ausstehenden Wechsel; Entsperren stellt keine Sitzung wieder her. Die Session-Parallelitätslimits werden je Client im Core verwaltet, sodass auch nachträglich registrierte Clients sofort dieselben Grenzen erhalten.
+Mutations run under the same core lock as message operations. Inputs and capacities are checked
+before the change. ACL Changes increase the revision and invalidate affected client sessions and
+key changes. A lock also discards the previous sessions and pending changes; unlock does not
+restore a session. Session parallelity limits are managed per client in the core, so that even
+subsequently registered clients are immediately given the same limits.
 
-Ein Schlüsselwiderruf entfernt nur den ausgewählten Schlüssel und dessen Sessions. Ausstehende Auth-Challenges werden ebenfalls verworfen, damit sie nach einer späteren ausdrücklichen Neuregistrierung desselben Keys nicht wieder gültig werden. Andere Schlüssel derselben Identität bleiben verwendbar, solange der Client nicht insgesamt gesperrt ist. Auch nach Widerruf des letzten Keys bleibt die Identität erhalten; `keys: []` ist deshalb in einer Startkonfiguration erlaubt. Ohne registrierten gültigen Key ist keine Datenanmeldung möglich.
+A key revocation only removes the selected key and its sessions. Pending auth challenges are
+also discarded so that they do not become valid again after a later explicit re-registration of
+the same key. Other keys of the same identity remain usable as long as the client is not blocked
+altogether. Even after revocation of the last key, the identity remains; `keys: []` is therefore
+allowed in a start configuration. Without a registered valid key, no data login is possible.
 
-Bereits gespeicherte Nachrichten, Eigentum und Bestätigungspaare werden durch diese Verwaltungsaktionen nicht gelöscht. Ein gültig neu angemeldeter Client kann seine ursprünglichen aktiven Inhalte und vorher erhaltenen Paarreferenzen entsprechend den bestehenden Regeln weiter verwenden. Nachrichtenablauf bleibt maßgeblich.
+Already stored messages and their producer identities are preserved by these management
+actions. A validly newly logged-in client can continue to use its original active content and
+previously received pair references according to the existing rules.
 
-Die Invalidierung wirkt unmittelbar für neue Core-Operationen. Netzwerkverbindungen schließen bei weiterer Nutzung oder beim Auth-Check; ein bereits laufender Versand ist zusätzlich durch den bisherigen Netzwerk-Timeout begrenzt. Bereits vor der Änderung gebildete beziehungsweise übertragene Antworten lassen sich nicht zurückrufen.
+The disability directly affects new core operations. Network connections close when used further
+or during authentic check; an already running shipment is additionally limited by the previous
+network timeout. Answers already formed or transmitted before the change cannot be recalled.
 
-Lokale Topics und TTL-Policies können über die [Topic-Verwaltung](runtime-topics.md) geändert werden. Ressourcenlimits, Listener und Routing bleiben Startkonfiguration; es gibt keinen beliebigen Datei-Hot-Reload. Client-Identitäten werden nicht gelöscht oder Slots umnummeriert, solange ihnen noch RAM-Inhalte zugeordnet sein können.
+Local topics and TTL policies can be changed via the [Topic-management](runtime-topics.md).
+Resource limits, listeners and routing remain start configuration; there is no file hot reload.
+Client identities are not deleted or slots renumbered as long as RAM content can still be
+assigned to them.
 
 ## Expliziter Export
 
-Sicherheitsmutationen wirken sofort im RAM und werden automatisch im separaten [Security-Journal](security-journal.md) eingereiht. By default (`security_storage.sync: true`), successful security-mutation replies wait for the captured journal sequence outside the core lock. Explicit `security_storage.sync: false` allows asynchronous confirmation. `security_storage_unsynced` means RAM was changed but durable confirmation failed; inspect status before retrying. Read-only requests remain immediate. Ein Neustart stellt den synchronisierten Sicherheitszustand wieder her; noch ausstehende Writes können bei einem Absturz verloren gehen. Der Status enthält dafür `security_storage` mit eingereihter/dauerhafter Sequenz, Queue-Belegung und Speicherfehler. Eine volle Queue weist neue Mutationen vor ihrer Wirkung mit `security_storage_busy` ab. Die ursprüngliche CFG-Datei wird nie automatisch zurückgeschrieben. Ein Export enthält die aktuell registrierten Keys einschließlich abgeschlossener Rotation, Laufzeit-Registrierungen, Sperrflags und aktuelle ACLs:
+Security mutations act immediately in the RAM and are automatically included in the separate
+[Security-Journal](security-journal.md). By default (`security_storage.sync: true` ), successful
+security-mutation replies wait for the captured journal sequence outside the core lock. Explicit
+`security_storage.sync: false` allows asynchronous confirmation. `security_storage_unsynced`
+means RAM was changed but durable confirmation failed; inspect status before retrying. Read-only
+requests remain immediately. A restart restores the synchronized security state; pending writes
+can be lost in the event of a crash. The status contains `security_storage` with
+eingereihter/dauerhafter sequence, queue assignment and memory error. A full queue rejects new
+mutations before their effect with `security_storage_busy`. The original CFG file is never
+automatically written back. An export contains the currently registered keys including completed
+rotation, runtime registrations, blocking flags and current ACLs:
 
 ```sh
 cargo run --locked -- admin export \
@@ -120,13 +163,23 @@ cargo run --locked -- admin export \
 cargo run --locked -- check-config --config config.snapshot.json
 ```
 
-`--out` erzeugt eine neue Datei mit privaten Dateirechten und überschreibt keine bestehende Datei. `.yaml`/`.yml` erzeugt YAML, andere Endungen JSON. Ohne `--out` bleibt stdout JSON. [YAML-Profil und Konvertierung](yaml-config.md). Der Benutzer kann sie prüfen und später ausdrücklich mit `serve --config config.snapshot.json` verwenden. Dateipfade sind absolut; beim Umzug auf einen anderen Host müssen sie gegebenenfalls angepasst werden.
+`--out` creates a new file with private file privileges and does not overwrite an existing file. `.yaml` / `.yml` creates YAML, other endings JSON. Without `--out`, stdout JSON. [YAML Profile and conversion](yaml-config.md). The user can check it and later use it expressly with `serve --config config.snapshot.json`. File paths are absolute; when moving to another host they may need to be adjusted.
 
-Exportiert werden keine privaten Schlüsseldatei-Inhalte, Rotations-Secrets, Nachrichten, Statuspaare, Sessions, Cursor, Rate-Limiter oder laufenden Wechsel. TLS-Dateipfade bleiben Teil der Konfiguration. Revisionen und Owner-Generation sind neuer RAM-Zustand nach Neustart. Der Export ist ein konsistenter Metadaten-Snapshot, keine Nachrichtenpersistenz. Er enthält den Security-Pfad und ersetzt dessen Journal nicht; für eine unabhängige Kopie einen eigenen Pfad setzen. Kopieren der Metadaten erfolgt unter dem Core-Lock; Validierung, Serialisierung und Socket-/Datei-I/O danach. Sehr große Metadatensnapshots und Diagnose-Scans sind keine konstantzeitigen Message-Operationen.
+No private key file contents, rotation secrets, messages, sessions, cursor, rate
+limiter or ongoing changes are exported. TLS file paths remain part of the configuration.
+Revisions and owner generation are new RAM states after restart. The export is a consistent
+metadata snapshot, not news persistence. It contains the security path and does not replace its
+journal; it sets its own path for an independent copy. Metadata is copied under the core lock;
+validation, serialization and Socket-/Datei-I/O afterwards. Very large metadata snapshots and
+diagnostic scans are not constant-time message operations.
 
-## Separates Protokoll und Grenzen
+<a id="separates-protokoll-und-grenzen"></a>
 
-Auf dem Admin-Socket gilt ein kleines JSONL-Protokoll mit genau einer Anfrage und einer Antwort pro Verbindung. Danach schließt der Dienst die Verbindung. Es ist kein WebSocket und kein Bestandteil der normalen Protobuf-Frames.
+## Separate Protocol and Borders
+
+On the admin socket, there is a small JSONL protocol with exactly one request and one response
+per connection, after which the service closes the connection, and it is not a WebSocket and is
+not part of the normal protobuf frames.
 
 ```json
 {"version":1,"command":{"op":"status"}}
@@ -136,15 +189,35 @@ Auf dem Admin-Socket gilt ein kleines JSONL-Protokoll mit genau einer Anfrage un
 {"version":1,"ok":false,"error":{"code":"not_found","detail":"Client, key or local topic not found."}}
 ```
 
-Erfolg liefert `{"version":1,"ok":true,"result":{...}}`. Die CLI gibt nur `result` aus; bei Fehlern endet sie mit einem Fehlerstatus. Unbekannte Felder/Operationen und doppelte JSON-Schlüssel werden abgewiesen. Die Rust-Eingabetypen, das [Schema](../protocol/admin/v1.schema.json) und die [Beispiele](../protocol/admin/examples.json) beschreiben die aktuelle Version.
+Success delivers `{"version":1,"ok":true,"result":{...}}`. The CLI outputs only `result`; for
+errors, it ends with an error status. Unknown fields or operations and duplicate JSON keys are
+rejected. The Rust input types, the [Schema](../protocol/admin/v1.schema.json) and the
+[Examples](../protocol/admin/examples.json) describe the current version.
 
-Der Listener begrenzt gleichzeitig bearbeitete Verbindungen auf vier, neue zugelassene Verbindungen auf zehn pro Sekunde mit Burst 20, Requests auf 16 KiB und Antwort-JSON auf 32 MiB. Eine Verbindung hat fünf Sekunden Netzwerkdeadline. Der Serializer stoppt an der Antwortgrenze, statt einen unbeschränkt großen Antwortpuffer aufzubauen. Ein zu großer Export liefert `resource_exhausted`. Die Metadaten-Snapshotkopie selbst ist proportional zum bestehenden Register-/ACL-Bestand.
+The listener admits up to six connections at once. Four slots are available
+for ordinary commands, leaving capacity for `status` and `health`.
+It accepts up to ten connections per second with a burst of 20. Requests
+are limited to 16 KiB and responses to 32 MiB. The read deadline is two
+seconds and the connection budget is nine seconds. Mutations must start
+within seven seconds, which is also the deadline for any required security
+confirmation. Oversized responses return `resource_exhausted`. The cost of
+capturing a full configuration export depends on the number of entries.
 
-Es gibt keine automatischen Mutations-Retries. Geht eine Antwort verloren, kann eine Änderung bereits erfolgt sein; vor Wiederholung den aktuellen Stand abfragen. Die Grenzen sind für eine lokale Kontrollschnittstelle gedacht, nicht als Masseneinschreibungsprotokoll für hohe Datenraten. Die Datenpfad-Limits bleiben getrennt.
+There are no automatic mutation retries. If a response is lost, a change may have already
+occurred; retrieve the current status before deciding whether to retry. The boundaries are intended for a local
+control interface, not as a mass enrollment protocol for high data rates. The data path limits
+remain separate.
 
-## Verifikation
+<a id="verifikation"></a>
 
-Unit-Tests prüfen Registrierung ohne implizite Rechte, geteilte Session-Limits für neue Clients, Sperre/Entsperre, ungültige atomar abgewiesene Änderungen, Widerruf einschließlich ausstehender Challenges sowie Export nach administrativer Neueinrichtung und nach normaler Rotation. Integrationstests verwenden Daten-Unix-Socket und WSS neben dem Admin-Socket, sämtliche CLI-Routen, Snapshot-Neustart, Dateimodi, andere Peer-UID, unbekannte/doppelte/übergroße Requests und den Schutz bestehender beziehungsweise ausgetauschter Socket-Dateien. Ein echter CLI-Server wird per SIGTERM beendet; beide eigenen Socket-Dateien werden entfernt.
+## Verification
+
+Unit tests check registration without implicit rights, shared session limits for new clients,
+disable and enable, invalid atomically rejected changes, revocation including pending challenges
+and export after administrative resetting and normal rotation. Integration tests use data unix
+socket and WSS next to the admin socket, all CLI routes, snapshot restart, file modes, other
+peer UID, unknown/doppelte/oversized requests and protection of existing or exchanged socket
+files. A real CLI server is terminated by SIGTERM; both of its own socket files are removed.
 
 ```sh
 cargo test --locked --workspace
@@ -153,40 +226,48 @@ cargo check --locked -p mynofy-client
 cargo check --locked -p mynofy-protocol --no-default-features
 ```
 
-Keine neue Registry-Abhängigkeit. Die übrigen zurückgestellten Prototypschritte wurden damit nicht vorgezogen.
+No new registry dependency, so the remaining deferred prototype steps were not brought forward.
 
-## Content speichern
+<a id="content-speichern"></a>
 
-`mynofy admin content save --socket PATH` sendet `{"version":1,"command":{"op":"content_save"}}`. Die Antwort `{"queued":true,"revision":N}` bestätigt die erfasste und eingereihte RAM-Kopie. Schreiben/Verschlüsseln läuft danach ohne Core-Lock; mit `mynofy admin content status TOPIC --socket PATH` den Abschluss anhand der gespeicherten Revision prüfen. Höchstens ein Save gleichzeitig, sonst `content_save_busy`; ohne Konfiguration `content_storage_disabled`. Der Pfad kommt ausschließlich aus der CFG. Es gibt kein Admin-Load/Restore/Reload. [Einrichtung und Grenzen](content-storage.md).
+## Save content
 
-Mit `--topics-json '["jobs/status","machines/status"]'` lässt sich eine atomare Gruppe angeben. Das JSON-Array bewahrt Kommas innerhalb eines Namens und steht auch bei `admin peers set` zur Verfügung. `--topics TOPIC,TOPIC` bleibt die Kurzform für Namen ohne Kommas. Das Limit sind 16 KiB für den vollständig codierten Admin-Request ohne Zeilenumbruch. Separate Teilgruppen sind separate Commits.
+`mynofy admin content save --socket PATH` sends `{"version":1,"command":{"op":"content_save"}}`. The answer `{"queued":true,"revision":N}` confirms the recorded and lined RAM copy. Write/encryption then runs without core lock; check the conclusion with `mynofy admin content status TOPIC --socket PATH` on the basis of the saved revision. At most one save at the same time, otherwise `content_save_busy`; without configuration `content_storage_disabled`. The path comes exclusively from the CFG. There is no Admin-Load/Restore/Reload. [Establishment and borders](content-storage.md).
 
-Ohne Auswahl werden alle persistenten Topics gemeinsam gesichert. Intervall-Saves erfassen fällige, veränderte Intervall-Topics. Für eine eingereihte Revision N muss bei jedem angeforderten Topic `content_storage.topics[NAME].saved_revision >= N` gelten. `save_failure` enthält Revision und Diagnose eines noch offenen Fehlers für dieses Topic. Die globale `saved_revision` kann durch einen erfolgreichen Save anderer Topics steigen. Leere, doppelte, unbekannte oder RAM-Auswahlen ergeben `invalid_content_topics`.
+With `--topics-json '["jobs/status","machines/status"]'`, an atomic group can be specified. The
+JSON array preserves commas within a name and is also available at `admin peers set`. `--topics
+TOPIC,TOPIC` remains the short form for names without commas. The limit is 16 KiB for the fully
+coded admin request without line break. Separate subgroups are separate commits.
 
-## Topic-Speicher aktivieren
+Without selection, all persistent topics are backed up together. Interval saves capture mature,
+altered interval topics. For a signed-in revision N must apply to each requested topic
+`content_storage.topics[NAME].saved_revision >= N`. `save_failure` contains revision and
+diagnosis of a still open error for this topic. The global `saved_revision` can increase by a
+successful save of other topics. Void, duplicate, unknown or RAM selects
+`invalid_content_topics`.
 
-`mynofy admin topics storage TOPIC --mode manual|interval [--seconds N] [--encrypted true|false] --socket PATH` sendet `topic_storage`. Nur lokale RAM-Topics können aktiviert werden; Rückwechsel und weitere Änderungen persistenter Strategien werden online abgewiesen. Der Wechsel ist zunächst ausschließlich RAM-Zustand und wird erst mit erfolgreichem Content-Save dauerhaft. Bereits vorhandene aktive Nachrichten und Paare werden dann vollständig mitgesichert. Offline-Rückwechsel, Backup, Restore und Rekey: [Leitfaden](restart-and-storage.md).
+<a id="topic-speicher-aktivieren"></a>
+
+## Activate topic memory
+
+`mynofy admin topics storage TOPIC --mode manual|interval [--seconds N] [--encrypted true|false] --socket PATH` sends `topic_storage`. Only local RAM topics can be activated; switchback and other changes to persistent strategies are rejected online. The switch is initially only RAM state and only becomes permanent with successful content save. The content save captures the active messages with their original expiration times. Offline switchback, backup, restore and rekey: [Leitfaden](restart-and-storage.md).
 
 
-Im [Peer-/Proxy-Betrieb](service-network.md) enthält Status zusätzlich `service_links` mit registrierten Peer-IDs, aktiven Kanalressourcen und befristeten Routen. Das ist eine lokale Diagnose; es gibt darüber noch keine Peer-/Routing-Mutation.
+For [peer and proxy operation](service-network.md), `service_links` includes
+registered peer IDs, active channel resources and limited routes. Peer-/Routing-Mutation.
 
 ## Service-Peers
 
-`peers list|set|delete|disable|enable` und
-`peers revoke-certificate|revoked-certificates` erweitern denselben getrennten
-Admin-Socket. [Befehle, Sicherheitswirkung und Persistenz](runtime-peers.md).
+`peers list|set|delete|disable|enable` and
+`peers revoke-certificate|revoked-certificates` extend the same separate
+Admin-Socket. [commands, security effect and persistence](runtime-peers.md).
 
-All completed responses use the same JSONL framing: one JSON object followed by
-LF and connection shutdown, including `security_storage_unsynced` errors. A
-transport interruption or deadline can still truncate a response; never interpret
-such a partial frame as a successful mutation confirmation.
+All completed responses use the same JSONL framing: one JSON object followed by LF and connection shutdown, including `security_storage_unsynced` errors. A transport interruption or deadline can still truncate a response; never interpret such a partial frame as a successful mutation confirmation.
 
 
-Vier Admin-Kommandos können gleichzeitig ausgeführt werden oder auf ihre
-Security-Bestätigung warten. Insgesamt sind sechs Verbindungen zulässig.
-Bei vier wartenden Befehlen kann `status` die übrigen Verbindungen nutzen.
-Auf diesem Socket teilen sich alle Verbindungen die Eingangsphase. Zwei
-unvollständige Anfragen können die übrigen Plätze bis zum Ende ihrer
-Lesephase belegen. Die Frist für das Einlesen beträgt
-zwei Sekunden ab Beginn der Verarbeitung. Dieselben UID-, Eingabe-, Zeit-
-und Rate-Limits gelten für alle Verbindungen.
+Four admin commands can run at the same time or wait for their security confirmation. A total of
+six connections are allowed. With four waiting commands, `status` can use the remaining
+connections. On this socket, all connections share the input phase. Two incomplete requests can
+occupy the remaining seats until the end of their reading phase. The read-in period is two
+seconds from the start of processing. The same UID, input, time and rate limits apply to all
+connections.

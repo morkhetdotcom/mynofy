@@ -75,13 +75,12 @@ async fn run(
     cfg.limits.max_topic_active_bytes = Some(cfg.limits.max_active_message_bytes);
     cfg.limits.max_publisher_active_bytes = Some(cfg.limits.max_active_message_bytes);
     let mut engine = Engine::new(cfg, NOW)?;
-    engine.start_id_allocator();
     let sessions: Vec<_> = keys
         .iter()
         .map(|key| authenticate(&mut engine, key))
         .collect();
     let mut outputs: Vec<_> = (0..clients)
-        .map(|_| ResponseBuffer::new(engine.config.limits.max_response_bytes))
+        .map(|_| ResponseBuffer::new(engine.config().limits.max_response_bytes))
         .collect();
     // All publish messages for all cycles are generated and encoded before any operation timer.
     let prepared: Vec<Vec<Vec<u8>>> = (0..cycles)

@@ -157,7 +157,6 @@ async fn run(n: usize, size: usize, operation: String) -> Result<(), BoxError> {
     cfg.limits.max_publisher_active_bytes = Some(cfg.limits.max_active_message_bytes);
     cfg.limits.max_response_bytes = 512 * 1024;
     let mut e = Engine::new(cfg, NOW)?;
-    e.start_id_allocator();
     let sessions: Vec<_> = keys.iter().map(|k| authenticate(&mut e, k)).collect();
     let raw = |topic: &str, expires: Option<pb::Expires>| {
         frame(pb::Body::Publish(pb::Publish {
@@ -175,7 +174,7 @@ async fn run(n: usize, size: usize, operation: String) -> Result<(), BoxError> {
         }),
     );
     let live = raw("load/live", None);
-    let mut out = ResponseBuffer::new(e.config.limits.max_response_bytes);
+    let mut out = ResponseBuffer::new(e.config().limits.max_response_bytes);
     for i in 0..n {
         let input = if i < 1000 { &live } else { &bulk };
         e.handle_protobuf_into(sessions[0], input, NOW, out.prepare());

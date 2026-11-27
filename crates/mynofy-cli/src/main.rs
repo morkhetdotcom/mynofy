@@ -117,6 +117,7 @@ async fn run(args: Vec<String>, drain: Option<&DrainSignal>) -> Result<(), BoxEr
             "--rules",
         ],
         "mcp" => &[
+            "--checkpoint",
             "--url",
             "--ca",
             "--socket",
@@ -304,7 +305,7 @@ async fn run(args: Vec<String>, drain: Option<&DrainSignal>) -> Result<(), BoxEr
             }
         }
         "help" | "--help" => println!(
-            "Global Unix options: --run-as-uid UID --run-as-gid GID (required when privileged)\nmynofy admin help\nmynofy storage help\nmynofy security-init --config FILE\nmynofy content-init --config FILE\nmynofy serve --config FILE\nmynofy check-config --config FILE\nmynofy config-convert --config FILE --out NEW.yaml\nmynofy keygen --out CLIENT.pk8\nmynofy mcp --socket PATH --key CLIENT.pk8 --owner ID\nmynofy mcp --url wss://HOST:PORT --ca CA.pem --key CLIENT.pk8 --owner ID\nmynofy client --url wss://HOST:PORT --ca CA.pem --key CLIENT.pk8 --owner ID [--client-id STABLE_ID] [--progress FILE]\nmynofy rotate --url wss://HOST:PORT --ca CA.pem --key OLD.pk8 --new-key NEW.pk8 --owner ID [--client-id STABLE_ID]\nmynofy client --socket PATH --key CLIENT.pk8 --owner ID [--client-id STABLE_ID] [--progress FILE]\nmynofy rotate --socket PATH --key OLD.pk8 --new-key NEW.pk8 --owner ID [--client-id STABLE_ID]\nFor remote owners add --via-topic TOPIC --owner-ca OWNER_CA.pem [--owner-name OWNER_DNS]; --ca verifies the proxy, --owner-ca the end-to-end owner.\nThe client reads JSONL requests from stdin and writes JSONL responses to stdout."
+            "Global Unix options: --run-as-uid UID --run-as-gid GID (required when privileged)\nmynofy admin help\nmynofy storage help\nmynofy security-init --config FILE\nmynofy content-init --config FILE\nmynofy serve --config FILE\nmynofy check-config --config FILE\nmynofy config-convert --config FILE --out NEW.yaml\nmynofy keygen --out CLIENT.pk8\nmynofy mcp --socket PATH --key CLIENT.pk8 --owner ID [--checkpoint FILE]\nmynofy mcp --url wss://HOST:PORT --ca CA.pem --key CLIENT.pk8 --owner ID [--checkpoint FILE]\nmynofy client --url wss://HOST:PORT --ca CA.pem --key CLIENT.pk8 --owner ID [--client-id STABLE_ID] [--progress FILE]\nmynofy rotate --url wss://HOST:PORT --ca CA.pem --key OLD.pk8 --new-key NEW.pk8 --owner ID [--client-id STABLE_ID]\nmynofy client --socket PATH --key CLIENT.pk8 --owner ID [--client-id STABLE_ID] [--progress FILE]\nmynofy rotate --socket PATH --key OLD.pk8 --new-key NEW.pk8 --owner ID [--client-id STABLE_ID]\nFor remote owners add --via-topic TOPIC --owner-ca OWNER_CA.pem [--owner-name OWNER_DNS]; --ca verifies the proxy, --owner-ca the end-to-end owner.\nThe client reads JSONL requests from stdin and writes JSONL responses to stdout."
         ),
         _ => return Err("Unknown command; run mynofy help".into()),
     }

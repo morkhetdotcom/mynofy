@@ -39,7 +39,7 @@ fn legacy_initialization_and_modern_metadata_never_enable_uninitialized_tool_not
             .as_array()
             .unwrap()
             .len(),
-        7
+        10
     );
     let mut fresh = Session::default();
     let discover = reply(fresh.prepare(&modern(4, "server/discover", json!({}))));
@@ -49,7 +49,7 @@ fn legacy_initialization_and_modern_metadata_never_enable_uninitialized_tool_not
             .as_array()
             .unwrap()
             .len(),
-        7
+        10
     );
     let unsupported = message(
         json!({"jsonrpc":"2.0","id":6,"method":"tools/list","params":{"_meta":{VERSION_KEY:"2099-01-01",CAPS_KEY:{}}}}),
@@ -194,4 +194,14 @@ fn modern_version_errors_distinguish_invalid_types_from_unsupported_strings() {
     }
     let response = reply(session.prepare(&modern(19, "server/discover", json!({}))));
     assert_eq!(response["result"]["resultType"], "complete");
+}
+
+#[test]
+fn mcp_topic_validation_applies_the_utf8_byte_limit() {
+    for topic in ["a".repeat(256), "é".repeat(128), "😀".repeat(64)] {
+        assert!(tools::command("mynofy_checkpoint_status", &json!({"topic":topic})).is_ok());
+    }
+    for topic in ["a".repeat(257), "é".repeat(129), "😀".repeat(65)] {
+        assert!(tools::command("mynofy_checkpoint_status", &json!({"topic":topic})).is_err());
+    }
 }

@@ -46,7 +46,7 @@ mod fixtures {
         let nonce = crypto::decode(h["nonce"].as_str().unwrap()).unwrap();
         let sig = crypto::sign(
             &key,
-            &crypto::auth_bytes(&nonce, &public, &e.config.service.id),
+            &crypto::auth_bytes(&nonce, &public, &e.config().service.id),
         )
         .unwrap();
         assert_eq!(
@@ -74,7 +74,7 @@ mod security_tests {
     #[test]
     fn oversized_peer_change_is_rejected_and_following_disable_becomes_durable() {
         let (e, _, _) = setup();
-        let mut cfg = e.config.clone();
+        let mut cfg = e.config().clone();
         drop(e);
         cfg.service.id = "s".repeat(256);
         cfg.topics[0].owner_id = cfg.service.id.clone();
@@ -131,13 +131,13 @@ mod security_tests {
             .err()
             .unwrap();
         assert_eq!(error.code, "security_record_too_large");
-        assert!(owner.config.accepted_peers.is_empty());
+        assert!(owner.config().accepted_peers.is_empty());
         let status =
             serde_json::to_value(owner.admin(Command::Status {}, 1_800_000_000_000).unwrap())
                 .unwrap();
         assert_eq!(status["security_storage"]["submitted_sequence"], 0);
         assert_eq!(status["security_storage"]["pending_records"], 0);
-        let client = owner.config.clients[0].client_id.clone();
+        let client = owner.config().clients[0].client_id.clone();
         assert!(
             owner
                 .admin(
@@ -170,7 +170,7 @@ mod security_tests {
             recovered
                 .admin(
                     Command::ClientGet {
-                        client: recovered.config.clients[0].client_id.clone(),
+                        client: recovered.config().clients[0].client_id.clone(),
                     },
                     1_800_000_001_000,
                 )
@@ -213,7 +213,7 @@ mod transport_tests {
     }
     async fn cancel_output(mode: &str) {
         let (e, key, _) = setup();
-        let mut cfg = e.config.clone();
+        let mut cfg = e.config().clone();
         drop(e);
         let directory = std::env::temp_dir().join(format!(
             "mynofy-rv-{mode}-{}",

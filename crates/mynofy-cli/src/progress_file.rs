@@ -6,12 +6,20 @@ use std::{
     io::{Read, Write},
     os::unix::fs::MetadataExt,
 };
+pub const MAX_PROGRESS_BYTES: usize = 4 * 1024 * 1024;
+
 pub struct ProgressFile {
     path: std::path::PathBuf,
     _lock: File,
 }
 impl ProgressFile {
     pub fn open(path: &Path) -> Result<(Self, ClientProgress), BoxError> {
+        Self::open_state(path)
+    }
+
+    pub fn open_state<T: serde::de::DeserializeOwned + Default>(
+        path: &Path,
+    ) -> Result<(Self, T), BoxError> {
         let parent = path
             .parent()
             .filter(|p| !p.as_os_str().is_empty())
@@ -43,24 +51,25 @@ impl ProgressFile {
                 let file: File = fd.into();
                 private(&file)?;
                 let mut bytes = Vec::new();
-                file.take(4 * 1024 * 1024 + 1).read_to_end(&mut bytes)?;
-                if bytes.len() > 4 * 1024 * 1024 {
+                file.take((MAX_PROGRESS_BYTES + 1) as u64)
+                    .read_to_end(&mut bytes)?;
+                if bytes.len() > MAX_PROGRESS_BYTES {
                     return Err("Progress file exceeds size limit".into());
                 }
                 serde_json::from_value(mynofy_protocol::strict_json(std::str::from_utf8(&bytes)?)?)?
             }
-            Err(rustix::io::Errno::NOENT) => ClientProgress::default(),
+            Err(rustix::io::Errno::NOENT) => T::default(),
             Err(error) => return Err(error.into()),
         };
         Ok((Self { path, _lock: lock }, state))
     }
-    pub fn save(&self, state: &ClientProgress) -> Result<(), BoxError> {
+    pub fn save(&self, state: &impl serde::Serialize) -> Result<(), BoxError> {
         self.save_encoded(&Self::encode(state)?)
     }
 
-    pub fn encode(state: &ClientProgress) -> Result<Vec<u8>, BoxError> {
+    pub fn encode(state: &impl serde::Serialize) -> Result<Vec<u8>, BoxError> {
         let bytes = serde_json::to_vec(state)?;
-        if bytes.len() > 4 * 1024 * 1024 {
+        if bytes.len() > MAX_PROGRESS_BYTES {
             return Err("Progress file exceeds size limit".into());
         }
         Ok(bytes)

@@ -1,28 +1,41 @@
-# Abhängigkeiten des ersten Rust-Prototyps
+<a id="abhängigkeiten-des-ersten-rust-prototyps"></a>
 
-Stand: 12. November 2026. Der Workspace deklariert fünfzehn unterschiedliche direkte externe Abhängigkeiten, zusätzlich interne Pfadabhängigkeiten zwischen seinen vier Crates. Es gibt keine zusätzlichen Dev-Abhängigkeiten. Es gibt keine Git-Abhängigkeiten, `[patch]`-Overrides oder projektspezifischen Forks. `Cargo.lock` hält die aufgelösten Versionen und Registry-Prüfsummen fest.
+# Dependencies of the first Rust prototype
 
-| Crate | Verwendung | Upstream |
+The workspace declares fifteen different direct external dependencies, plus internal path
+dependencies between its four crates. There are no additional dev dependencies. There are no Git
+dependencies, `[patch]` overrides, or project-specific forks. `Cargo.lock` keeps the resolution
+versions and registry checksums.
+
+| Crate | Utilisation | Upstream |
 | --- | --- | --- |
-| `tokio` | Async-Runtime, TCP, Timer, begrenzte Parallelität. | [tokio-rs/tokio](https://github.com/tokio-rs/tokio) |
-| `tokio-rustls` | TLS 1.3 mit Rustls; PEM-Verarbeitung über dessen vorhandene PKI-Typen. | [rustls/tokio-rustls](https://github.com/rustls/tokio-rustls) |
-| `tokio-tungstenite` | WebSocket-Handshake und Frames, ohne weiteres Web-Framework. | [snapview/tokio-tungstenite](https://github.com/snapview/tokio-tungstenite) |
-| `futures-util` | Benötigte Stream-/Sink-Erweiterungen; Features auf `std` und `sink` begrenzt. | [rust-lang/futures-rs](https://github.com/rust-lang/futures-rs) |
-| `serde` | Typisierte Konfiguration und Protokollfelder. | [serde-rs/serde](https://github.com/serde-rs/serde) |
-| `serde_json` | JSON-Frames und CFG; doppelte Schlüssel werden zusätzlich explizit abgewiesen. | [serde-rs/json](https://github.com/serde-rs/json) |
-| `saphyr-parser` | YAML-Konfiguration: reiner Event-Parser ohne Default-Features; keine Alias-/Tag-Verarbeitung durch die Anwendung. | [saphyr-rs/saphyr](https://github.com/saphyr-rs/saphyr) |
-| `aws-lc-rs` | Derselbe offizielle Provider für Rustls und Ed25519, SHA-256, HMAC, CSPRNG, PBKDF2 und AES-GCM. | [aws/aws-lc-rs](https://github.com/aws/aws-lc-rs) |
-| `base64` | Kanonisches Token-/Schlüssel-/Cursor-Encoding. | [marshallpierce/rust-base64](https://github.com/marshallpierce/rust-base64) |
-| `time` | RFC-3339-Validierung und Formatierung. | [time-rs/time](https://github.com/time-rs/time) |
-| `prost` | Protobuf-Nachrichten und Derives; kein Runtime-Descriptor-Framework. | [tokio-rs/prost](https://github.com/tokio-rs/prost) |
-| `bytes` | Unveränderliche geteilte Payloads, vorher bereits transitiv vorhanden. | [tokio-rs/bytes](https://github.com/tokio-rs/bytes) |
-| `zeroize` | Verwerfen sensibler Schlüssel-/Secret-Puffer. | [RustCrypto/utils](https://github.com/RustCrypto/utils) |
-| `rustix` | Linux: sichere UID/GID-, Gruppen-, Capability- und `no_new_privs`-Aufrufe im CLI-Bootstrap; Features je Verwendung begrenzt: `std`/`process` sowie `thread` (CLI) oder `fs` (Server). | [bytecodealliance/rustix](https://github.com/bytecodealliance/rustix) |
-| `nix` | Andere Unix-Plattformen: Identitätsprüfung (macOS verweigert Root) und verfügbare POSIX-Aufrufe; nur `user`. | [nix-rust/nix](https://github.com/nix-rust/nix) |
+| `tokio` | Async-Runtime, TCP, timer, limited parallelism. | [tokio-rs/tokio](https://github.com/tokio-rs/tokio) |
+| `tokio-rustls` | TLS 1.3 with Rustls; PEM processing via its existing PKI types. | [rustls/tokio-rustls](https://github.com/rustls/tokio-rustls) |
+| `tokio-tungstenite` | WebSocket handshake and frames, without further web framework. | [snapview/tokio-tungstenite](https://github.com/snapview/tokio-tungstenite) |
+| `futures-util` | Required Stream-/Sink-extensions; Features limited to `std` and `sink`. | [rust-lang/futures-rs](https://github.com/rust-lang/futures-rs) |
+| `serde` | Typed configuration and protocol fields. | [serde-rs/serde](https://github.com/serde-rs/serde) |
+| `serde_json` | JSON frames and CFG; duplicate keys are also explicitly rejected. | [serde-rs/json](https://github.com/serde-rs/json) |
+| `saphyr-parser` | YAML configuration: pure event parser without default features; no Alias-/Tag-processing by the application. | [saphyr-rs/saphyr](https://github.com/saphyr-rs/saphyr) |
+| `aws-lc-rs` | The same official provider for Rustls and Ed25519, SHA -256, HMAC, CSPRNG, PBKDF2 and AES - GCM. | [aws/aws-lc-rs](https://github.com/aws/aws-lc-rs) |
+| `base64` | Canonical Token-/key-/Cursor-Encoding. | [marshallpierce/rust-base64](https://github.com/marshallpierce/rust-base64) |
+| `time` | RFC -3339 validation and formatting. | [time-rs/time](https://github.com/time-rs/time) |
+| `prost` | Protobuf Messages and Derives; no runtime descriptor framework. | [tokio-rs/prost](https://github.com/tokio-rs/prost) |
+| `bytes` | Unchangeable shared payloads, previously already transitively present. | [tokio-rs/bytes](https://github.com/tokio-rs/bytes) |
+| `zeroize` | Discard sensitive key/secret buffers. | [RustCrypto/utils](https://github.com/RustCrypto/utils) |
+| `rustix` | Linux: secure UID/GID-, group, capability and `no_new_privs` calls in the CLI bootstrap; features limited per use: `std` / `process` and `thread` (CLI) or `fs` (server). | [bytecodealliance/rustix](https://github.com/bytecodealliance/rustix) |
+| `nix` | Other Unix platforms: Identity verification (macOS denied root) and available POSIX calls; only `user`. | [nix-rust/nix](https://github.com/nix-rust/nix) |
 
-Tokio, Rustls, Tungstenite und der Kryptografie-Provider bringen notwendige transitive Abhängigkeiten mit. Die Anzahl direkter Abhängigkeiten bezeichnet nicht die gesamte Zahl transitiver Crates. Versionen und gemeinsame Features stehen zentral unter `[workspace.dependencies]` im Root-Manifest. Der Provider benötigt native Build-Werkzeuge; OpenSSL ist keine TLS-Laufzeitabhängigkeit des Services. Es wird kein zweiter Signatur-/AEAD-Stack eingebaut.
+Tokio, Rustls, Tungstenite and the cryptography provider bring necessary transitive
+dependencies. The number of direct dependencies does not denote the total number of transitive
+crates. Versions and common features are centralized under `[workspace.dependencies]` in the
+root manifesto. The provider requires native build tools; OpenSSL is not a TLS runtime
+dependency of the service. No second Signatur-/AEAD-Stack is built in.
 
-Der archivierte Wrapper `rustls-pemfile` wurde vor Abschluss entfernt; sein Upstream [verweist auf die PKI-PEM-APIs](https://github.com/rustls/pemfile/releases). Die Auswahl wurde gegen Upstream-Repositories und aktuelle Releases geprüft. Eine laufende Wartungszusage kann diese Prüfung nicht ersetzen; vor Updates sind Änderungen, Sicherheitsmeldungen und der aktive Abhängigkeitsbaum erneut zu prüfen.
+The archived wrapper `rustls-pemfile` has been removed before completion; its upstream [Refers
+to the PKI - PEM APIs](https://github.com/rustls/pemfile/releases). The selection has been
+vetted against upstream repositories and current releases. An ongoing maintenance commitment
+cannot replace this vette; before updates, changes, security messages and the active dependency
+tree must be rechecked.
 
 ```sh
 cargo tree --locked --workspace --depth 1
@@ -30,25 +43,48 @@ cargo tree --locked --workspace --duplicates
 cargo metadata --locked --format-version 1
 ```
 
-Der aktive Baum enthält derzeit zwei Versionen des kleinen transitiven `untrusted`-Hilfscrates aus Provider und WebPKI. Das stammt aus den offiziellen Upstreams; es sind keine zusätzlichen Projekt-Forks. Benötigte Versionskombinationen werden nicht durch lokale Patches erzwungen.
+The active tree currently contains two versions of the small transitive `untrusted` helpcrate
+from the provider and WebPKI. This comes from the official upstreams; they are not additional
+project forks.
 
-Die [Rust client crate](../crates/mynofy-client) verhindern eine Server-Abhängigkeit des Client-SDKs. Das Protokoll-Crate ist ohne optionales `crypto`-Feature unabhängig von Netzwerk-Runtime und Kryptografie-Provider baubar. Die Workspace-Aufteilung führt keine neuen Registry-Abhängigkeiten ein.
+The [Rust client crate](../crates/mynofy-client) prevents server dependency of the client SDK.
+The protocol crate can be built without an optional `crypto` feature, regardless of network
+runtime and cryptography provider. The workspace division does not introduce new registry
+dependencies.
 
-Protobuf ergänzt prost 0.14.5 aus dem offiziellen Upstream. `prost-derive` bringt notwendige Proc-Makro-Abhängigkeiten (unter anderem anyhow/itertools/syn) mit. Kein prost-build, vendored protoc oder Build-Generator als Cargo-Abhängigkeit. Python/Rustfmt regenerieren nur bei Entwicklung die eingecheckten Typen; Details im [Protobuf-Leitfaden](protobuf.md).
+Protobuf adds prost 0.14.5 from the official upstream. `prost-derive` brings necessary Proc
+macro dependencies (among others anyhow/itertools/syn). No prost-build, vendored protoc or build
+generator as cargo dependency. Python/Rustfmt regenerate only when developing the checked-in
+types; details in [Protobuf guide](protobuf.md).
 
-Für den frühen [Rechteabbau](privileges.md) wurden die offiziellen Upstreams von rustix 1.1.6 (Bytecode Alliance) und nix 0.31.3 geprüft. Die CLI wählt ihre Bindings plattformspezifisch. Der Server verwendet rustix unter Unix zusätzlich für sichere no-follow-Dateizugriffe, atomare Umbenennung und Dateilocks des Security-Journals; es kommen keine weiteren Registry-Crates hinzu. Client und Protokoll bleiben frei von diesen OS-Bindings. Rustix liefert unter Linux sichere Capability-/prctl- und explizite Thread-ID-APIs; nix liefert die Identitätsprüfung auf macOS; da seine Gruppen-APIs dort ausgeschlossen sind, verweigert mynofy dort privilegierte Starts. Dadurch bleibt `forbid(unsafe_code)` in den vier Kerncrates erhalten. Keine Forks oder eigenen OS-FFI-Bindings. Der getrennte C-SDK-Adapter ist die ausdrücklich benötigte C-ABI-Ausnahme.
+For the early [Rechteabbau](privileges.md) The official upstreams of rustix 1.1.6 (Bytecode
+Alliance) and nix 0.31.3 were reviewed. CLI selects their bindings platform-specific. The server
+also uses rustix under Unix for secure no-follow file accesses, atomic renaming and filelocks of
+the security journal; no additional registry crates are added. Client and protocol remain free
+of these OS bindings. Rustix delivers secure under Linux Capability-/prctl- and explicit thread
+ID APIs; nothing provides identity verification on macOS; since its group APIs are excluded
+there, mynofy denies privileged starts there. `forbid(unsafe_code)` It's not a fork or its own
+OS. FFI -Binding. The separate C-- SDK -Adapter is the explicitly required C- ABI -Ausnahme.
 
-YAML verwendet saphyr-parser 0.3.4 aus dem offiziellen Saphyr-Projekt (Paket-MSRV 1.85, kompatibel mit Projekt-MSRV 1.88). Upstream, Release und Manifest wurden vor Auswahl geprüft. Die Produktionsabhängigkeiten sind arraydeque und thiserror; thiserror war bereits transitiv vorhanden. Keine C-YAML-Bibliothek, kein zusätzlicher Serde-YAML-Wrapper und keine Git-Patches. Der Server allein erhält die Abhängigkeit; Client und Protokoll bleiben YAML-frei. Das archivierte serde_yaml wird nicht eingeführt. Die bewusst eingeschränkte Event-Anbindung und Exportregeln stehen im [YAML-Leitfaden](yaml-config.md).
+YAML uses saphyr-parser 0.3.4 from the official Saphyr project (package MSRV 1.85, compatible
+with project MSRV 1.88). Upstream, release and manifest were checked before selection.
+Production dependencies are arraydeque and thiserror; thiserror was already transitive. No C-
+YAML library, no additional serde YAML wrapper and no git patches. The server alone receives the
+dependencies; the client and protocol remain YAML -free. The archived serde_yaml is not
+introduced. The deliberately restricted event connection and export rules are in
+[YAML-Leitfaden](yaml-config.md).
 
-Content-Verschlüsselung verwendet den vorhandenen offiziellen AWS-LC-Provider auch direkt im Server, ohne zusätzliche Registry-Abhängigkeit oder zweiten Krypto-Stack. Die CLI nutzt zusätzlich rustix/termios für verdeckte stdin-Eingabe unter Unix; native macOS-Validierung steht aus. Parameter/Referenzen im [Content-Leitfaden](content-storage.md).
+Content encryption also uses the existing official AWS LC provider directly in the server,
+without additional registry dependency or second crypto stack. The CLI additionally uses
+rustix/termios for hidden stdin input under Unix; native macOS validation is pending.
+Parameter/Referenzen in [Content-Leitfaden](content-storage.md).
 
 ## C-SDK
 
-Die zusätzliche Workspace-Crate `mynofy-client-c` verwendet nur bereits vorhandene
-Workspace-Abhängigkeiten: Client, Tokio/Rustls/Tungstenite und Zeroize. Keine neue
-Registry-Version und kein zweiter Krypto-/Protobuf-Anbieter. Tokio erhält hier das
-bereits verfügbare Feature `rt-multi-thread`; zwei gemeinsame Worker für aktive
-C-Clients statt einer Runtime pro Verbindung. Erstes/letztes Handle steuern den
-Runtime-Lebenszyklus. `prost`/`serde_json`/`futures-util` sind direkte Testhilfen,
-keine neue C-Runtime-API. Pointer- und Union-Konvertierung bleibt im C-Adapter;
-Core/Transport und die bisherigen Sicherheits-/OS-Bindings bleiben unverändert.
+The additional Workspace Crate `mynofy-client-c` only uses existing Workspace dependencies:
+Client, Tokio/Rustls/Tungstenite and Zeroize. No new registry version and no second
+Krypto-/Protobuf-Anbieter. Tokio gets the already available feature `rt-multi-thread`; two
+common Workers for active C clients instead of one Runtime per connection. Erstes/letztes Handle
+control the Runtime lifecycle. `prost` / `serde_json` / `futures-util` are direct test aids, no
+new C Runtime API. Pointer and Union conversion remains in the C adapter; Core/Transport and the
+previous Sicherheits-/OS-Bindings remain unchanged.

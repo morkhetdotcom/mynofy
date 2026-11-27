@@ -10,6 +10,8 @@ use tokio::{
     time::timeout,
 };
 mod backend;
+#[cfg(unix)]
+mod checkpoint;
 mod tools;
 const MODERN: &str = "2026-07-28";
 const LEGACY: &str = "2025-11-25";

@@ -1181,6 +1181,112 @@ fn direct_output_matches_generated_codec_across_pages_and_errors() {
 }
 
 #[test]
+fn direct_poll_matches_generated_encoder_at_length_and_page_budget_boundaries() {
+    use protocol::payload::{Event, Parameter, ParameterValue};
+
+    let mut f = fixture();
+    let event = |parameters| {
+        Payload::event(Event {
+            catalog: 1,
+            catalog_version: 1,
+            category: 12,
+            action: 10,
+            status: 7,
+            parameters,
+        })
+    };
+    let mut payloads = vec![
+        event(Vec::new()),
+        event(
+            [
+                ParameterValue::I64(i64::MIN),
+                ParameterValue::U64(u64::MAX),
+                ParameterValue::F64(-0.0),
+            ]
+            .into_iter()
+            .map(|value| Parameter { value: Some(value) })
+            .collect(),
+        ),
+    ];
+    payloads.extend(
+        [126, 127, 128, 129, 4096, 4096, 4096, 4096]
+            .into_iter()
+            .map(|length| {
+                Payload::bytes(vec![0xa5; length], Some("application/octet-stream".into()))
+            }),
+    );
+    let cutoff = payloads.len();
+    payloads.push(Payload::bytes(Vec::new(), None));
+
+    let mut seeded = |budget| {
+        f.cfg.limits.max_response_bytes = budget;
+        let mut engine = Engine::new(f.cfg.clone(), NOW).unwrap();
+        let session = auth(&mut engine, &f.keys[0], NOW);
+        for payload in &payloads {
+            engine
+                .publish_typed(0, "seed", "local/events", payload.clone(), None, NOW)
+                .unwrap();
+        }
+        (engine, session)
+    };
+    let compare = |engine: &mut Engine, session, after| {
+        let raw = pb::Frame {
+            version: 1,
+            body: Some(pb::Body::Poll(pb::Poll {
+                id: "poll".into(),
+                topic: "local/events".into(),
+                after,
+                limit: Some(100),
+            })),
+        }
+        .encode_to_vec();
+        let expected = engine.handle_protobuf(session, &raw, NOW);
+        let mut direct = bytes::BytesMut::new();
+        assert_eq!(
+            engine.handle_protobuf_into(session, &raw, NOW, &mut direct),
+            expected.kind(),
+        );
+        assert_eq!(direct.as_ref(), expected.encode_to_vec());
+        assert!(direct.len() <= engine.config().limits.max_response_bytes);
+        let Some(pb::Body::Messages(page)) = expected.body else {
+            panic!("Expected messages, got {expected:?}");
+        };
+        page
+    };
+
+    let (mut reference, session) = seeded(65536);
+    let full = compare(&mut reference, session, None);
+    assert_eq!(full.items.len(), payloads.len());
+    for (item, payload) in full.items.iter().zip(&payloads) {
+        assert_eq!(&item.message.payload, payload);
+    }
+    assert!(!full.has_more);
+    assert!(full.encoded_len() >= 16384);
+
+    // Use generated item lengths as the oracle for the poll selection policy.
+    let exact_budget = 4096
+        + full.items[..cutoff]
+            .iter()
+            .map(|item| item.encoded_len() + 8)
+            .sum::<usize>();
+    for (budget, accepted) in [
+        (exact_budget - 1, cutoff - 1),
+        (exact_budget, cutoff),
+        (exact_budget + 1, cutoff),
+    ] {
+        let (mut engine, session) = seeded(budget);
+        let first = compare(&mut engine, session, None);
+        assert_eq!(first.items, full.items[..accepted], "budget {budget}");
+        assert_eq!(first.next_cursor, crate::cursor::encode(accepted as u64));
+        assert!(first.has_more);
+        let second = compare(&mut engine, session, Some(first.next_cursor));
+        assert_eq!(second.items, full.items[accepted..], "budget {budget}");
+        assert_eq!(second.next_cursor, full.next_cursor);
+        assert!(!second.has_more);
+    }
+}
+
+#[test]
 fn expired_index_scans_are_bounded_and_empty_pages_advance_both_cursors() {
     let mut f = fixture();
     f.cfg.limits.max_active_messages = 3000;
@@ -1948,6 +2054,47 @@ fn full_content_restore_preserves_messages_bindings_policies_and_counter_progres
     assert_eq!(e.next_message, 2);
     assert!(directory.0.join("content/state.bin").exists());
 }
+#[cfg(unix)]
+#[test]
+fn content_restore_resumes_past_a_synchronously_refilled_range() {
+    let mut f = fixture();
+    let _directory = content_fixture(&mut f, ContentEncryption::None);
+    let mut e = Engine::new(f.cfg.clone(), NOW).unwrap();
+    e.message_ids = crate::ids::IdPool::at(crate::ids::SPACE - 1);
+    let session = auth(&mut e, &f.keys[0], NOW);
+    assert_eq!(
+        publish(&mut e, session, json!("last"), NOW)["message_id"],
+        "zzzzzzzz"
+    );
+    assert_eq!(
+        publish(&mut e, session, json!("first"), NOW)["message_id"],
+        "00000000"
+    );
+    let reserved = e.message_ids.reserved_position();
+    assert_eq!(reserved, 1024);
+    let revision = e.save_content().unwrap();
+    wait_content(&e, |status| {
+        !status.save_in_progress && status.saved_revision == revision
+    });
+    drop(e);
+
+    let mut restored = Engine::new(f.cfg, NOW + 1).unwrap();
+    assert_eq!(restored.records.len(), 2);
+    let session = auth(&mut restored, &f.keys[0], NOW + 1);
+    assert_eq!(
+        publish(&mut restored, session, json!("after restore"), NOW + 1)["message_id"],
+        crate::ids::Id::from_index(reserved).to_string()
+    );
+    assert_eq!(
+        get(&mut restored, session, "zzzzzzzz", NOW + 1)["message"]["payload"],
+        "last"
+    );
+    assert_eq!(
+        get(&mut restored, session, "00000000", NOW + 1)["message"]["payload"],
+        "first"
+    );
+}
+
 #[cfg(unix)]
 #[test]
 fn restore_removes_expired_messages_without_reusing_positions() {

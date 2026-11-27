@@ -235,11 +235,11 @@ impl Network {
     fn peer_config(&self, id: &str) -> Result<crate::config::Peer, BoxError> {
         let owner = self.engine.upgrade().ok_or("Owner stopped")?;
         let engine = locked(&owner)?;
-        if engine.config.disabled_peers.iter().any(|peer| peer == id) {
+        if engine.config().disabled_peers.iter().any(|peer| peer == id) {
             return Err("Peer disabled".into());
         }
         engine
-            .config
+            .config()
             .accepted_peers
             .iter()
             .find(|p| p.service_id == id)
@@ -267,7 +267,7 @@ impl Network {
     ) -> Result<Lease, BoxError> {
         let owner = self.engine.upgrade().ok_or("Owner stopped")?;
         let engine = locked(&owner)?;
-        if incoming.is_some_and(|expected| !engine.config.accepted_peers.contains(expected)) {
+        if incoming.is_some_and(|expected| !engine.config().accepted_peers.contains(expected)) {
             return Err("Peer binding changed".into());
         }
         let lease = Lease {
@@ -1094,21 +1094,21 @@ struct Lease {
 impl Lease {
     fn permitted(&self, engine: &Engine) -> bool {
         now_ms() < self.expires_at
-            && !engine.config.disabled_peers.contains(&self.peer)
+            && !engine.config().disabled_peers.contains(&self.peer)
             && !engine
-                .config
+                .config()
                 .revoked_peer_certificates
                 .contains(&self.certificate)
             && engine.peer_revisions.get(&self.peer).copied().unwrap_or(0) == self.revision
             && if self.incoming {
                 engine
-                    .config
+                    .config()
                     .accepted_peers
                     .iter()
                     .any(|p| p.service_id == self.peer)
             } else {
                 engine
-                    .config
+                    .config()
                     .upstream
                     .as_ref()
                     .is_some_and(|u| u.service_id == self.peer)

@@ -1,168 +1,278 @@
-# Produktprüfung: Interaktionen und Ereigniskatalog
+<a id="produktprüfung-interaktionen-und-ereigniskatalog"></a>
 
-Stand: 11. November 2026. Grundlage ist der eingebaute Entwurf `mynofy`, Version 1. Diese Prüfung enthält Produktvorschläge, keine zusätzliche Laufzeitfunktion. Verfügbar sind JSON-Publish/Poll, ACL, Ablauf, technische ACK/NACK, Producer-Abfragen und Katalogabruf. Typisierte Ereignisse, freie Byte-Payloads mit hartem 4096-Byte-Limit, Protobuf und lokal konfigurierte Client-Adapter sind implementiert. Fachliche Ablaufprofile und automatische Protokollaushandlung bleiben Entwurf; Service-Tunnel sind inzwischen implementiert.
+# Product Review: Interactions and Event Catalogue
+
+Status: November 11, 2026. Basis is the built-in draft `mynofy`, version 1. This review includes
+product suggestions, no additional runtime function. Available are JSON-Publish/Poll, ACL,
+expiration, producer queries and catalog retrieval. Typed events, free byte
+payloads with hard 4096 byte limit, prototype and locally configured client adapters are
+implemented. Professional expiration profiles and automatic protocol negotiation remain draft;
+service tunnels are now implemented.
 
 ## Produktperspektive
 
-Ein Producer möchte einen anderen Teilnehmer informieren, um eine Entscheidung bitten, eine Aktion anstoßen oder einen kompakten Zustand mitteilen. Menschen handeln über eine Anwendung, Geräte über einen Client oder Gateway und Agenten über ihr SDK. Jeder kann Producer und Consumer sein. Die fachliche Rolle kommt aus Anwendung und Topic; der Broker authentifiziert den tatsächlichen Client und vergibt keine impliziten Rechte an einen angeblich vertretenen Menschen oder ein Gerät.
+A producer wants to inform another participant, ask for a decision, initiate an action or
+communicate a compact state. People act through an application, devices through a client or
+gateway and agents through their SDK. Anyone can be a producer and a consumer. The professional
+role comes from the application and topic; the broker authenticates the actual client and does
+not grant implicit rights to an allegedly represented person or device.
 
-Die kleine Ereignisvariante soll wiederkehrende, eindeutig definierte Mitteilungen ohne Texte transportieren. Freie Bytes bis 4096 Byte dienen Kurztexten und kleinen anwendungsspezifischen Inhalten. Große Artefakte bleiben außerhalb des Brokers. Ein URL-/Hash-Verweis benötigt eventuell die freie Variante; numerische IDs sind nur dann ausreichend, wenn die Anwendung ihre Bedeutung bereits kennt.
+The small event variant is intended to transport recurring, clearly defined messages without
+texts. Free bytes up to 4096 bytes are used for short texts and small application-specific
+content. Large artifacts remain outside the broker. A URL-/Hash-Verweis may require the free
+variant; numeric IDs are only sufficient if the application already knows its meaning.
 
-In den folgenden Tabellen sind nur Ausdrücke in der Spalte „Vorhandene Werte“ Kombinationen vorhandener Kennungen. Die Tripel folgen der unten beschriebenen einheitlichen Semantik; konkrete Parametertypen und Ereignissignaturen sind noch Entwurf. Fehlende Namen in anderen Spalten sind Vorschläge. Der Katalog macht einen Trigger nicht ausführbar, erzeugt keine Workflows und ist kein Zustandsautomat.
+In the tables below, only expressions in the column “Existing Values” are combinations of
+existing identifiers. The triples follow the uniform semantics described below; concrete
+parameter types and event signatures are still draft. Missing names in other columns are
+suggestions. The catalog does not make a trigger executable, does not create workflows and is
+not a state automaton.
 
-## Einheitliche Semantik statt zusätzlicher Zustandsnamen
+<a id="einheitliche-semantik-statt-zusätzlicher-zustandsnamen"></a>
 
-Die aktuelle Produktentscheidung nutzt vorhandene Tripel `(Kategorie, Aktion, Status)`: `PENDING` bedeutet, dass genau diese Aktion aussteht; `SUCCESS`, dass genau diese Aktion erfolgreich eingetreten oder abgeschlossen ist. Beim Start bedeutet SUCCESS „gestartet“, nicht „Job erledigt“. Für die Übernahme lautet die vorhandene Schreibweise `ACQUIRE`, nicht `AQUIRE`. Kein zusätzliches REQUEST/EVENT-Feld und keine neuen Status ACCEPTED/RUNNING sind für dieses Grundmuster erforderlich.
+## Unified semantics instead of additional state names
 
-Wer handeln darf, hängt zusätzlich vom vereinbarten Ablaufprofil, Topic, Lauf/Versuch, Artefaktstand und der Rolle der veröffentlichenden Anwendung ab. Ein Tripel allein ist keine Ausführungsfreigabe. Derselbe Agent kann einen ausstehenden Start melden und nach erfüllten Voraussetzungen seinen erfolgreichen Start bestätigen. Eine PENDING-Meldung ist keine an jeden Leser gerichtete Aufforderung. Ein Beobachter darf daraus keine eigene Ausführung ableiten.
+The current product decision uses existing triples `(Kategorie, Aktion, Status)`: `PENDING`
+means that this action is pending; `SUCCESS` means that this action has successfully occurred or
+been completed. SUCCESS At start means "started", not "job done". For adoption, the existing
+spelling is `ACQUIRE`, not `AQUIRE`. No additional REQUEST/EVENT-Field and no new statuses
+ACCEPTED/RUNNING are required for this basic pattern.
 
-Die Tabelle ist größer gefasst, damit daraus später ein AI-Skill mit konkreten Reaktionsregeln entstehen kann. Sie ist noch kein installierter Skill. Die [maschinenlesbaren 50 UCs](../protocol/catalogs/use-cases-v1.json) enthalten pro UC Auslösertripel, Meldungen, benötigten Kontext, erlaubte Empfängerreaktion und Fehlerregel. Alle referenzierten Kennungen existieren bereits; die Signaturen/Profiles sind Entwurf. Der Katalogabruf liefert weiterhin den Ereigniskatalog, nicht automatisch diesen UC-Entwurf.
+Who is allowed to act additionally depends on the agreed expiration profile, topic,
+Lauf/Versuch, artifact status and the role of the publishing application. A triple alone is not
+an execution release. The same agent can report a pending start and confirm its successful start
+according to met conditions. A PENDING message is not a request addressed to each reader. An
+observer may not derive its own execution from it.
 
-## 50 Anwendungsfälle
+The table is larger so that it can later form an AI skill with specific response rules. It is
+not yet an installed skill. The [maschinenlesbaren 50
+UCs](../protocol/catalogs/use-cases-v1.json) contain trigger triples, messages, required
+context, allowed receiver response and error rule per UC. All referenced identifiers already
+exist; the Signaturen/Profiles are draft. The catalog retrieval still provides the event
+catalog, not automatically this UC draft.
 
-Die Spalte „Anforderung → Meldungen“ beschreibt Alternativen, keine Anweisung, alle Ergebnisse zu senden. Wenn ein UC nur eine Beobachtung beschreibt, wird keine künstliche PENDING-Phase eingeführt. Die Meldungslisten sind jeweils auf den UC beschränkt; nicht jede Operation kann jeden Fehler oder jeden Erfolg liefern. Insbesondere ist ein bekannt positives Einzelresultat niemals eine Freigabe für eine andere Aktion.
+<a id="50-anwendungsfälle"></a>
 
-### Aufträge
+## 50 Applications
 
-| UC | Ablauf / Beteiligte | Anforderung → Meldungen | Kontext | Empfängerregel / Fehlerfall |
+The “Request → Messages” column describes alternatives, not an instruction to send all results.
+If a UC describes only one observation, no artificial PENDING phase is introduced. The message
+lists are limited to the UC each; not every operation can deliver every error or success. In
+particular, a known positive single result is never a release for another action.
+
+<a id="aufträge"></a>
+
+### Contracts
+
+| UC | Processing/Constituents | request → messages | Kontext | Recipient rule / error case |
 | --- | --- | --- | --- | --- |
-| UC-01: Auftrag starten | Mensch/Anwendung → Worker | `(JOB, START, PENDING)` → `(JOB, START, SUCCESS)`, `(JOB, START, FAILED)` | Lauf, Versuch, Auftragsdefinition | Worker prüft Voraussetzungen, übernimmt nach Vergaberegel und meldet gestarteten Lauf. Start fehlgeschlagen: keine Fertigstellung behaupten. |
-| UC-02: Auftrag übernehmen | Worker ↔ Koordinator | `(JOB, ACQUIRE, PENDING)` → `(JOB, ACQUIRE, SUCCESS)`, `(JOB, ACQUIRE, FAILED)` | Lauf, Versuch, Kandidat, Vergabeinstanz | Nur bestätigter Inhaber beginnt exklusive Arbeit. BUSY/CONFLICT: nicht arbeiten; Meldung allein vergibt keinen Job. |
-| UC-03: Arbeitsschritt ausführen | Worker → Anwendung/Agent | `(JOB, EXECUTE, PENDING)` → `(JOB, EXECUTE, SUCCESS)`, `(JOB, EXECUTE, FAILED)` | Lauf, Versuch, Schrittnummer, bekannte Eingaben | Nachfolger wartet auf SUCCESS dieses Schritts und prüft weitere Voraussetzungen. FAILED/PARTIAL: gesperrte Folgeschritte nicht starten. |
-| UC-04: Auftrag abschließen | Worker → Auftraggeber | `(JOB, COMPLETE, PENDING)` → `(JOB, COMPLETE, SUCCESS)`, `(JOB, COMPLETE, FAILED)` | Lauf, Versuch, Ergebnisstand | Auftraggeber akzeptiert Ergebnis nur für aktuellen Versuch. FAILED: Ergebnis nicht als verwendbar markieren. |
-| UC-05: Auftrag abbrechen | Mensch/Anwendung → Worker | `(JOB, CANCEL, PENDING)` → `(JOB, CANCEL, CANCELLED)`, `(JOB, CANCEL, CONFLICT)` | Lauf, Versuch, Abbruchziel | Worker stoppt soweit möglich und meldet CANCELLED. CONFLICT bei bereits abgeschlossenem Auftrag: Wirkung klären. |
-| UC-06: Start zurückstellen | Worker → Auftraggeber | `(JOB, START, PENDING)` → `(JOB, START, DEFERRED)`, `(JOB, START, FAILED)` | Lauf, Versuch, fehlende Voraussetzung | DEFERRED meldet Aufschub; Coordinator entscheidet über spätere Freigabe. Kein stiller Timer oder automatischer Retry durch Broker. |
-| UC-07: Auftrag einreihen | Anwendung → Scheduler | `(JOB, QUEUE, PENDING)` → `(JOB, QUEUE, SUCCESS)`, `(JOB, QUEUE, FAILED)` | Lauf, Versuch, Zielqueue | Scheduler meldet erst SUCCESS wenn tatsächlich eingereiht. RESOURCE_EXHAUSTED: keine Annahme behaupten. |
-| UC-08: Auftrag aus Queue nehmen | Scheduler → Worker | `(JOB, DEQUEUE, PENDING)` → `(JOB, DEQUEUE, SUCCESS)`, `(JOB, DEQUEUE, FAILED)` | Lauf, Versuch, Queue, Vergaberegel | SUCCESS meldet Entnahme; exklusive Vergabe separat prüfen. NOT_FOUND: nicht aus veraltetem Queue-Ereignis starten. |
-| UC-09: Fortschritt melden | Worker → Mensch/Monitor | Beobachtung ohne Anforderung → `(JOB, UPDATE, PARTIAL)`, `(JOB, UPDATE, SUCCESS)`, `(JOB, UPDATE, FAILED)` | Lauf, Versuch, processed/total mit festen Einheiten | Empfänger aktualisiert Anzeige; startet keinen Folgeschritt. PARTIAL ist kein Abschluss; total=0/ungültige Werte nach Profil behandeln. |
-| UC-10: Auftrag erneut versuchen | Producer → Worker | `(JOB, START, PENDING)` → `(JOB, START, SUCCESS)`, `(JOB, START, FAILED)` | Gleicher fachlicher Lauf, neuer Versuch, neue Message-ID | Neuen Versuch nur nach expliziter Producer-Entscheidung und Duplikatprüfung starten. Unklarer vorheriger Ausgang: keine automatische erneute Nebenwirkung. |
+| UC-01: Starting the order | Human/application → Worker | `(JOB, START, PENDING)` → `(JOB, START, SUCCESS)`, `(JOB, START, FAILED)` | Run, test, job definition | Worker checks prerequisites, takes over according to award rule and reports started run. Start failed: claim no completion. |
+| UC-02: Taking over assignment | Worker ↔ Koordinator | `(JOB, ACQUIRE, PENDING)` → `(JOB, ACQUIRE, SUCCESS)`, `(JOB, ACQUIRE, FAILED)` | Run, trial, candidate, awarding authority | Only confirmed owner starts exclusive work. BUSY/CONFLICT: not working; notification alone does not assign a job. |
+| UC-03: Performing the work step | Worker → application/Agent | `(JOB, EXECUTE, PENDING)` → `(JOB, EXECUTE, SUCCESS)`, `(JOB, EXECUTE, FAILED)` | Run, test, step number, known inputs | Successor waits for SUCCESS of this step and checks further prerequisites. FAILED/PARTIAL: blocked follow-up steps do not start. |
+| UC-04: Complete order | Worker → requester | `(JOB, COMPLETE, PENDING)` → `(JOB, COMPLETE, SUCCESS)`, `(JOB, COMPLETE, FAILED)` | Run, test, results | Client accepts result only for current attempt. FAILED: Mark result not as usable. |
+| UC-05: Order to cancel | Human/application → Worker | `(JOB, CANCEL, PENDING)` → `(JOB, CANCEL, CANCELLED)`, `(JOB, CANCEL, CONFLICT)` | Run, attempt, termination target | Worker stops as far as possible and reports CANCELLED. CONFLICT if the order has already been completed: clarify the effect. |
+| UC-06: Reset start | Worker → requester | `(JOB, START, PENDING)` → `(JOB, START, DEFERRED)`, `(JOB, START, FAILED)` | Run, attempt, lack of prerequisite | DEFERRED reports deferment; coordinator decides later release. no silent timer or automatic retry by broker. |
+| UC-07: Order in a row | application → Scheduler | `(JOB, QUEUE, PENDING)` → `(JOB, QUEUE, SUCCESS)`, `(JOB, QUEUE, FAILED)` | Run, try, target queue | Scheduler only reports SUCCESS when actually enrolled. RESOURCE_EXHAUSTED: claim no assumption. |
+| UC-08: Taking Order from Queue | Scheduler → Worker | `(JOB, DEQUEUE, PENDING)` → `(JOB, DEQUEUE, SUCCESS)`, `(JOB, DEQUEUE, FAILED)` | Run, trial, queue, award rule | SUCCESS reports withdrawal; check exclusive assignment separately. NOT_FOUND: do not start from obsolete queue event. |
+| UC-09: Report progress | Worker → Human/Monitor | Observation without requirement → `(JOB, UPDATE, PARTIAL)`, `(JOB, UPDATE, SUCCESS)`, `(JOB, UPDATE, FAILED)` | Run, attempt, processed/total with fixed units | Recipient updates display; does not start a follow-up step. PARTIAL is not a conclusion; total= 0/invalid Treat values by profile. |
+| UC-10: Order to try again | Producer → Worker | `(JOB, START, PENDING)` → `(JOB, START, SUCCESS)`, `(JOB, START, FAILED)` | Same technical run, new attempt, new message ID | Start a new attempt only after an explicit producer decision and duplicate check. Unclear previous outcome: no automatic side effect. |
 
 ### AI
 
-| UC | Ablauf / Beteiligte | Anforderung → Meldungen | Kontext | Empfängerregel / Fehlerfall |
+| UC | Processing/Constituents | request → messages | Kontext | Recipient rule / error case |
 | --- | --- | --- | --- | --- |
-| UC-11: Code erzeugen | Mensch/Planer → Coding-Agent | `(JOB, CREATE, PENDING)` → `(JOB, CREATE, SUCCESS)`, `(JOB, CREATE, FAILED)` | Lauf, Versuch, Repository- und Eingabestand | Agent erzeugt Artefakt; CREATE/SUCCESS bedeutet erzeugt, nicht geprüft. FAILED/PARTIAL: Review nur mit ausdrücklich verwendbarem Stand. |
-| UC-12: Code prüfen | Coding-Agent → Review-Agent | `(JOB, VALIDATE, PENDING)` → `(JOB, VALIDATE, SUCCESS)`, `(JOB, VALIDATE, FAILED)` | Lauf, Versuch, unveränderlicher Artefaktstand, Reviewprofil | Review-Agent prüft; SUCCESS erfüllt genau dieses Reviewprofil. FAILED erfüllt Freigabebedingung nicht; genaue Ursache separat zuordnen. |
-| UC-13: Änderungen nach Review | Review-Agent → Coding-Agent | `(JOB, UPDATE, PENDING)` → `(JOB, UPDATE, SUCCESS)`, `(JOB, UPDATE, FAILED)` | Lauf, neuer Artefaktstand, bekannte Reviewanforderungen | Coding-Agent überarbeitet und fordert VALIDATE/PENDING für neuen Stand an. Alte erfolgreiche Prüfung gilt nicht für geänderten Stand. |
-| UC-14: Tests ausführen | Coding-Agent → Test-Agent/CI | `(JOB, EXECUTE, PENDING)` → `(JOB, EXECUTE, SUCCESS)`, `(JOB, EXECUTE, FAILED)` | Lauf, Artefaktstand, vereinbarte Testschritt-ID | SUCCESS dieses Testschritts kann definierte Qualitätsbedingung erfüllen. Testfehler und fehlende Testausführung unterscheiden; beides keine Freigabe. |
-| UC-15: Information abrufen | Agent → Such-/Recherche-Agent | `(RESOURCE, QUERY, PENDING)` → `(RESOURCE, QUERY, SUCCESS)`, `(RESOURCE, QUERY, FAILED)` | Lauf, bekannte Frage/Quellenregeln, Ergebnisreferenz | Empfänger stellt Ergebnis extern oder als freie Payload bereit. NOT_FOUND/UNAVAILABLE: keine Antwort erfinden. |
-| UC-16: Ergebnis vergleichen | Zwei Agenten → Vergleichs-Agent | `(RESOURCE, COMPARE, PENDING)` → `(RESOURCE, COMPARE, SUCCESS)`, `(RESOURCE, COMPARE, FAILED)` | Lauf, zwei feste Ergebnisstände, Vergleichskriterium | SUCCESS besagt Vergleich ausgeführt; Gleichheit separat über MATCH/MISMATCH melden. FAILED ist kein Beleg für unterschiedliche Inhalte. |
-| UC-17: Agentenübergabe | Planer-Agent → Fach-Agent | `(JOB, ACQUIRE, PENDING)` → `(JOB, ACQUIRE, SUCCESS)`, `(JOB, ACQUIRE, FAILED)` | Lauf, Versuch, bestätigter Übergabe-/Vergabestand | Neuer Agent arbeitet erst nach passender Vergabe; alter beendet exklusive Arbeit. Verlorene Bestätigung: keine doppelte Übernahme unterstellen. |
-| UC-18: Tool-Zugriff prüfen | Agent → Policy-Anwendung | `(SECURITY, VALIDATE, PENDING)` → `(SECURITY, VALIDATE, SUCCESS)`, `(SECURITY, VALIDATE, FAILED)` | Lauf, konkrete Operation/Ziel, Regelstand | Nur SUCCESS des autorisierten Prüfers und passende Ausführungsregeln erlauben Tool-Aufruf. PERMISSION_DENIED: Operation unterlassen; Meldung ändert keine ACL. |
+| UC-11: Create code | Human/Planer → Coding-Agent | `(JOB, CREATE, PENDING)` → `(JOB, CREATE, SUCCESS)`, `(JOB, CREATE, FAILED)` | Run, test, repository and input | Agent creates artifact; CREATE/SUCCESS means created, not tested. FAILED/PARTIAL: Review only with expressly usable status. |
+| UC-12: Check the code | Coding-Agent → Review-Agent | `(JOB, VALIDATE, PENDING)` → `(JOB, VALIDATE, SUCCESS)`, `(JOB, VALIDATE, FAILED)` | Run, test, unchangeable artifact status, review profile | Review agent checks; SUCCESS meets exactly this review profile. FAILED does not meet release condition; assign exact cause separately. |
+| UC-13: Changes after review | Review-Agent → Coding-Agent | `(JOB, UPDATE, PENDING)` → `(JOB, UPDATE, SUCCESS)`, `(JOB, UPDATE, FAILED)` | Run, new artifact status, known review requirements | Coding agent reworks and requests VALIDATE/PENDING for new status. Old successful test does not apply to changed status. |
+| UC-14: Carrying out tests | Coding-Agent → Test-Agent/CI | `(JOB, EXECUTE, PENDING)` → `(JOB, EXECUTE, SUCCESS)`, `(JOB, EXECUTE, FAILED)` | Run, artifact status, agreed test step ID | SUCCESS of this test step can meet defined quality condition. test error and missing test execution distinguish; neither release. |
+| UC-15: Retrieve information | Agent → Such-/Recherche-Agent | `(RESOURCE, QUERY, PENDING)` → `(RESOURCE, QUERY, SUCCESS)`, `(RESOURCE, QUERY, FAILED)` | Run, known Frage/Quellenregeln, result reference | Recipient provides the result externally or as a free payload. NOT_FOUND/UNAVAILABLE: do not invent an answer. |
+| UC-16: Compare results | Two Agents Comparison Agent | `(RESOURCE, COMPARE, PENDING)` → `(RESOURCE, COMPARE, SUCCESS)`, `(RESOURCE, COMPARE, FAILED)` | Run, two fixed results, comparison criterion | SUCCESS states comparison executed; report equality separately over MATCH/MISMATCH. FAILED is not evidence of different content. |
+| UC-17: Agent handover | Planer-Agent → Fach-Agent | `(JOB, ACQUIRE, PENDING)` → `(JOB, ACQUIRE, SUCCESS)`, `(JOB, ACQUIRE, FAILED)` | Run, test, confirmed transfer/offer status | New agent works only after a suitable assignment; old one finishes exclusive work. Lost confirmation: do not assume a double assumption. |
+| UC-18: Check tool access | Agent → Policy Application | `(SECURITY, VALIDATE, PENDING)` → `(SECURITY, VALIDATE, SUCCESS)`, `(SECURITY, VALIDATE, FAILED)` | Run, concrete Operation/Ziel, standard | Only SUCCESS of the authorized examiner and matching execution rules allow tool call. PERMISSION_DENIED: refrain from operation; message does not change ACL. |
 
 ### Menschen
 
-| UC | Ablauf / Beteiligte | Anforderung → Meldungen | Kontext | Empfängerregel / Fehlerfall |
+| UC | Processing/Constituents | request → messages | Kontext | Recipient rule / error case |
 | --- | --- | --- | --- | --- |
-| UC-19: Veröffentlichung freigeben | Anwendung → Mensch über UI | `(JOB, VALIDATE, PENDING)` → `(JOB, VALIDATE, SUCCESS)`, `(JOB, VALIDATE, FAILED)` | Lauf, Artefaktstand, explizites menschliches Freigabeprofil | UI meldet SUCCESS nur nach ausdrücklicher Freigabe; Anwendung prüft passendes Profil. FAILED bedeutet nicht freigegeben; DEFERRED vertagt Entscheidung. |
-| UC-20: Kurznachricht senden | Mensch ↔ Mensch | `(MESSAGE, SEND, PENDING)` → `(MESSAGE, SEND, SUCCESS)`, `(MESSAGE, SEND, FAILED)` | Exakte Topics, freie Kurztext-Payload, vereinbarte Antwortkonvention | UI zeigt Inhalt; freier Text startet keine Maschinenaktion. Zustellung/ACK belegt weder Lesen noch Zustimmung. |
-| UC-21: Kenntnisnahme melden | Mensch über UI → Anwendung | Beobachtung ohne Anforderung → `(MESSAGE, RECEIVE, SUCCESS)`, `(MESSAGE, RECEIVE, FAILED)` | Lauf/Nachricht, explizites Kenntnisnahmeprofil | SUCCESS darf UI-Kenntnisnahme dokumentieren, keine Freigabe. Ohne explizite Benutzerhandlung nicht aus Poll oder ACK ableiten. |
-| UC-22: Wartung ankündigen | Betreiber → Menschen/Geräte | `(SYSTEM, SCHEDULE, PENDING)` → `(SYSTEM, SCHEDULE, SUCCESS)`, `(SYSTEM, SCHEDULE, FAILED)` | Wartungslauf, Termin/Zeitzone, festgelegte Teilnehmer | Empfänger informiert oder plant lokal; keine sofortige Abschaltung. Ablauf der Nachricht führt keine Wartung aus. |
-| UC-23: Entscheidung zurückstellen | Mensch → wartender Agent | `(JOB, VALIDATE, PENDING)` → `(JOB, VALIDATE, DEFERRED)`, `(JOB, VALIDATE, FAILED)` | Lauf, Artefaktstand, Freigabeprofil | DEFERRED lässt den abhängigen Schritt gesperrt. Ausbleibende Entscheidung ist keine Zustimmung. |
-| UC-24: An Betreiber eskalieren | Monitor/Agent → Mensch | Beobachtung ohne Anforderung → `(EVENT, SEND, SUCCESS)`, `(EVENT, SEND, FAILED)` | Lauf, Anlass, Eskalationsstufe, zuständige Person | UI informiert zuständige Person nach eigener Eskalationsregel. Keine Garantie, dass jemand übernimmt; Antwort separat erforderlich. |
+| UC-19: Release Publication | Application → People about UI | `(JOB, VALIDATE, PENDING)` → `(JOB, VALIDATE, SUCCESS)`, `(JOB, VALIDATE, FAILED)` | Run, artifact status, explicit human release profile | UI reports SUCCESS only after express approval; application checks matching profile. FAILED does not mean released; DEFERRED postpones decision. |
+| UC-20: Send a short message | Human ↔ Human | `(MESSAGE, SEND, PENDING)` → `(MESSAGE, SEND, SUCCESS)`, `(MESSAGE, SEND, FAILED)` | Exact topics, free short text payload, agreed upon response convention | UI shows content; free text does not start a machine action. The UI needs a separate user action to record reading or consent. |
+| UC-21: Report information | People about UI → Application | Observation without requirement → `(MESSAGE, RECEIVE, SUCCESS)`, `(MESSAGE, RECEIVE, FAILED)` | run or message reference, explicit acknowledgment profile | SUCCESS must document UI awareness, not release. Without explicit user action, do not derive from a poll. |
+| UC-22: Announcing maintenance | Operator → Menschen/devices | `(SYSTEM, SCHEDULE, PENDING)` → `(SYSTEM, SCHEDULE, SUCCESS)`, `(SYSTEM, SCHEDULE, FAILED)` | Maintenance run, Termin/Zeitzone, specified participants | Recipient informs or plans locally; no immediate shutdown; expiration of message does not perform maintenance. |
+| UC-23: Deferral | Man is a waiting agent | `(JOB, VALIDATE, PENDING)` → `(JOB, VALIDATE, DEFERRED)`, `(JOB, VALIDATE, FAILED)` | Barrel, artifact status, release profile | DEFERRED leaves the dependent step blocked. Failure to make a decision is not consent. |
+| UC-24: Escalating to Operators | Monitor/Agent → Human | Observation without requirement → `(EVENT, SEND, SUCCESS)`, `(EVENT, SEND, FAILED)` | Run, start, escalation stage, responsible person | UI informs the responsible person according to its own escalation rule. No guarantee that someone will take over; answer required separately. |
 
-### Geräte
+<a id="geräte"></a>
 
-| UC | Ablauf / Beteiligte | Anforderung → Meldungen | Kontext | Empfängerregel / Fehlerfall |
+### Equipment
+
+| UC | Processing/Constituents | request → messages | Kontext | Recipient rule / error case |
 | --- | --- | --- | --- | --- |
-| UC-25: Gerät einschalten | Mensch/Regel → Gerät | `(SYSTEM, START, PENDING)` → `(SYSTEM, START, SUCCESS)`, `(SYSTEM, START, FAILED)` | Gerät im Topic, Lauf, gewünschter Zustand | Gerät meldet SUCCESS nach tatsächlichem Start laut Profil. BUSY/FAILED: Anzeige nicht als eingeschaltet setzen. |
-| UC-26: Gerät ausschalten | Mensch/Regel → Gerät | `(SYSTEM, STOP, PENDING)` → `(SYSTEM, STOP, SUCCESS)`, `(SYSTEM, STOP, FAILED)` | Gerät, Lauf, gewünschter Zustand, Ausführungsregeln | Gerät meldet erfolgreichen Stillstand. TIMEOUT belegt keinen Stillstand; Istzustand abfragen. |
-| UC-27: Sollwert ändern | Regler/Mensch → Gerät | `(RESOURCE, UPDATE, PENDING)` → `(RESOURCE, UPDATE, SUCCESS)`, `(RESOURCE, UPDATE, FAILED)` | Gerät/Eigenschaft im Topic, Lauf, Einheit, Sollwert | SUCCESS erst wenn im Profil definierter Sollwert übernommen ist. INVALID_ARGUMENT: Wert ablehnen, nicht still kürzen. |
-| UC-28: Temperatur beobachten | Sensor → Monitor/Regler | Beobachtung ohne Anforderung → `(TELEMETRY, READ, SUCCESS)`, `(TELEMETRY, READ, FAILED)` | Sensor im Topic, Einheit/Skalierung, Messwert, Messzeit | READ/SUCCESS berichtet Beobachtung; Regel prüft Alter und Grenzwerte. Veraltete Messung nicht zur aktuellen Steuerung verwenden. |
-| UC-29: Zählerstand melden | Zähler → Anwendung | Beobachtung ohne Anforderung → `(METRICS, READ, SUCCESS)`, `(METRICS, READ, FAILED)` | Zähler im Topic, Einheit, absolut/delta, Sequenz/Zeitraum | Anwendung interpretiert nach festem Messprofil. Reset/Umlauf/Duplikate berücksichtigen, Delta nicht doppelt addieren. |
-| UC-30: Grenzwert melden | Sensor/Monitor → Mensch/Agent | Beobachtung ohne Anforderung → `(RESOURCE, VALIDATE, FAILED)` | Überwachtes Objekt, Regel, Messstand, Schwellwertprofil | FAILED meldet verletzte Bedingung; Empfänger folgt vereinbarter Alarmregel. FAILED allein definiert weder Priorität noch automatische Gegenmaßnahme. |
-| UC-31: Wieder normal | Sensor/Monitor → Mensch/Agent | Beobachtung ohne Anforderung → `(RESOURCE, VALIDATE, SUCCESS)` | Dieselbe Regel/Instanz wie Grenzwertmeldung, neuer Messstand | SUCCESS meldet wieder erfüllte Bedingung. Unzugeordnete Normalmeldung darf keinen anderen Alarm schließen. |
-| UC-32: Gerät zurücksetzen | Betreiber/Automatisierung → Gerät | `(SYSTEM, RESET, PENDING)` → `(SYSTEM, RESET, SUCCESS)`, `(SYSTEM, RESET, FAILED)` | Gerät, Lauf, Resetumfang und Berechtigung | SUCCESS meldet den definierten abgeschlossenen Reset. Wiederholte Nachricht darf nicht unkontrolliert mehrfach resetten. |
+| UC-25: Turn on the device | Human or rule → Device | `(SYSTEM, START, PENDING)` → `(SYSTEM, START, SUCCESS)`, `(SYSTEM, START, FAILED)` | Device in the topic, run, desired condition | Device reports SUCCESS after actual start according to profile. BUSY/FAILED: Do not set display as turned on. |
+| UC-26: Turn off the device | Human or rule → Device | `(SYSTEM, STOP, PENDING)` → `(SYSTEM, STOP, SUCCESS)`, `(SYSTEM, STOP, FAILED)` | Device, run, desired condition, execution rules | Device reports successful standstill. TIMEOUT occupies no standstill; query actual state. |
+| UC-27: Changing the nominal value | Regler/Human → Device | `(RESOURCE, UPDATE, PENDING)` → `(RESOURCE, UPDATE, SUCCESS)`, `(RESOURCE, UPDATE, FAILED)` | Device/property in the topic, barrel, unit, target value | SUCCESS only when the defined setpoint value is accepted in the profile. INVALID_ARGUMENT: reject value, do not silently shorten. |
+| UC-28: Observe temperature | Sensor → Monitor/Regler | Observation without requirement → `(TELEMETRY, READ, SUCCESS)`, `(TELEMETRY, READ, FAILED)` | Sensor in the topic, Einheit/scaling, measured value, measuring time | READ/SUCCESS reports observation; rule checks age and limits. outdated measurement does not use for current control. |
+| UC-29: Report meter reading | Counters → Application | Observation without requirement → `(METRICS, READ, SUCCESS)`, `(METRICS, READ, FAILED)` | Counter in the topic, unit, absolut/delta, Sequenz/Zeitraum | Application interpreted according to fixed measurement profile. Reset/Umlauf/Duplikate take into account, do not add delta twice. |
+| UC-30: Report limit value | Sensor/Monitor → Human/Agent | Observation without request → `(RESOURCE, VALIDATE, FAILED)` | Monitored object, rule, measurement stand, threshold profile | FAILED reports injured condition; receiver follows agreed alarm rule. FAILED alone defines neither priority nor automatic countermeasure. |
+| UC-31: Back to normal | Sensor/Monitor → Human/Agent | Observation without request → `(RESOURCE, VALIDATE, SUCCESS)` | Same rule and instance as the alert, updated measurement | SUCCESS reports again fulfilled condition. Unallocated normal message must not close any other alarm. |
+| UC-32: Reset device | Operator/automation → Device | `(SYSTEM, RESET, PENDING)` → `(SYSTEM, RESET, SUCCESS)`, `(SYSTEM, RESET, FAILED)` | Device, run, reset scope and entitlement | SUCCESS reports the defined completed reset. Repeated message must not reset uncontrollably multiple times. |
 
-### Betrieb
+<a id="betrieb"></a>
 
-| UC | Ablauf / Beteiligte | Anforderung → Meldungen | Kontext | Empfängerregel / Fehlerfall |
+### Operation
+
+| UC | Processing/Constituents | request → messages | Kontext | Recipient rule / error case |
 | --- | --- | --- | --- | --- |
-| UC-33: Dienst starten | Supervisor → Dienst | `(SYSTEM, START, PENDING)` → `(SYSTEM, START, SUCCESS)`, `(SYSTEM, START, FAILED)` | Dienst, Lauf, Start-/Bereitschaftsprofil | SUCCESS belegt nur den im Profil genannten Startzustand. Prozessstart ist nicht automatisch Readiness. |
-| UC-34: Dienst anhalten | Supervisor → Dienst | `(SYSTEM, SHUTDOWN, PENDING)` → `(SYSTEM, SHUTDOWN, SUCCESS)`, `(SYSTEM, SHUTDOWN, FAILED)` | Dienst, Lauf, Umfang des geordneten Stopps | SUCCESS erst nach erfüllter Shutdown-Bedingung. TIMEOUT/FAILED: verbleibende Arbeit und Zustand klären. |
-| UC-35: Verbindung aufbauen | Anwendung → Connector | `(NETWORK, CONNECT, PENDING)` → `(NETWORK, CONNECT, SUCCESS)`, `(NETWORK, CONNECT, FAILED)` | Ziel, Verbindungslauf, Authentifizierungsregeln | SUCCESS meldet aufgebaute geprüfte Verbindung. UNAVAILABLE/TIMEOUT: keine sichere Verbindung behaupten. |
-| UC-36: Verbindung verloren | Connector → Monitor | Beobachtung ohne Anforderung → `(NETWORK, DISCONNECT, SUCCESS)`, `(NETWORK, DISCONNECT, FAILED)` | Verbindungsinstanz, Beobachtungszeit | SUCCESS berichtet vollzogene Trennung; Monitor entscheidet über Reconnect. Alte Trennung nicht mit neuer Verbindung verwechseln. |
-| UC-37: Lebenszeichen | Dienst → Monitor | Beobachtung ohne Anforderung → `(SYSTEM, UPDATE, SUCCESS)`, `(SYSTEM, UPDATE, FAILED)` | Festes Heartbeatprofil, Instanz, Beobachtungszeit/Sequenz | UPDATE/SUCCESS ist nur nach vereinbartem Profil ein Lebenszeichen. Monitor erzeugt TIMEOUT selbst; ausbleibende Message tut nichts im Broker. |
-| UC-38: Bereitschaft prüfen | Monitor → Dienst | `(SYSTEM, VALIDATE, PENDING)` → `(SYSTEM, VALIDATE, SUCCESS)`, `(SYSTEM, VALIDATE, FAILED)` | Dienstinstanz, Bereitschaftsprofil, Prüfzeit | SUCCESS erfüllt konkrete Readiness-Bedingung. FAILED/UNAVAILABLE: abhängige Starts gesperrt lassen. |
+| UC-33: Starting the service | Supervisor → Service | `(SYSTEM, START, PENDING)` → `(SYSTEM, START, SUCCESS)`, `(SYSTEM, START, FAILED)` | Service, Lauf, Start-/readiness profile | SUCCESS occupies only the start state mentioned in the profile. process start is not automatically readiness. |
+| UC-34: Stop service | Supervisor → Service | `(SYSTEM, SHUTDOWN, PENDING)` → `(SYSTEM, SHUTDOWN, SUCCESS)`, `(SYSTEM, SHUTDOWN, FAILED)` | Service, barrel, scope of orderly stop | SUCCESS only after the shutdown condition has been met. TIMEOUT/FAILED: clarify remaining work and condition. |
+| UC-35: Building connection | application → Connector | `(NETWORK, CONNECT, PENDING)` → `(NETWORK, CONNECT, SUCCESS)`, `(NETWORK, CONNECT, FAILED)` | Destination, connection run, authentication rules | SUCCESS reports established tested connection. UNAVAILABLE/TIMEOUT: do not claim a secure connection. |
+| UC-36: Connection lost | Connector → Monitor | Observation without requirement → `(NETWORK, DISCONNECT, SUCCESS)`, `(NETWORK, DISCONNECT, FAILED)` | connection instance, observation time | SUCCESS reports complete disconnection; monitor decides on Reconnect. Old disconnection is not confused with new connection. |
+| UC-37: Lebenszeichen | Service → Monitor | Observation without requirement → `(SYSTEM, UPDATE, SUCCESS)`, `(SYSTEM, UPDATE, FAILED)` | Fixed heartbeat profile, instance, observation time/Sequenz | UPDATE/SUCCESS is only a sign of life according to the agreed profile. Monitor generates TIMEOUT itself; missing message does nothing in the broker. |
+| UC-38: Check readiness | Monitor → Service | `(SYSTEM, VALIDATE, PENDING)` → `(SYSTEM, VALIDATE, SUCCESS)`, `(SYSTEM, VALIDATE, FAILED)` | Instance, standby profile, test time | SUCCESS meets specific readiness condition. FAILED/UNAVAILABLE: leave dependent starts blocked. |
 
-### Daten
+### data
 
-| UC | Ablauf / Beteiligte | Anforderung → Meldungen | Kontext | Empfängerregel / Fehlerfall |
+| UC | Processing/Constituents | request → messages | Kontext | Recipient rule / error case |
 | --- | --- | --- | --- | --- |
-| UC-39: Backup speichern | Anwendung → Backup-Worker | `(STORAGE, SAVE, PENDING)` → `(STORAGE, SAVE, SUCCESS)`, `(STORAGE, SAVE, FAILED)` | Lauf, Quellstand, Ziel und Sicherungsprofil | SUCCESS meldet gespeicherten Backupstand. PARTIAL/FAILED: Backup nicht als vollständig verwendbar markieren. |
-| UC-40: Backup wiederherstellen | Betreiber → Restore-Worker | `(STORAGE, LOAD, PENDING)` → `(STORAGE, LOAD, SUCCESS)`, `(STORAGE, LOAD, FAILED)` | Lauf, unveränderliche Backupreferenz, Ziel | SUCCESS meldet nach Profil wiederhergestellten Zustand. Teilergebnis ist kein Gesamterfolg; erneute Ausführung explizit prüfen. |
-| UC-41: Cache invalidieren | Datenquelle → Cache-Anwendung | `(CACHE, DELETE, PENDING)` → `(CACHE, DELETE, SUCCESS)`, `(CACHE, DELETE, FAILED)` | Schlüssel/Objekt im Topic oder freie Payload, Revision | SUCCESS meldet tatsächlich entfernten/invalidierten Eintrag. Verpasste Revision über maßgeblichen Zustand erkennen. |
-| UC-42: Konfiguration ändern | Betreiber → Anwendung | `(RESOURCE, UPDATE, PENDING)` → `(RESOURCE, UPDATE, SUCCESS)`, `(RESOURCE, UPDATE, FAILED)` | Konfigurationsobjekt, Revision, validierter Inhalt | SUCCESS meldet im Profil definierten angewendeten Stand. Mynofy-Startkonfiguration wird dadurch nicht automatisch neu geladen. |
-| UC-43: Artefakt bereit | Builddienst → Mensch/Agent | Beobachtung ohne Anforderung → `(RESOURCE, CREATE, SUCCESS)`, `(RESOURCE, CREATE, FAILED)` | Lauf, Artefaktstand, externe Referenz | CREATE/SUCCESS informiert über verfügbares Artefakt. Geändertes oder fehlendes Artefakt erneut prüfen; kein Dateitransfer. |
-| UC-44: Datensatz geändert | Anwendung → abhängiger Dienst | Beobachtung ohne Anforderung → `(DATABASE, UPDATE, SUCCESS)`, `(DATABASE, UPDATE, FAILED)` | Objekt, Revision, Schema-/Änderungsprofil | UPDATE/SUCCESS löst nur im passenden Profil ein Nachladen aus. Keine atomare DB-Transaktion plus Publish garantiert. |
+| UC-39: Save backup | Application of Backup Worker | `(STORAGE, SAVE, PENDING)` → `(STORAGE, SAVE, SUCCESS)`, `(STORAGE, SAVE, FAILED)` | Run, source level, destination and safety profile | SUCCESS reports saved backup status. PARTIAL/FAILED: Do not mark backup as fully usable. |
+| UC-40: Restore backup | Operator → Restore-Worker | `(STORAGE, LOAD, PENDING)` → `(STORAGE, LOAD, SUCCESS)`, `(STORAGE, LOAD, FAILED)` | Run, unchangeable backup reference, destination | SUCCESS reports restored state by profile. partial result is not an overall success; explicitly check re-execution. |
+| UC-41: Cache disabled | Data source → Cache application | `(CACHE, DELETE, PENDING)` → `(CACHE, DELETE, SUCCESS)`, `(CACHE, DELETE, FAILED)` | Key/object in the topic or free payload, revision | SUCCESS actually reports entfernten/invalidierten entry. detect missed revision about relevant state. |
+| UC-42: Changing configuration | Operator → application | `(RESOURCE, UPDATE, PENDING)` → `(RESOURCE, UPDATE, SUCCESS)`, `(RESOURCE, UPDATE, FAILED)` | Configuration object, revision, validated content | SUCCESS reports applied status defined in the profile. Mynofy start configuration is not automatically reloaded as a result. |
+| UC-43: Artifact ready | Builddienst → Human/Agent | Observation without requirement → `(RESOURCE, CREATE, SUCCESS)`, `(RESOURCE, CREATE, FAILED)` | Run, artifact status, external reference | CREATE/SUCCESS informs about available artifact. re-check altered or missing artifact; no file transfer. |
+| UC-44: Data set modified | Application → Dependent service | Observation without requirement → `(DATABASE, UPDATE, SUCCESS)`, `(DATABASE, UPDATE, FAILED)` | Objekt, Revision, Schema-/change profile | UPDATE/SUCCESS triggers a reload only in the appropriate profile. No atomic DB transaction plus publish guaranteed. |
 
 ### Koordination
 
-| UC | Ablauf / Beteiligte | Anforderung → Meldungen | Kontext | Empfängerregel / Fehlerfall |
+| UC | Processing/Constituents | request → messages | Kontext | Recipient rule / error case |
 | --- | --- | --- | --- | --- |
-| UC-45: Schlüssel prüfen | Betreiber/Agent → Policy-Dienst | `(SECURITY, VALIDATE, PENDING)` → `(SECURITY, VALIDATE, SUCCESS)`, `(SECURITY, VALIDATE, FAILED)` | Schlüsselreferenz ohne Secret, Owner, Prüfzeit | SUCCESS meldet positives Prüfergebnis. Entzug/Ablauf kann danach eintreten; aktuelle Serviceprüfung bleibt maßgeblich. |
-| UC-46: Ressource reservieren | Worker ↔ Koordinator | `(RESOURCE, ACQUIRE, PENDING)` → `(RESOURCE, ACQUIRE, SUCCESS)`, `(RESOURCE, ACQUIRE, FAILED)` | Ressource, Lauf, Inhaber und ggf. externe Leasegeneration | SUCCESS nur aus verlässlicher Vergabeinstanz als Reservation verwenden. Broker bietet keine Lease; abgelaufene Reserve nicht benutzen. |
-| UC-47: Ressource freigeben | Inhaber → Koordinator | `(RESOURCE, RELEASE, PENDING)` → `(RESOURCE, RELEASE, SUCCESS)`, `(RESOURCE, RELEASE, FAILED)` | Ressource, Lauf, gültige Vergabeinstanz/Generation | SUCCESS bestätigt Freigabe im externen Koordinator. Veraltete Freigabe darf keine neue Reservation lösen. |
-| UC-48: Gruppe um Entscheidung bitten | Anwendung → mehrere Menschen/Agenten | `(JOB, VALIDATE, PENDING)` → `(JOB, VALIDATE, SUCCESS)`, `(JOB, VALIDATE, FAILED)` | Lauf, Stand, Teilnehmermenge, Quorumregel | Koordinator sammelt passende Entscheidungen und entscheidet nach Regel. Zustellzähler sind weder Teilnehmermenge noch Quorum. |
-| UC-49: Auf Ergebnis warten | Agent/Anwendung → Agent/Anwendung | `(JOB, COMPLETE, PENDING)` → `(JOB, COMPLETE, SUCCESS)`, `(JOB, COMPLETE, FAILED)` | Lauf, Versuch, erforderliche Arbeitsschritte | Nur passendes COMPLETE/SUCCESS entsperrt den vereinbarten Folgeschritt. Timeout/Ablauf/Verbindungsverlust lässt Ausgang unklar. |
-| UC-50: Umgebungen verbinden | Gerät im LAN → lokaler Agent → zentraler Dienst → Mensch | `(JOB, VALIDATE, PENDING)` → `(JOB, VALIDATE, SUCCESS)`, `(JOB, VALIDATE, FAILED)` | Owner je Topic, Lauf, Stand, Rollen und direkte Verbindungen | Fachliche Semantik bleibt gleich; jeder Schritt prüft seinen Kontext. Service-Tunnel bleiben Entwurf; derzeit direkte Owner-Verbindungen nötig. |
+| UC-45: Checking the key | Operator/Agent → Policy-Service | `(SECURITY, VALIDATE, PENDING)` → `(SECURITY, VALIDATE, SUCCESS)`, `(SECURITY, VALIDATE, FAILED)` | Key reference without secret, owner, test time | SUCCESS reports positive test result. Entzug/workflow can occur afterwards; current service test remains relevant. |
+| UC-46: Reserve resource | Worker ↔ Koordinator | `(RESOURCE, ACQUIRE, PENDING)` → `(RESOURCE, ACQUIRE, SUCCESS)`, `(RESOURCE, ACQUIRE, FAILED)` | Resource, barrel, owner and, if applicable, external lease generation | SUCCESS use only from a reliable allocation authority as a reservation. Broker does not offer a lease; do not use expired reserve. |
+| UC-47: Release resource | Inhaber → Koordinator | `(RESOURCE, RELEASE, PENDING)` → `(RESOURCE, RELEASE, SUCCESS)`, `(RESOURCE, RELEASE, FAILED)` | Resource, run, valid Vergabeinstanz/Generation | SUCCESS confirms release in the external coordinator. Obsolete release must not resolve a new reservation. |
+| UC-48: Asking group for decision | application → mehrere Menschen/Agenten | `(JOB, VALIDATE, PENDING)` → `(JOB, VALIDATE, SUCCESS)`, `(JOB, VALIDATE, FAILED)` | Run, stand, number of participants, quorum rule | Coordinator collects suitable decisions and decides according to the rule, delivery counters are neither the number of participants nor the quorum. |
+| UC-49: Waiting for results | Agent/application → Agent/application | `(JOB, COMPLETE, PENDING)` → `(JOB, COMPLETE, SUCCESS)`, `(JOB, COMPLETE, FAILED)` | Run, test, required work steps | Only matching COMPLETE/SUCCESS unlocks the agreed follow-up step. Timeout/workflow/connection loss leaves output unclear. |
+| UC-50: Connecting Environments | Device in LAN → Local Agent → Central Service → Human | `(JOB, VALIDATE, PENDING)` → `(JOB, VALIDATE, SUCCESS)`, `(JOB, VALIDATE, FAILED)` | Owner per topic, run, stand, roles and direct connections | Professional semantics remains the same; each step checks its context. Service tunnels remain design; currently direct owner connections are needed. |
 
-## Ausformulierter Ablauf: Code und Review
+<a id="ausformulierter-ablauf-code-und-review"></a>
 
-Pro Lauf nutzt die Anwendung drei exakte Topics, beispielsweise `workflow/4711/communication` für Aufgabe, Abstimmung und menschliche Entscheidungen, `workflow/4711/status` für Job-/Schrittmeldungen und `workflow/4711/interpretations` für regelmäßig erneuerte Client-Regeln. Sie provisioniert alle drei samt ACL. Agenten können im Kommunikationstopic ein passendes Anwendungsprotokoll vereinbaren; der Mensch kann daran mitwirken. Details und offene Implementierungsfragen stehen in der [Drei-Topic-Koordination](agent-coordination.md).
+## Formulated process: Code and Review
 
-1. Die Anwendung veröffentlicht den Arbeitsauftrag. Ziel/Commit/Anweisung bei Bedarf als freie Bytes; ein kleiner typisierter Trigger reicht nur bei bereits bekanntem Kontext.
-2. Codex pollt das Kommunikationstopic und bearbeitet den Auftrag. Sein technisches ACK bestätigt einen Zustellversuch, keine Fertigstellung.
-3. Codex veröffentlicht die Fertigmeldung und den konkreten Artefaktstand. Das Ereignis darf nicht als neuer Reviewauftrag interpretiert werden, wenn das Topic diese Bedeutung nicht ausdrücklich trägt.
-4. Claude beobachtet den vereinbarten Reviewauslöser in Kommunikation oder Status und meldet entweder eine fachliche Entscheidung oder einen technischen Prüfungsfehler. Das Prüfprofil muss diese Fälle unterscheiden; eine fehlgeschlagene Prüfung erfüllt die Freigabebedingung nicht. Ein Kommentar kann eine separate freie Nachricht sein; benötigte Inhalte sind nicht atomar mit einer zweiten Message gekoppelt. Wenn sie zusammengehören müssen, eine einzelne freie Payload benutzen.
-5. Codex wartet auf die Entscheidung zum richtigen Lauf und Artefaktstand. Eine alte Freigabe oder verlorene/abgelaufene Entscheidung darf keine neue Ausführung freigeben. Bei Timeout bleibt der Ausgang unklar; ein Producer entscheidet selbst über Abfrage oder neuen Versuch.
+The application uses three exact topics per run, for example `workflow/4711/communication` for
+task, tuning and human decisions, `workflow/4711/status` for Job-/step reports and
+`workflow/4711/interpretations` for regularly renewed client rules. It provides all three
+together with ACL. Agents can agree on a suitable application protocol in the communication
+topic; the human can participate in it. Details and open implementation questions are in the
+[Three-topic coordination](agent-coordination.md).
 
-Es werden keine Reply-Felder, Lesestatus-Garantien, automatische Wiederholung oder atomare Verknüpfung von ACK und Antwort eingeführt. Bei mehreren konkurrierenden Workern gelten UC-02 und UC-46; das [Ablaufmodell](workflow-semantics.md) beschreibt die Grenzen der Vergabe.
+1. The application publishes the work order. Ziel/Commit/instruction as free bytes if necessary; a
+   small typed trigger is only sufficient for already known context.
+2. Codex polls the communication topic and processes the order. Codex reports acceptance with an application event.
+3. Codex publishes the finished message and the actual artifact status. The event may not be
+   interpreted as a new review request if the topic does not expressly carry this meaning.
+4. Claude observes the agreed review trigger in communication or status and reports either a
+   technical decision or technical review error. The review profile must distinguish these
+   cases; a failed review does not meet the release condition. A comment can be a separate free
+   message; required content is not atomically coupled to a second message. If they must belong
+   together, use a single free payload.
+5. Codex awaits the decision on the correct run and artifact status. An old release or
+   verlorene/abgelaufene decision must not release a new execution. Timeout leaves the output
+   unclear; a producer decides himself about query or new attempt.
 
-## Bewertung aller Kategorien
+There are no Reply fields, Read Status Guarantees, Automatic Repeat or atomic linking of processing and
+Response introduced; for multiple competing workers, UC-02 and UC-46 apply; the
+[workflow model](workflow-semantics.md) describes the limits of assignment.
+
+<a id="bewertung-aller-kategorien"></a>
+
+## Assessment of all categories
 
 | Gruppe | Vorhandene Kategorien | Empfehlung |
 | --- | --- | --- |
-| Produktübergreifende Abläufe | `SYSTEM`, `JOB`, `SCHEDULER`, `RESOURCE`, `NETWORK`, `EVENT`, `MESSAGE`, `METRICS`, `TELEMETRY`, `SECURITY` | Behalten. Unterschiede EVENT/MESSAGE sowie METRICS/TELEMETRY noch präzise definieren; nicht dieselbe Meldung mehrfach kategorisieren. |
-| Infrastruktur und Diagnose | `CORE`, `ENGINE`, `MEMORY`, `THREAD`, `FILESYSTEM`, `STORAGE`, `DATABASE`, `CACHE`, `RPC`, `HTTP`, `LOCK`, `MUTEX`, `ATOMIC`, `SERIALIZATION`, `DESERIALIZATION`, `LOG`, `DEBUG` | Nützlich für Maschinen und Betriebsdiagnose. Vor einer Kürzung klären, wie viel Low-Level-Diagnose der Basiskatalog bieten soll. |
-| Spezifische Domänen | `ASSET`, `BUNDLE`, `RENDER`, `SHADER`, `TEXTURE`, `GPU`, `AUDIO`, `INPUT`, `ANIMATION`, `SCENE`, `ADDRESSABLES`, `STREAMING`, `GAMEPLAY`, `PLAYER`, `AI`, `PHYSICS` | Als Kandidaten für spätere optionale Domänenkataloge markieren, vorerst behalten. `GPU`/`STREAMING` sind auch außerhalb von Spielen nützlich. `AI` bezeichnet eine Domäne, nicht die Identität eines Agenten; ein Agentenauftrag kann schlicht JOB sein. |
-| Entfernt | `UNITY` (200), `UNITY_OBJECT` (201), `UNITY_SCENE` (202), `UNITY_ASSET` (203) | Aus dem eingebauten Entwurf entfernt. IDs bleiben reserviert/unbesetzt, keine Neunummerierung anderer Werte. |
+| Cross-product processes | `SYSTEM`, `JOB`, `SCHEDULER`, `RESOURCE`, `NETWORK`, `EVENT`, `MESSAGE`, `METRICS`, `TELEMETRY`, `SECURITY` | Keep. Define differences EVENT/MESSAGE and METRICS/TELEMETRY precisely; do not categorize the same message multiple times. |
+| Infrastructure and diagnosis | `CORE`, `ENGINE`, `MEMORY`, `THREAD`, `FILESYSTEM`, `STORAGE`, `DATABASE`, `CACHE`, `RPC`, `HTTP`, `LOCK`, `MUTEX`, `ATOMIC`, `SERIALIZATION`, `DESERIALIZATION`, `LOG`, `DEBUG` | Useful for machines and operational diagnostics. Before a cut, clarify how much low-level diagnosis the basic catalog should offer. |
+| Specific domains | `ASSET`, `BUNDLE`, `RENDER`, `SHADER`, `TEXTURE`, `GPU`, `AUDIO`, `INPUT`, `ANIMATION`, `SCENE`, `ADDRESSABLES`, `STREAMING`, `GAMEPLAY`, `PLAYER`, `AI`, `PHYSICS` | Mark as candidates for later optional domain catalogs, keep for now. `GPU` / `STREAMING` are also useful outside of games. `AI` denotes a domain, not the identity of an agent; an agent order can simply be JOB. |
+| Entfernt | `UNITY` (200), `UNITY_OBJECT` (201), `UNITY_SCENE` (202), `UNITY_ASSET` (203) | Removed from the built-in design. IDs remain reserviert/unbesetzt, no renumbering of other values. |
 
-Ergebnis: 43 verbleibende Kategorien, 49 unveränderte Aktionen und 21 unveränderte Statuswerte. Die ursprünglichen Importprüfsummen bleiben als Herkunftsnachweis bestehen. Version 1 ist noch ein veränderlicher Entwurf; Clients sollen ihn nach einem Service-Update neu abrufen. Nach Veröffentlichung einer stabilen Version dürfen deren Bedeutungen nicht unter derselben Version geändert werden.
+Result: 43 remaining categories, 49 unchanged actions and 21 unchanged status values. The
+original import checksums remain as proof of origin. Version 1 is still a changeable design;
+clients should retrieve it after a service update. Once a stable version has been released, its
+meanings may not be changed under the same version.
 
-## Aktionen und Status: Wo die Basis reicht
+<a id="aktionen-und-status-wo-die-basis-reicht"></a>
 
-Die CRUD-Aktionen, `START`/`STOP`, `EXECUTE`, `SCHEDULE`, `COMPLETE`, `CANCEL`, `CONNECT`/`DISCONNECT`, `QUEUE`/`DEQUEUE`, `VALIDATE`, `QUERY` und `LOOKUP` decken viele Abläufe ab. Ressourcen- und Synchronisationsaktionen wie `ALLOCATE`, `MAP`, `LOCK`, `ACQUIRE` und ihre Gegenstücke bleiben sinnvoll für Diagnose, bieten aber keine entsprechenden Broker-Funktionen. `SEND`/`RECEIVE` beschreiben Kommunikation; sie ersetzen keine fachliche Benennung des Inhalts.
+## Actions and status: where the base extends
 
-Bei Status sind `SUCCESS`, `FAILED`, `TIMEOUT`, `CANCELLED`, `PARTIAL`, `SKIPPED` und `DEFERRED` brauchbar, sobald eindeutig ist, auf welche Operation sie sich beziehen. `INVALID_ARGUMENT`, `NOT_FOUND`, `ALREADY_EXISTS`, `BUSY`, `LOCKED`, `CONFLICT`, `UNAVAILABLE`, `RESOURCE_EXHAUSTED`, `PERMISSION_DENIED`, `NOT_IMPLEMENTED` und `CORRUPTED` decken technische Gründe gut ab. `UNSPECIFIED` ist gültig, aber keine Lösung für eine unklare Ereignisbedeutung.
+Die CRUD -Aktionen, `START` / `STOP`, `EXECUTE`, `SCHEDULE`, `COMPLETE`, `CANCEL`, `CONNECT` /
+`DISCONNECT`, `QUEUE` / `DEQUEUE`, `VALIDATE`, `QUERY` and `LOOKUP` cover many processes.
+Resource and synchronization actions such as `ALLOCATE`, `MAP`, `LOCK`, `ACQUIRE` and their
+counterparts remain useful for diagnosis, but do not offer appropriate broker functions. `SEND`
+/ `RECEIVE` describe communication; they do not replace a technical description of the content.
 
-`PENDING` bedeutet nun einheitlich „diese Aktion steht aus“. Ob ein Job in einer Queue liegt oder ein Worker ihn übernommen hat, wird durch `QUEUE/SUCCESS` beziehungsweise `ACQUIRE/SUCCESS` gemeldet. `RETRY` startet keine Wiederholung. `SUCCESS` bedeutet Erfolg genau der benannten Aktion im vereinbarten Profil, keine allgemeine Freigabe.
+In the case of status, `SUCCESS`, `FAILED`, `TIMEOUT`, `CANCELLED`, `PARTIAL`, `SKIPPED` and
+`DEFERRED` usable as soon as it is clear to which operation they refer. `INVALID_ARGUMENT`,
+`NOT_FOUND`, `ALREADY_EXISTS`, `BUSY`, `LOCKED`, `CONFLICT`, `UNAVAILABLE`,
+`RESOURCE_EXHAUSTED`, `PERMISSION_DENIED`, `NOT_IMPLEMENTED` and `CORRUPTED` cover technical
+reasons well. `UNSPECIFIED` is valid, but not a solution for an unclear event significance.
 
-## Abgleich nach dem vereinheitlichten Ablaufmodell
+`PENDING` now uniformly means "this action is pending".Whether a job is in a queue or a worker has taken over, is reported by `QUEUE/SUCCESS` or `ACQUIRE/SUCCESS`. `RETRY` does not start a repetition. `SUCCESS` means success of exactly the named action in the agreed profile, no general approval.
 
-Die frühere Empfehlung zusätzlicher generischer Status `ACCEPTED`/`RUNNING` und eines REQUEST/EVENT-Feldes ist durch die Entscheidung für Aktion plus Status überholt. Für Grundabläufe genügen vorhandene Aktionen: Übernahme über ACQUIRE, gestarteter Job über START, ausgeführter Schritt über EXECUTE und Gesamtabschluss über COMPLETE. `PENDING` ist immer auf die benannte Aktion bezogen. Separate Schritttopics und Profile unterscheiden z. B. Tests, Review und menschliche Freigabe, ohne automatisch neue globale Enums einzuführen.
+<a id="abgleich-nach-dem-vereinheitlichten-ablaufmodell"></a>
 
-Die tatsächlichen Lücken liegen vor allem bei festen Ereignissignaturen: Welche Parameter bedeuten was, welche Rollen dürfen welche Meldungen erzeugen und welche konkreten Voraussetzungen entsperren welche Folgeaktion? Prüffehler und fachlich negatives Ergebnis können beide eine Freigabe verhindern; die Diagnose kann über vorhandene technische Fehlerstatus oder eine freie Erläuterung erfolgen. Ein `VALIDATE/FAILED` darf nicht ohne Kontext als „Code falsch“ erklärt werden.
+## Reconciliation under the standardised operational model
 
-Für menschliche Kenntnisnahme, Alarm, Heartbeat und Fortschritt reichen vorhandene Tripel als Basis für ausdrücklich benannte Profile. Ob zusätzliche Aktionen die Verständlichkeit verbessern, wird später aus diesen Profilen abgeleitet; sie werden hier nicht hinzugefügt. Ein universeller ausführbarer Automat oder beliebige sichere Aufgabendelegation lässt sich aus den Enums allein nicht ableiten.
+The earlier recommendation of additional generic statuses `ACCEPTED` / `RUNNING` and a
+REQUEST/EVENT-Fieldes is overtaken by the decision for action plus status. For basic processes,
+existing actions are sufficient: transfer via ACQUIRE, job started via START, step executed via
+EXECUTE and total completion via COMPLETE. `PENDING` is always related to the named action.
+Separate steptopics and profiles distinguish e.g. tests, review and human release without
+automatically introducing new global enums.
 
-## Grenzen des kleinen Parametersatzes
+The actual gaps are especially in the case of fixed event signatures: Which parameters mean
+what, which roles may generate which messages and which specific prerequisites unlock which
+follow-up action? Test errors and technically negative results can both prevent approval; the
+diagnosis can be made via existing technical error status or a free explanation.
+`VALIDATE/FAILED` must not be declared incorrectly as a “code” without context.
 
-Drei primitive Werte mit höchstens 24 reinen Wertebytes sind für Boolzustände, Zähler und lokal bekannte numerische IDs häufig ausreichend. Die Feldbedeutung muss aus einer unveränderlichen Signatur kommen, etwa Fortschritt `(processed: U64, total: U64)`; diese Signatur ist ein Vorschlag und noch nicht installiert.
+For human knowledge, alarm, heartbeat and progress, existing triples are sufficient as a basis
+for explicitly named profiles. Whether additional actions improve comprehensibility is later
+inferred from these profiles; they are not added here. A universal executable automaton or any
+secure task delegation cannot be inferred from the enums alone.
 
-Nicht vollständig abgedeckt sind freie Aufgabenbeschreibungen, Reviewkommentare, variable Referenzen, UUID-/Hashwerte und mehrere zusammengehörige Messwerte mit zusätzlicher Zeit-/Einheiteninformation. Der jetzige Grundtypensatz enthält keinen Byte-/String-/UUID-Typ für kleine Ereignisse. Dafür zunächst die freie Variante verwenden oder den Kontext ins pro Lauf vereinbarte Topic legen. Numerische Kürzel ohne vereinbarte Zuordnung sind keine verlustfreie Lösung. Insbesondere ersetzen Message-ID und Cursor keine langfristig eindeutige Workflow-/Artefaktidentität.
+<a id="grenzen-des-kleinen-parametersatzes"></a>
 
-Ein verbreiteter Fall ist das Versenden eines Triggers samt kleinem Text. Eine typisierte Message plus separate freie Message hätte keine atomare Zusammengehörigkeit. Wenn beides zwingend zusammen benötigt wird, kann zunächst die einzelne freie Payload beides enthalten; eine optionale Kombination beider Varianten wäre eine eigene, noch nicht beschlossene Erweiterung.
+## Limits of the small parameter set
 
-## Was sich durch den Katalog nicht lösen lässt
+Three primitive values with a maximum of 24 pure value bytes are often sufficient for bool
+states, counters and locally known numerical IDs. The field meaning must come from an immutable
+signature, such as progress `(processed: U64, total: U64)`; this signature is a suggestion and
+not yet installed.
 
-- Keine exklusive Jobvergabe oder At-most-once-Wirkung durch einen Enum-Wert.
-- Kein gespeicherter aktueller Gerätezustand und keine Historie allein durch zeitlich befristete Nachrichten.
-- Keine sichere Ausführung beliebiger Aktionen allein durch Publish-Recht. Empfänger prüfen den fachlichen Auftrag und ihre Ausführungsregeln selbst.
-- Kein gesicherter Lesestatus eines Menschen durch ACK; keine Liste aller erwarteten Empfänger allein aus Zustellzählern.
-- Keine Authentizität eines behaupteten Ursprungs hinter einem Gateway allein durch dessen Katalogwerte.
-- Keine automatische Timeraktion, Offline-Meldung, Eskalation oder verteilte Transaktion.
+Not completely covered are free task descriptions, review comments, variable references,
+UUID-/Hashwerte and several associated measured values with an additional
+Zeit-/Einheiteninformation. The current basic type set does not contain Byte-/String-/UUID-Type
+for small events. For this purpose, first use the free variant or put the context into the topic
+agreed per run. Numerical abbreviations without agreed assignment are not a loss-free solution.
+In particular, message ID and cursor do not replace a long-term unique
+workflow and artifact identity.
 
-Diese Grenzen gehören zur Anwendung oder erfordern eine spätere ausdrücklich modellierte Funktion. Der Kern bleibt eine schlanke, begrenzte Kommunikationsschicht.
+A common case is the sending of a trigger together with small text. A typed message plus
+separate free message would have no atomic togetherness. If both are required together, the
+single free payload can contain both; an optional combination of both variants would be a
+separate, not yet decided extension.
 
-Die ausführbaren Rollenregeln stehen im [Worker-Skill](../skills/mynofy/SKILL.md) und [Operator-Skill](../skills/mynofy-operator/SKILL.md).
+<a id="was-sich-durch-den-katalog-nicht-lösen-lässt"></a>
+
+## What cannot be solved by the catalog
+
+- No exclusive job assignment or at-most-once effect through an enum value.
+- No stored current device status and no history solely by temporary messages.
+- No safe execution of any actions by Publish right alone. recipients check the professional
+  assignment and its execution rules themselves.
+- No broker proof that a human read a message and no inferred recipient membership from polling
+  counters alone.
+- No authenticity of an alleged origin behind a gateway solely by its catalog values.
+- No automatic timer action, offline message, escalation or distributed transaction.
+
+These limits are part of the application or require a later explicitly modelled function, and
+the core remains a slim, limited communication layer.
+
+The executable role rules are in the [Worker-Skill](../skills/mynofy/SKILL.md) and
+[Operator-Skill](../skills/mynofy-operator/SKILL.md).

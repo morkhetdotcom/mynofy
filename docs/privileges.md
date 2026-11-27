@@ -1,37 +1,92 @@
-# Betriebssystemrechte beim Start
+# Operating system privileges at startup
 
-Das Binary legt unter Linux erhöhte Unix-Rechte vor dem Erzeugen der Tokio-Runtime ab. Auf macOS verweigert es privilegierte Starts und verlangt einen bereits unprivilegierten Launcher. Vorher werden nur die globalen UID/GID-Argumente gelesen und validiert. Konfiguration, TLS- und Client-Schlüssel, Adapterregeln sowie Daten- und Admin-Sockets werden erst mit der endgültigen Identität geöffnet. Das gilt für alle CLI-Kommandos, einschließlich `admin`, `keygen` und `check-config`.
+On Linux, the CLI drops elevated Unix privileges before creating its
+Tokio runtime. On macOS, the launcher must start it under an unprivileged
+identity. Before establishing that identity, the CLI reads and validates
+only the global UID and GID arguments. It opens configuration files, TLS
+and client keys, adapter rules, and data and Admin sockets afterward.
+This applies to every CLI command, including `admin`, `keygen`, and
+`check-config`.
 
-Normalerweise startet mynofy direkt unter einem gewöhnlichen Benutzer beziehungsweise einem dedizierten Dienstkonto:
+Run mynofy as a regular user or a dedicated service account.
 
 ```sh
 mynofy serve --config /etc/mynofy/config.json
 ```
 
-Wenn der Launcher unter Linux Root-Rechte mitgibt, sind beide numerischen Zielwerte zwingend:
+A Linux root launcher must supply both numeric target IDs.
 
 ```sh
 mynofy --run-as-uid 1001 --run-as-gid 1001 serve --config /etc/mynofy/config.json
 ```
 
-1001 ist hier nur ein Beispiel für das vom Betreiber eingerichtete Dienstkonto. UID/GID 0, der reservierte Wert 4294967295, unvollständige und doppelte Angaben werden abgewiesen. Es gibt weder eine automatische Auswahl von `nobody` noch eine Ableitung aus `SUDO_UID` oder eine Option zum Weiterlaufen als Root. Die Optionen können auch nach dem Kommando stehen. Ein Abbruch der Rechteumstellung beendet das Programm vor seinem normalen Start; kein stiller Fallback.
+Replace the example IDs with those of the service account. The CLI rejects
+UID or GID 0, the reserved value 4294967295, incomplete pairs and duplicate
+arguments. It requires an explicit target for a root start. The options
+can also follow the command name. A failed privilege drop terminates
+startup.
 
-## Reihenfolge und Wirkung
+## Startup sequence
 
-Bei einem Root-Start werden zusätzliche Gruppen entfernt und anschließend primäre GID und UID dauerhaft umgestellt. Unter Linux werden jeweils reale, effektive und gespeicherte IDs auf das Ziel gesetzt, auch beim bereits unprivilegierten Start. Die Umstellung erfolgt im einzigen Anwendungsthread; erst danach entstehen Worker und Hintergrundaufgaben. Auf macOS wird ein privilegierter Start auch mit Zielangaben abgewiesen. Der aktuelle sichere OS-Wrapper `nix` schließt Apples Gruppen-APIs aus; ein unvollständiger Wechsel mit geerbten Root-Gruppen ist keine Alternative. Bereits unprivilegierte Starts und Zielangaben für dieselbe UID/GID bleiben möglich; gemischte reale/effektive Identitäten werden abgewiesen. Ein vorgeschalteter Launcher muss eine reguläre Benutzeridentität oder Root übergeben; eigene Setuid-/Setgid-Wrapper sind kein unterstütztes Betriebsmodell.
+For a Linux root start, the CLI clears supplementary groups and switches
+the primary GID and UID permanently. On Linux it sets the real, effective
+and saved IDs to the target, including when already unprivileged. This
+happens in the application thread before workers and background tasks
+start.
 
-Linux entfernt zusätzlich effektive, erlaubte, vererbbare und Ambient-Capabilities, deaktiviert `keep capabilities` und setzt unwiderruflich `no_new_privs`. Mit vorhandener `CAP_SETPCAP` wird auch das Capability-Bounding-Set geleert. Ein gewöhnlicher Benutzer kann sein geerbtes Bounding-Set üblicherweise nicht verändern; leere aktive Capability-Sets und `no_new_privs` verhindern trotzdem zusätzliche Rechte durch Setuid-/Setgid-Programme oder File-Capabilities bei `exec`. Vom CLI-Adapter gestartete Programme erben diese Einschränkung.
+macOS rejects privileged starts even when target IDs are supplied. The
+current `nix` wrapper does not expose the required Apple group APIs.
+An unprivileged launcher can omit target IDs or pass its current UID and
+GID. The CLI rejects mixed real and effective identities. Launch it from
+a regular user account. Linux also supports the explicit root startup
+path described above.
 
-Ein bereits gewöhnlicher Benutzer behält seine normalen zusätzlichen Gruppen, falls er sie nicht entfernen darf. Unter Linux wird Gruppe 0 dabei nicht akzeptiert. Auf macOS verwaltet der Launcher die zusätzlichen Gruppen. Ein Identitätswechsel, dessen zusätzliche Gruppen sich nicht sicher entfernen lassen, wird abgewiesen. Für einen Server empfiehlt sich ein eigenes Dienstkonto mit gezielt gesetzten Gruppen. Linux-spezifische Capability-/`no_new_privs`-Garantien gelten nicht auf macOS. Unter anderen Nicht-Unix-Plattformen sind UID/GID-Optionen nicht verfügbar; dort ist kein OS-Rechteabbau implementiert.
+Linux clears effective, permitted, inheritable and ambient capabilities,
+disables capability retention and sets `no_new_privs` permanently. With
+`CAP_SETPCAP`, it also clears the capability bounding set. A regular
+unprivileged user ordinarily cannot change its inherited bounding set.
+The empty active capability sets and `no_new_privs` prevent an `exec`
+of a setuid or setgid program or a program with file capabilities from
+adding privilege. Programs started by the CLI adapter inherit these
+restrictions.
 
-## Dateien, Netzwerk und Admin
+An existing unprivileged identity may keep normal supplementary groups
+if it cannot remove them. Linux rejects supplementary group 0 in that
+case. On macOS the launcher manages those groups. An identity change
+fails if inherited groups cannot be cleared safely. A dedicated service
+account gives operators control over group membership. Capability and
+`no_new_privs` behavior is Linux-specific. Non-Unix platforms have no
+UID and GID options or operating system privilege drop.
 
-Der Zielbenutzer muss die Konfiguration und Schlüssel lesen, den Socket-Elternpfad verwenden und den gewünschten Netzwerkport binden dürfen. mynofy liest keine Dateien als Root vor, behält keine Capability für niedrige Ports und ändert keine Dateibesitzer automatisch. Bestehende Socket-Dateien werden weiterhin nicht überschrieben. Neue Unix-Sockets gehören unmittelbar der Ziel-UID/GID; der getrennte Admin-Socket prüft diese UID als Peer. Ein Admin-CLI aus einer Root-Shell braucht deshalb ebenfalls die Zielangaben.
+## Files, networking and administration
 
-Bei systemd beziehungsweise Containern ist bereits der Start mit `User=`/`Group=` beziehungsweise einer passenden Container-UID/GID vorzuziehen. Das In-Process-Bootstrap schützt zusätzlich den versehentlichen privilegierten Aufruf. Die einbindbaren Server-/Client-Bibliotheken ändern keine Prozessidentität ihres Hosts; deren Launcher trägt diese Verantwortung.
+The target user must have access to the configuration and keys, the
+socket parent directory and the requested network port. The service
+opens files and binds ports as that identity. It retains no capability
+for privileged ports and never changes file owners automatically.
+An existing socket path causes startup to fail. New Unix sockets belong
+to the target UID and GID. The separate Admin socket checks the peer UID.
+An Admin CLI launched from a Linux root shell needs the same explicit
+target arguments.
 
-## Prüfung
+With systemd, set `User=` and `Group=`. In a container, configure the
+container UID and GID. The startup check also handles accidental
+privileged invocations. Embedded server and client libraries leave the
+host process identity to its launcher.
 
-`cargo test --locked --workspace` umfasst Argument-Unit-Tests und Linux-Prozesstests. Die Linux-Tests kontrollieren alle Runtime-Threads über `/proc`: reale/effektive/gespeicherte/Dateisystem-IDs, Capability-Sets und `no_new_privs`; außerdem Socket-Eigentum und Admin-Zugriff. Linux-Root-Tests prüfen den Abbruch vor Datei-I/O und den tatsächlichen Wechsel auf eine andere UID/GID. Der Adaptertest kontrolliert die Vererbung und abgewiesene Rückkehr zu UID/GID 0 im gestarteten Programm.
+## Verification
 
-Vorhandene CLI-Integrationsszenarien werden bei einem Root-Testlauf mit Python unter UID/GID 65534 erneut ausgeführt, statt die produktive Startprüfung zu umgehen. Der Test-Runner selbst wechselt keine Identität. Ein Root-Testlauf braucht die dafür erforderlichen `setuid`/`setgid`-Rechte und für diese Testprozesse lesbare/ausführbare Build-Pfade. Native macOS-Laufzeitprüfungen müssen auf macOS erfolgen.
+`cargo test --locked --workspace` runs argument and Linux process tests.
+On Linux the tests inspect every runtime thread through `/proc` for
+real, effective, saved and filesystem IDs, capability sets and
+`no_new_privs`. They also verify socket ownership and Admin access.
+Root tests check that an invalid root invocation exits before file I/O
+and that a valid invocation drops to a different UID and GID. The
+adapter test checks that the child inherits the restrictions and cannot
+return to UID or GID 0.
+
+When tests run as root, CLI integration scenarios re-execute under
+UID and GID 65534 using Python. The test runner keeps its identity.
+This requires permission to set the child UID and GID and make the
+build paths readable and executable by the child. Native macOS runtime
+behavior is verified on macOS.

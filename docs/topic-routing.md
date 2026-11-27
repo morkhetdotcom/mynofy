@@ -1,77 +1,66 @@
-# Topic-Owner, Berechtigungsabfrage und Routingtabelle
+# Topic owners, permissions and routing
 
-Projektentscheidung: **Der Topic-Owner ist der ACL-Holder und entscheidet über jede Topic-Operation.** Zwischeninstanzen übernehmen nicht die ACL eines Remote-Topics. Der Entwurf ergänzt den [Service-Handshake](service-links.md); CA/mTLS-Verbindungen und beim Owner terminierende Datentunnel sind [implementiert](service-network.md).
+**The topic owner holds the ACL and authorizes each topic operation.** Intermediate services route the channel to the configured owner. See the [peer handshake](service-links.md) and [service networking guide](service-network.md).
 
-## Eigene Berechtigungen abfragen
+## Inspecting your permissions
 
-Ein angemeldeter Client kann `get_permissions` mit `id` und einem exakten `topic` senden. Die Antwort `permissions` enthält `request_id`, `topic`, `owner_id`, `acl_revision` und `actions` aus `publish`, `subscribe`, `inspect_own`. Die Client-Identität stammt aus der authentifizierten Sitzung; es gibt kein vom Client frei setzbares Feld zur Abfrage fremder Identitäten.
+An authenticated client can send `get_permissions` with `id` and an exact `topic`. The `permissions` response includes `request_id`, `topic`, `owner_id`, `acl_revision`, and an `actions` list drawn from `publish`, `subscribe`, and `inspect_own`. The request uses the client identity established by authentication.
 
-Ein Owner kann eine leere Aktionsliste zurückgeben. Das fortbestehende Eigentumsrecht zum Lesen ursprünglicher eigener Inhalte ist davon getrennt und wird nicht durch eine fehlende Topic-Aktion aufgehoben. Eine Berechtigungsauskunft ist eine Momentaufnahme, kein übertragbares Capability-Token. Tatsächliches Publish, Poll und Statuszugriff werden erneut gegen die aktuelle Owner-ACL geprüft. Die Auskunft gewährt keine Topic-Verwaltung.
+The actions list may be empty. Producers retain access to their own original active content under the producer-inspection rules. The response describes current permissions at the owner. The owner checks each publish, poll or inspection request under its current ACL and ownership rules. The ACL revision helps clients detect stale information. A failed route or an unreachable owner leaves the request unauthorized by the proxy.
 
-Ist der Owner nicht erreichbar, ist `owner_unavailable` vorgesehen. Die Zwischeninstanz darf in dieser Situation keine Freigabe erfinden oder anhand einer alten Auskunft neue Operationen autorisieren. Eine ACL-Revision dient zum Erkennen veralteter Auskünfte; sie ersetzt nicht die Prüfung durch den Owner.
+## Service-to-service route discovery
 
-## Service-to-Service-Abfrage
+Mutually authenticated services exchange these routing frames.
 
-Nach gegenseitiger Authentifizierung können Dienste eine Route zum Topic abfragen und daraus eine Tabelle aufbauen. Vorgesehene Frames:
-
-| Typ | Richtung | Felder zusätzlich zu `version`, `type` |
+| Frame | Direction | Fields in addition to `version` and `type` |
 | --- | --- | --- |
-| `route_query` | Dienst → Peer | `id`, `topic`, `visited`, `hop_limit` |
-| `route_info` | Peer → Dienst | `request_id`, `topic`, `owner_id`, `path`, `expires_at` |
+| `route_query` | Service → peer | `id`, `topic`, `visited`, `hop_limit` |
+| `route_info` | Peer → service | `request_id`, `topic`, `owner_id`, `path`, `expires_at` |
 
-`visited` nennt bereits besuchte Dienste. Ein Dienst verwirft einen zyklischen Pfad; jede Weiterleitung reduziert das positive `hop_limit`. Der letzte `visited`-Eintrag muss dem unmittelbar anfragenden, authentifizierten Peer entsprechen. Es gibt zunächst höchstens einen konfigurierten Upstream und keinen Broadcast an beliebige Dienste. Bei `hop_limit: 1` darf nur lokal geantwortet, nicht weitergeleitet werden; ohne lokale Zuständigkeit scheitert die Auflösung. Ist der angefragte Dienst selbst Owner, antwortet er mit einem Pfad, der nur ihn enthält. Andernfalls kann er die Abfrage über den konfigurierten nächsten Hop weiterreichen und seinen Dienstnamen dem zurückgegebenen Pfad voranstellen. Eine Zwischenspeicherung verlängert die erhaltene Ablaufzeit nicht.
+The last entry in `visited` must match the authenticated neighbor that sent the request. A forwarding hop decrements `hop_limit`. A limit of 1 allows a local owner to answer and disallows forwarding. A local owner returns a path containing only itself. Other services use their one configured upstream and prepend their own service ID to its reply. A cache entry uses an expiration no later than the one received.
 
-Beispiel: Arbeitsplatz → Firmendienst → Zentrale. Der Arbeitsplatz lernt für `team/events`: Owner `central`, nächster Hop `office`, Pfad `[office, central]`. Er schickt seine Topic-Operation später an `office`; die ACL-Entscheidung gehört weiterhin zu `central`.
+For example, a workstation can reach `team/events` through an office service. It learns owner `central`, next hop `office`, and path `[office, central]`. It sends traffic through `office` and authenticates with `central`.
 
-Der erste Pfadknoten muss der antwortende, authentifizierte Peer sein, der letzte der angegebene Owner. Wiederholte Knoten oder ein Pfad zurück zum anfragenden Dienst sind unzulässig. Eine Route wird nur über konfigurierte vertrauenswürdige Peers und innerhalb freigegebener Topic-Zuständigkeiten gelernt. Ein Peer kann sich durch die Antwort nicht eigenmächtig zum Owner beliebiger Topics erklären. Statisch konfigurierte Zuständigkeiten sind maßgeblich; widersprüchliche Owner-Angaben ergeben `route_conflict`, keinen automatischen Wechsel.
+The first path entry must be the authenticated peer that replied, and the last entry must match the configured owner. The service rejects repeated nodes and paths back to itself. Every hop must permit that exact topic. A conflicting owner is a route error. The configured owner remains authoritative.
 
-## Tabelle im RAM
+## In-memory route table
 
-| Feld | Zweck |
+| Field | Purpose |
 | --- | --- |
-| `topic` | Exakter Routing-Schlüssel. |
-| `owner_id` | Verantwortlicher Dienst und ACL-Holder. |
-| `next_hop` | Unmittelbar erreichbarer, authentifizierter Peer. |
-| `path` | Gelernter Pfad für Konsistenz- und Schleifenprüfung. |
-| `learned_from` | Peer, aus dessen Antwort die Route stammt. |
-| `expires_at` | Ende der Gültigkeit des gelernten Eintrags. |
+| `topic` | Exact routing key. |
+| `owner_id` | Service responsible for the topic and its ACL. |
+| `next_hop` | Directly reachable authenticated neighbor. |
+| `path` | Learned path used for consistency and loop checks. |
+| `learned_from` | Peer that supplied the route. |
+| `expires_at` | End of the learned route's validity. |
 
-Eigene Topics werden direkt lokal aufgelöst. Remote-Tabellen sind befristete Wegweiser, keine Kopie der wirksamen Autorisierung. Bei Ablauf oder Peer-Abbruch werden betroffene Routen verworfen beziehungsweise vor neuer Nutzung erneut aufgelöst. Ein Neustart lädt nur statische Ausgangsrouten aus der [Konfiguration](configuration.md). Keine lokale Übernahme bei Owner-Ausfall.
+A service resolves its own topics locally. A cached route can help open a new channel for the same topic. Each hop checks its current policy at channel setup. Expired routes and routes learned through a disconnected peer are discarded. Restart begins with the static configuration. Local ownership stays fixed if a remote owner becomes unreachable. [Configuration](configuration.md)
 
-Eigene Berechtigungsauskünfte können getrennt als Hinweis mit Topic, Client-ID, Owner und ACL-Revision im RAM gehalten werden. Sie gehören nicht in eine Routingzeile für alle Clients: Verschiedene Clients haben auf demselben Weg unterschiedliche Rechte.
+A client can cache a permission response with the topic, client ID, owner and ACL revision. Different clients using the same route can have different rights.
 
-## Client authentifiziert sich beim Topic-Owner
-
-Projektentscheidung: Der Topic-Owner prüft den Client selbst. Es gibt keine delegierte Client-Authentifizierung durch Zwischeninstanzen. Eine vom Peer behauptete `client_id` oder dessen Service-Zertifikat genügt nicht.
+## Client authentication at the topic owner
 
 ```text
-Client ── vermittelter Kanal über A, B, … ── Topic-Owner
-       Auth-Challenge und Proof enden beim Owner
+Client ── tunneled channel via A, B, … ── Topic owner
+          authentication challenge and proof end here
 ```
 
-1. Die Routentabelle bestimmt den Weg zum konfigurierten Owner. Zwischenstationen öffnen beziehungsweise vermitteln den Kanal dorthin.
-2. Der Client prüft die erwartete Owner-Identität. Der Client verwendet eine beim Owner terminierende TLS-Verbindung innerhalb des vermittelten Kanals; die TLS-Verbindungen zwischen benachbarten Diensten bleiben davon getrennt. Die konkrete [Kanal-Rahmung](service-network.md#drahtformat-und-grenzen) ist implementiert.
-3. Der Owner führt den bestehenden [Client-Keypair-Handshake](client-auth.md) aus: Er erzeugt die Challenge und prüft den Proof gegen seinen registrierten Client-Public-Key. Zwischenstationen leiten den Austausch weiter, erzeugen aber weder Proof noch Client-ID-Zuordnung im Namen des Clients.
-4. Erst nach Erfolg bindet der Owner diese logische Client-Sitzung an die stabile Client-ID. Topic-Commands, Producer-Abfragen und Schlüsselwechsel laufen auf dieser authentifizierten Sitzung. Eine Sitzung gehört genau zu einem Client und einem Owner; eine gemeinsam genutzte Peer-Verbindung darf diese Zuordnung nicht vermischen.
-5. Der Owner bindet den Tunnel an genau ein Topic. Publish, Poll und `get_permissions` gelten für dieses Topic. Producer-Listen gelten ebenfalls dafür, auch wenn der Client kein Topic angibt. Einzelabfragen außerhalb des Topics melden die Nachricht als nicht gefunden. Der Owner prüft zusätzlich seine aktuelle Client-ACL und bei Producer-Abfragen das Eigentum. Betriebssystem-Zugriff, Peer-Freigaben und zwischengespeicherte Berechtigungsauskünfte erteilen keine Datenrechte beim Owner.
+1. The routing table identifies the path to the configured owner. Each intermediary opens or forwards its part of the channel.
+2. The client verifies the expected owner identity over TLS within the tunnel. This TLS session is separate from TLS between service peers. [Channel framing](service-network.md#drahtformat-und-grenzen)
+3. The owner issues a challenge and verifies the proof with the client's registered public key. Intermediaries relay the exchange. [Client keypair handshake](client-auth.md)
+4. After successful authentication, the owner binds the session to the stable client ID. Topic operations, producer inspection and key rotation use that session. The shared peer link can carry several independent sessions.
+5. The owner binds each tunnel to one topic. Publish, poll and `get_permissions` are scoped to it. Producer lists use the same scope even without an explicit topic filter. Single-message lookups outside the topic return `not_found`. The owner's current client ACL and producer ownership rules apply within the tunnel.
 
-Der Owner braucht den erlaubten Client-Public-Key und dessen stabile Identitätszuordnung in seiner eigenen Registrierung. Ein unbekannter Schlüssel wird nicht automatisch durch eine Registrierung auf einer Zwischeninstanz zugelassen. Bei mehreren Ownern authentifiziert sich der Client bei jedem angesprochenen Owner; deren ACLs sind unabhängig.
+Register each client public key and its stable identity with every owner it needs to reach. OS access, peer grants and credentials registered at an intermediate service do not grant data access at the owner. Inner TLS protects client commands and replies. Owner rate limits use the authenticated client ID. Intermediaries apply their own channel and peer resource limits. Poll cursors, expiration and producer attribution keep their owner-defined meanings along the route.
 
-Der vermittelte Kanal muss Commands und Antworten nach der Authentifizierung gegen Austausch schützen. Nur eine gültige Signatur während der Anmeldung und anschließend frei vom Zwischenknoten zusammengesetzte Commands wären nicht ausreichend. Die innere TLS-Sitzung schützt die Kommunikation zwischen Client und Owner.
+Configure remote routes at startup. Admin can manage local peer admission, topic grants and individual certificate revocations at runtime. Provision topic names explicitly on the services that need them. [Runtime peer management](runtime-peers.md)
 
-Owner-Rate-Limits sind an dessen authentifizierte Client-ID gebunden. Zwischenstationen begrenzen zusätzlich Tunnel-/Peer-Ressourcen, ohne fremde Topic-Rechte zu entscheiden. Nach Abbruch der Owner-Sitzung wird beim Owner neu authentifiziert. Ein bloßer Routenwechsel überträgt keine authentifizierte Sitzung oder Peer-Identität auf einen anderen Owner. Topic-Poll-Cursor bleiben Owner-gebunden; Zwischenstationen schreiben Positionen, Ablauf und Producer-Eigentum nicht um.
+## Proxy behavior and per-owner credentials
 
-Remote-Routen werden beim Start konfiguriert. Die lokale Peer-Zulassung, ihre Topic-Freigaben und der Widerruf einzelner Peer-Zertifikate sind zur Laufzeit administrierbar. Neue lokale Topics werden nicht automatisch angekündigt. [Laufzeit-Peer-Verwaltung](runtime-peers.md)
+A connection timeout ends its channel and owner session. Commands and responses in flight may have an unknown outcome. For example, a publish may have been accepted before its response was lost. The proxy never automatically retries a command, resumes a disconnected session or retrieves a lost response.
 
-## Proxy-Verhalten und Owner-spezifische Registrierung
+A client can explicitly open a new connection and authenticate again. It may then poll with a still-valid owner cursor or intentionally submit a new publish. The application decides how to handle duplicate outcomes.
 
-Weitere Projektentscheidung: Zwischeninstanzen arbeiten als Proxy. Ein Verbindungs-Timeout beendet den betroffenen Kanal und dessen Owner-Sitzung. Es gibt durch den Proxy weder automatische Wiederholung von Commands noch Wiederaufnahme einer abgebrochenen Sitzung oder nachträgliches Abrufen verlorener Antworten. Ausstehende Client-Aufrufe haben gegebenenfalls einen unklaren Ausgang; ein Timeout beweist nicht, dass der Owner einen Publish nicht angenommen hat.
+Client registration, key expiry, revocation, rotation and ACLs are scoped to each owner. Store credentials by owner so rotating a key for one owner preserves the key still used by another.
 
-Der Client kann eine neue Verbindung aufbauen und sich erneut beim Owner authentifizieren. Das ist eine neue Sitzung, keine Proxy-Wiederaufnahme. Der normale Client-Poll mit einem noch gültigen Owner-Cursor und ein bewusstes erneutes Publish bleiben die bereits definierten Client-Operationen. Der Proxy erzeugt sie nicht selbst.
-
-Client-Registrierung, Schlüsselgültigkeit, Widerruf und Schlüsselwechsel gelten jeweils pro Owner. Ein Wechsel bei A verändert weder Registrierung noch ACL bei B. Ein Client verwaltet seine aktuell gültigen Schlüssel deshalb nach Owner getrennt; ein Wechsel bei A darf nicht versehentlich den bei B noch benötigten privaten Schlüssel überschreiben. Eine globale Schlüsselsynchronisierung gehört nicht zum Prototyp.
-
-Diese Regeln sind konzeptionell entschieden. Proxy-Frames, Deadlines und begrenzte Kanalverwaltung sind implementiert; Einzelheiten stehen im [Betriebsleitfaden](service-network.md).
-
-
-Die gelernte Tabelle ist aktuell eine befristete Diagnose; jeder neue Client-Kanal prüft den Weg erneut per `route_query`. `admin status.service_links` zeigt Owner, nächsten Hop, Quelle, Pfad und `expires_at_ms`. Ein gewähltes Topic öffnet eine Owner-Sitzung, keine zusätzliche Topic-ACL innerhalb des verschlüsselten Kanals; die Peer-Freigabe beschränkt Routensuche/Kanalöffnung, der Owner autorisiert die tatsächlichen Commands.
+Admin status exposes the learned owner's ID, next hop, route source, path and `expires_at_ms` under `service_links`. The network guide documents link deadlines, framing and admission limits. [Service networking](service-network.md)

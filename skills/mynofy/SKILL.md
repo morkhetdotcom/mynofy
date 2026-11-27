@@ -1,33 +1,33 @@
 ---
 name: mynofy
 description: >-
-  Als Worker an einem vorhandenen mynofy-Arbeitsablauf teilnehmen: Aufträge
-  übernehmen, mit anderen Agenten abstimmen und Ergebnisse melden. Verwenden,
-  wenn Rolle, Zugang und Topics bereitgestellt sind; nicht zur Dienstadministration.
+  Participate as a worker in an existing mynofy workflow. Accept assignments,
+  coordinate with other agents and report results when a role, connection
+  settings and topics have been supplied.
 ---
 
-# mynofy-Worker
+# mynofy worker
 
-Du führst die zugewiesene Facharbeit aus. Rolle und Auftrag kommen aus der
-Startanweisung; fehlende notwendige Angaben klärst du vor der Ausführung.
+Perform the assigned work. Take your role and assignment from the startup
+instructions. Clarify missing prerequisites before starting.
 
-1. Lies die [gemeinsamen Ablaufregeln](references/workflow.md). Sie legen Topics,
-   Mandat, Protokoll, Tickets, lokalen Zustand und Stopp fest.
-2. Verwende den bereitgestellten [MCP-Zugang](references/mcp.md). Nur ohne
-   bereitgestellten MCP-Zugang nutze die [CLI](references/cli.md). Verwende
-   vorhandene Topics und deine Identität; keine Topic-/ACL-Administration.
-3. Wähle einen freien Agentennamen oder nutze den vorgegebenen und stelle deine
-   Fähigkeiten im Agententopic vor. Der Operator übermittelt den relevanten Stand.
-4. Prüfe Mandat und vereinbartes Protokoll, bestätige deine Auftragsannahme
-   ausdrücklich und führe die Arbeit aus. Beantworte Statusabfragen im vereinbarten
-   Schema. Auftragsannahme und Ablehnung sind eigene fachliche Nachrichten.
-5. Melde Ergebnis und offene Punkte. Anforderungen, Status und Abschluss dürfen
-   ohne zusätzlichen Text als vereinbarte Ereignisse erfolgen. Wiederhole bekannte
-   Inhalte nicht; umfangreiche Details nur auf Nachfrage.
+1. Read the [shared workflow rules](references/workflow.md) for topics,
+   authority, protocol, tickets, local progress and stop requests.
+2. Use the supplied [MCP connection](references/mcp.md). Use the
+   [CLI](references/cli.md) if MCP access was not provided. Use the existing
+   topics and your assigned identity. Topic and ACL administration is
+   outside the worker role.
+3. Choose an unused agent name or use the assigned name. Introduce your
+   capabilities in the worker topic. The operator provides the relevant
+   workflow state.
+4. Check the mandate and agreed protocol. Explicitly accept or decline the
+   assignment with an application message. Answer status queries in the
+   agreed schema.
+5. Report results and outstanding work. Send agreed typed events for
+   requests, status and completion when the protocol allows it. Provide
+   extensive details on request.
 
-Halte den Arbeitsstand lokal dauerhaft fest. Replay oder Neustart wiederholen
-keine Fachaktion automatisch; menschliche Stopps und Risikopausen beachten.
+Keep progress in durable local storage. Reconcile replayed messages with
+that progress before acting. Honor human stops and risk pauses.
 
-Die Rolle wurde in zwei lokalen Demos verwendet; das ist keine Garantie für
-Modellzuverlässigkeit. Noch ausstehende Client-Unterstützung steht im
-[Umsetzungsstand](references/open-decisions.md).
+[Implementation status](references/open-decisions.md)

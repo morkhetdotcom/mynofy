@@ -3,12 +3,14 @@
 
 The broker uses stateless polling: ACK/NACK, delivery IDs and confirmation counters have been removed. Application results are published messages. See [upgrade notes](../../docs/message-client-confirmation.md).
 
-Eigenständiger `asyncio`-Client ab Python 3.11, ohne CLI-Unterprozess oder
-Server-Core-Abhängigkeit. Direkte WSS-Verbindungen mit TLS-/Hostname-Prüfung und
-lokale Unix-Sockets mit Pfad-/Peer-UID-Prüfung. Wireformat: vorhandenes Protobuf v1.
-Die API ist wie das Protokoll noch ein veränderlicher Prototyp.
+Stand-alone `asyncio` client from Python 3.11, without CLI subprocess or server core dependency.
+Direct WSS connections with TLS-/Hostname-verification and local Unix sockets with
+path and peer UID verification. wire format: existing prototype v1. API is, like the protocol, still a
+variable prototype.
 
-## Installation aus dem Repository
+<a id="installation-aus-dem-repository"></a>
+
+## Installation from the repository
 
 ```sh
 python3 -m venv .venv
@@ -16,18 +18,20 @@ python3 -m venv .venv
 python -m pip install ./sdks/python
 ```
 
-Drei direkte Laufzeitabhängigkeiten: offizielle [Protobuf-Runtime](https://pypi.org/project/protobuf/),
-[websockets](https://pypi.org/project/websockets/) und
-[pyca/cryptography](https://pypi.org/project/cryptography/). Kein Fork und kein
-zweiter Kryptoanbieter. `grpcio-tools` dient ausschließlich der Bindings-Generierung,
-nicht dem laufenden SDK. Die `.proto`-Quelle liegt im Repository unter
-`protocol/protobuf/mynofy.proto`; generierte Python-Typen werden mitgeliefert.
+Three direct runtime dependencies: official
+[Protobuf-Runtime](https://pypi.org/project/protobuf/),
+[websockets](https://pypi.org/project/websockets/) and
+[pyca/cryptography](https://pypi.org/project/cryptography/). No fork and no second crypto
+provider. `grpcio-tools` is used exclusively for the generation of bindings, not the running
+SDK. The `.proto` source is in the repository below `protocol/protobuf/mynofy.proto`; generated
+Python types are supplied.
 
-## Unix-Socket: Bytes senden und lesen
+<a id="unix-socket-bytes-senden-und-lesen"></a>
 
-Der Public Key muss beim Owner registriert sein; eine Anmeldung registriert keinen
-Client und vergibt keine Rechte. Schlüssel aus `mynofy keygen` sind kompatibel.
-Als derselbe normale OS-Benutzer wie der lokale Service ausführen.
+## Unix socket: Send and read bytes
+
+The public key must be registered with the owner; a login does not register a client and grants
+no rights; keys from `mynofy keygen` are compatible.
 
 ```python
 import asyncio
@@ -39,15 +43,15 @@ async def main():
     async with await Client.connect_unix(
         '.local/unix/run/mynofy.sock', owner='local', key=key,
     ) as client:
-        print(client.info)  # Owner, stabile Client-ID, U32-Neustartzähler
+        print(client.info)  # Owner, stable client ID, restart counter and optional boot ID
         sent = await client.publish(
             'local/events', 'Hallo'.encode('utf-8'), content_type='text/plain',
         )
         page = await client.poll('local/events', limit=20)
         for item in page.items:
             print(item.message.id, item.message.payload)
-            # Nach Verstehen/Zuordnen; das ist kein fachlicher Abschluss:
-        # Nach Verarbeitung oder dauerhafter eigener Übernahme lokal speichern:
+            # After Verstehen/Zuordnen; this is not a professional degree:
+        # Store locally after processing or permanent own takeover:
         cursor = page.next_cursor
         following = await client.poll('local/events', after=cursor, limit=20)
         print(sent.message_id, following.has_more)
@@ -55,12 +59,12 @@ async def main():
 asyncio.run(main())
 ```
 
-Bei `has_more` weitere Seiten sofort abholen. Poll startet keine Hintergrundschleife.
-Fehlender Cursor liest den aktiven Bestand erneut. Nach bekanntem Service-Neustart
-anhand von `client.info.boot_id` bei aktuellen Ownern gespeicherte Cursor verwerfen und mit
-lokalem Arbeitsstand abgleichen; kein automatisches Wiederholen von Fachaktionen.
-Das SDK speichert weder Cursor noch Tickets oder Mandate und führt keine fachliche Bestätigung aus.
-Poll reads without recording reader state. Losing its response leaves client-local progress unchanged.
+Pick up more pages immediately at `has_more`. Poll does not start a background loop. Missing
+cursor reads the active stock again. Discard cursors saved by current owners after a known
+service restart based on `client.info.boot_id` and compare them with local work status; no
+automatic repetition of specialist actions. SDK does not store cursor, tickets or mandates and
+does not perform professional confirmation. Poll reads without recording reader state. Losing
+its response leaves client-local progress unchanged.
 
 ## WSS
 
@@ -69,73 +73,81 @@ client = await Client.connect_wss(
     'wss://localhost:8080', owner='local', key=key,
     ca_file='.local/demo/ca.crt', timeout=10,
 )
-# Benutzen und anschließend await client.close(), oder async with client.
+# Use and then expect client.close(), or async with client.
 ```
 
-Nur `wss://`, mindestens TLS 1.3, CA- und Hostname-Prüfung. `ca_file=None` nutzt
-die Betriebssystem-Trustroots. Keine Option zum Abschalten der Prüfung und keine
-Übernahme von HTTP-/SOCKS-Proxy-Umgebungsvariablen. Unix verwendet unter Linux
-`SO_PEERCRED`, unter macOS `getpeereid`; native macOS-Verifikation folgt in der CI.
-Nicht unterstützte Peer-UID-Abfrage führt zum Abbruch, nicht zu schwächerer Prüfung.
+Only `wss://`, at least TLS 1.3, CA and hostname check. `ca_file=None` uses the operating system
+trustroots. No option to turn off the check and no adoption of
+HTTP-/SOCKS-Proxy-Umgebungsvariablen. Unix used under Linux `SO_PEERCRED`, under macOS
+`getpeereid`; native macOS verification follows in the CI. Unsupported peer UID query leads to
+cancellation, not weaker check.
 
-## Ereignisse und weitere Operationen
+<a id="ereignisse-und-weitere-operationen"></a>
+
+## Events and other operations
 
 ```python
 from datetime import datetime, timedelta, timezone
 from mynofy import Event, Parameter
 
 catalog = await client.get_catalog()
-# IDs und fachliche Parameterbedeutung aus Katalog/Anwendungsvereinbarung:
+# IDs and technical parameter meaning from catalog/application protocol agreement:
 event = Event(catalog=1, catalog_version=1, category=12, action=42, status=2,
               parameters=[Parameter(u64=2**64 - 1)])
 await client.publish('local/events', event,
                      expires=datetime.now(timezone.utc) + timedelta(seconds=60))
 rights = await client.get_permissions('local/events')
 own = await client.list_messages(topic='local/events', limit=20)
-# Beim Paging Filter UND limit beibehalten:
+# Keep the paging filter and limit:
 if own.HasField('next_cursor'):
     own_next = await client.list_messages(topic='local/events', limit=20,
                                           cursor=own.next_cursor)
 status = await client.get_message(sent.message_id)
 ```
 
-Bytes werden explizit kodiert, maximal 4096 Byte; Events enthalten höchstens drei
-numerische/boolesche Parameter. Keine implizite String-/JSON-Konvertierung. Python-
-Integer und Protobuf erhalten `u64`/`i64` ohne Fließkommaumweg. Rückgaben sind die
-mitgelieferten Protobuf-Typen (`mynofy.pb`); `get_catalog` liefert ein geprüftes
-JSON-Dictionary. Optionale Felder mit `HasField` unterscheiden.
+Bytes are explicitly encoded, maximum 4096 bytes; events contain maximum three
+numerische/boolesche Parameters. No implicit String-/JSON-Konvertierung. Receive Python Integer
+and Protobuf `u64` / `i64` No floating point route. Returns are the supplied prototype buf types
+() `mynofy.pb` ); `get_catalog` Then it will be tested. JSON -Dictionary. Optional fields with
+`HasField` unterscheiden.
 
-## Fehler, Parallelität und Schlüsselwechsel
+<a id="fehler-parallelität-und-schlüsselwechsel"></a>
 
-- `BrokerError`: abgewiesene Anfrage mit `code`, `detail`, optional `retry_after_ms`.
-  Keine automatische Wiederholung oder Warte-/Backoff-Strategie.
-- `TransportError`: Verbindung nach I/O-/Protokollfehler verworfen. Bei Mutation
-  kann `outcome_unknown=True` gelten: Publish/Rotation nicht blind erneut
-  senden, sondern beim Owner und anhand des eigenen Zustands abgleichen.
-- Cancellation während eines Requests verwirft ebenfalls die Verbindung. Auch
-  bei `CancelledError` kann eine Mutation bereits angenommen worden sein.
-- Eine Operation je Client. Gleichzeitiger weiterer Aufruf ergibt `BusyError`,
-  keine unbegrenzte Warteschlange. Für Parallelität getrennte Verbindungen verwenden.
-- Verbindung wird nicht automatisch neu hergestellt. Owner-/Client-Identität und
-  Neustartzähler nach expliziter Neuverbindung prüfen.
+## Error, parallelism and key change
 
-Clientseitiger Wechsel mit `await client.rotate(new_key)`: neuen Schlüssel **vorher**
-selbst sicher speichern. Nach Erfolg ist die alte Sitzung geschlossen; mit neuem
-Key und unveränderter `client_id=old_client_id` neu verbinden. Bei unklarem Commit
-beide Keys behalten und den neuen Zugang prüfen. Das SDK schreibt keine Keydateien.
+- `BrokerError`: Rejected request with `code`, `detail`, optional `retry_after_ms` No automatic
+  repetition or waiting or backoff strategy.
+- `TransportError`: Connection to I/O-/protocol errors In mutation, it can be rejected.
+  `outcome_unknown=True` gelten: Publish/Rotation do not send again blindly, but compare with
+  the owner and based on their own condition.
+- Cancellation during a request also discards the connection, and even at `CancelledError` a
+  mutation may have already been assumed.
+- One operation per client. Simultaneous call results in `BusyError`, not an unlimited queue.
+  Use separate connections for parallelism.
+- Connection is not automatically re-established. Owner-/Client-identity and restart counter
+  check for explicit reconnection.
 
-`Key.generate()` erzeugt Ed25519, `public_key`, `token_id`, `client_id` liefern die
-Registrierungsdaten. `private_bytes()` exportiert die Rust-kompatible PKCS#8-v2-
-Darstellung; Import akzeptiert Standard-v1 und die exakt geprüfte Rust-v2-Form.
-Python garantiert keine vollständige Speicherlöschung aller Schlüsselkopien.
+Client-side change with `await client.rotate(new_key)`: save new key **before** yourself
+securely. After success, the old session is closed; reconnect with new key and unchanged
+`client_id=old_client_id`. Keep both keys and check the new access if the commit is unclear. SDK
+does not write key files.
 
-## Grenzen
+`Key.generate()` generates Ed25519, `public_key`, `token_id`, `client_id` deliver the
+Registration data. `private_bytes()` exports the Rust-compatible PKCS #8-v2 representation;
+import accepts standard v1 and the verified Rust-v2 form. Python does not guarantee complete
+erasure of all key copies.
 
-Kein Peer-/Owner-Tunnelzugang in dieser ersten Python-Version; Rust/CLI beherrschen
-ihn bereits. Keine Admin-API, Topic-Anlage, Agentenlogik, Zustandsdateien oder
-Polling-Daemons im SDK. Der Service bleibt alleiniger ACL-Entscheider.
+<a id="grenzen"></a>
 
-## Entwicklung und Konformität
+## Boundaries
+
+Kein Peer-/Owner-Tunnelzugang in this first version of Python; Rust/CLI They already have
+control over him. API, topic system, agent logic, status files or polling daemons in SDK The
+service remains the sole ACL -Entscheider.
+
+<a id="entwicklung-und-konformität"></a>
+
+## Development and conformity
 
 ```sh
 python -m pip install -e './sdks/python[dev]'
@@ -144,14 +156,13 @@ python sdks/python/generate.py
 cargo test --locked -p mynofy-protocol --features crypto sdk_conformance
 ```
 
-Die Tests benötigen das gebaute Rust-Binary, OpenSSL CLI und einen normalen
-Benutzer. Sie starten eigene Dienste in temporären Verzeichnissen, keine vorhandene
-Demo wird verändert. WSS/Unix, Auth/ACL, Katalog, Bytes/Events, große Integer,
-Cursor, Bestätigungen, Python↔Rust-Keyformate und Rotation werden real geprüft;
-Fehlerpeers prüfen Timeout, falsche Antwort, Cancellation und verlorene Resultate.
+The tests require the built Rust binary, OpenSSL CLI and a normal user. They start their own
+services in temporary directories, no existing demo is changed. WSS/Unix, Auth/ACL, catalog,
+Bytes/Events, large integers, cursors, confirmations, Python↔Rust key formats and rotation are
+checked in real time; error peers check timeout, wrong response, cancellation and lost results.
 
-`protocol/conformance/sdk-v1.json` enthält dieselben Wire-/Auth-/Rotationstranskripte
-für Rust und Python sowie spätere SDKs. Regeneration der Vektoren:
+`protocol/conformance/sdk-v1.json` contains the same Wire-/Auth-/Rotationstranskripte
+for Rust and Python and later SDKs. Regeneration of the Vectors:
 
 ```sh
 cargo run --quiet --locked -p mynofy-protocol --features crypto --example sdk_vectors > protocol/conformance/sdk-v1.json
@@ -159,8 +170,4 @@ cargo run --quiet --locked -p mynofy-protocol --features crypto --example sdk_ve
 
 ## Owner-authenticated producer identity
 
-Read `item.message.producer_id` for the stable client identity stamped by the owner.
-It is immutable, survives authorized key rotation and storage restore, and is
-separate from any sender or actor claim inside the payload. Match workflow roles
-to this value. This is an assertion over the protected owner connection, not a
-portable cryptographic message signature.
+Read `item.message.producer_id` for the stable client identity stamped by the owner. It is immutable, survives authorized key rotation and storage restore, and is separate from any sender or actor claim inside the payload. Match workflow roles to this value. This is an assertion over the protected owner connection, not a portable cryptographic message signature.

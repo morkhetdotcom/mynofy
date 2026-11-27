@@ -14,6 +14,50 @@ pub struct ClientProgress {
     #[serde(default)]
     pub reset_missing_cursors: bool,
 }
+impl ClientProgress {
+    /// Match the authenticated identity and discard cursors from an earlier or unknown boot.
+    pub fn bind(&mut self, welcome: &protocol::pb::AuthWelcome) -> Result<bool, BoxError> {
+        let counter = welcome
+            .restart_counter
+            .ok_or("Owner did not provide a restart counter")?;
+        if (!self.service_id.is_empty() && self.service_id != welcome.service_id)
+            || (!self.client_id.is_empty() && self.client_id != welcome.client_id)
+            || self.cursors.len() > 10_000
+            || self.cursors.iter().any(|(topic, cursor)| {
+                topic.is_empty()
+                    || topic.len() > 256
+                    || cursor.len() != 8
+                    || !cursor.bytes().all(|c| c.is_ascii_alphanumeric())
+            })
+        {
+            return Err(
+                "Client progress does not match the authenticated owner/client or is invalid"
+                    .into(),
+            );
+        }
+        super::validate_boot_id(welcome.boot_id.as_deref())?;
+        super::validate_boot_id(self.boot_id.as_deref())?;
+        let changed = match (&self.boot_id, &welcome.boot_id) {
+            (Some(old), Some(current)) => old != current,
+            (None, None) => {
+                counter == 0
+                    || self.restart_counter.is_some_and(|old| old != counter)
+                    || (self.restart_counter.is_none() && !self.cursors.is_empty())
+            }
+            (None, Some(_)) => self.restart_counter.is_some() || !self.cursors.is_empty(),
+            (Some(_), None) => true,
+        };
+        if changed {
+            self.cursors.clear();
+            self.reset_missing_cursors = true;
+        }
+        self.service_id = welcome.service_id.clone();
+        self.client_id = welcome.client_id.clone();
+        self.restart_counter = Some(counter);
+        self.boot_id = welcome.boot_id.clone();
+        Ok(changed)
+    }
+}
 pub struct RestartClient<S> {
     socket: WebSocketStream<S>,
     progress: ClientProgress,
@@ -27,44 +71,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> RestartClient<S> {
         welcome: protocol::pb::AuthWelcome,
         mut progress: ClientProgress,
     ) -> Result<Self, BoxError> {
-        let counter = welcome
-            .restart_counter
-            .ok_or("Owner did not provide a restart counter")?;
-        if (!progress.service_id.is_empty() && progress.service_id != welcome.service_id)
-            || (!progress.client_id.is_empty() && progress.client_id != welcome.client_id)
-            || progress.cursors.len() > 10_000
-            || progress.cursors.iter().any(|(topic, cursor)| {
-                topic.is_empty()
-                    || topic.len() > 256
-                    || cursor.len() != 8
-                    || !cursor.bytes().all(|c| c.is_ascii_alphanumeric())
-            })
-        {
-            return Err(
-                "Client progress does not match the authenticated owner/client or is invalid"
-                    .into(),
-            );
-        }
-        super::validate_boot_id(welcome.boot_id.as_deref())?;
-        super::validate_boot_id(progress.boot_id.as_deref())?;
-        let changed = match (&progress.boot_id, &welcome.boot_id) {
-            (Some(old), Some(current)) => old != current,
-            (None, None) => {
-                counter == 0
-                    || progress.restart_counter.is_some_and(|old| old != counter)
-                    || (progress.restart_counter.is_none() && !progress.cursors.is_empty())
-            }
-            (None, Some(_)) => progress.restart_counter.is_some() || !progress.cursors.is_empty(),
-            (Some(_), None) => true,
-        };
-        if changed {
-            progress.cursors.clear();
-            progress.reset_missing_cursors = true;
-        }
-        progress.service_id = welcome.service_id;
-        progress.client_id = welcome.client_id;
-        progress.restart_counter = Some(counter);
-        progress.boot_id = welcome.boot_id;
+        let changed = progress.bind(&welcome)?;
         Ok(Self {
             socket,
             progress,

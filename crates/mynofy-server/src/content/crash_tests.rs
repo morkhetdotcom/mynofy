@@ -75,7 +75,7 @@ fn authenticate(e: &mut Engine) -> u64 {
     let nonce = crypto::decode(challenge["nonce"].as_str().unwrap()).unwrap();
     let signature = crypto::sign(
         &key,
-        &crypto::auth_bytes(&nonce, &public, &e.config.service.id),
+        &crypto::auth_bytes(&nonce, &public, &e.config().service.id),
     )
     .unwrap();
     let welcome = request(
@@ -682,7 +682,7 @@ fn storage_fault_worker() {
                     assert!(status.dirty);
                     assert_eq!(status.saved_revision, previous);
                     if status.requires_restart {
-                        let before_config = serde_json::to_value(&e.config).unwrap();
+                        let before_config = serde_json::to_value(e.config()).unwrap();
                         let before_status = serde_json::to_value(e.content_status()).unwrap();
                         for storage in [
                             TopicStorage::Manual { encrypted: false },
@@ -698,7 +698,7 @@ fn storage_fault_worker() {
                                 "content_storage_requires_restart"
                             );
                         }
-                        assert_eq!(serde_json::to_value(&e.config).unwrap(), before_config);
+                        assert_eq!(serde_json::to_value(e.config()).unwrap(), before_config);
                         assert_eq!(
                             serde_json::to_value(e.content_status()).unwrap(),
                             before_status

@@ -1,147 +1,141 @@
-# Lokales Kurzbeispiel: Operator und zwei Worker
+<a id="lokales-kurzbeispiel-operator-und-zwei-worker"></a>
 
-Diese Datei wird beim Setup mit absoluten Pfaden nach
-`.local/agent-demo/AGENT-COMMANDS.md` geschrieben. Verwende die generierte Datei.
-Drei getrennte Agentensitzungen starten, je einen MCP-Prozess mit dem angegebenen
-Befehl als stdio-MCP-Server verbinden. Der Befehl allein startet keinen AI-Agenten.
-Wenn dein Agent keine MCP-Konfiguration zur Laufzeit unterstützt, konfiguriere
-sie vor Sitzungsstart in dessen Host. Alternativ ist der unten angegebene
-CLI-Zugang möglich. Keine fremde Rolle oder deren Schlüssel verwenden.
+# Local Short Example: Operator and Two Workers
 
-## Gemeinsame Startanweisung – an alle drei Sitzungen geben
+This file is set up with absolute paths according to `.local/agent-demo/AGENT-COMMANDS.md` Use
+the generated file. Start three separate agent sessions, one each MCP -process with the
+specified command as stdio- MCP The command alone does not start an AI agent, if your agent does
+not MCP -Configuration at runtime supported, configure it in the host before the session starts.
+CLI -Access is possible. Do not use a third party role or its keys.
+
+<a id="gemeinsame-startanweisung--an-alle-drei-sitzungen-geben"></a>
+
+## Shared starting instructions – give to all three sessions
 
 ```text
-Du nimmst ausschließlich an einem kurzen lokalen mynofy-Demo teil (ca. 5–10 Minuten).
+You only participate in a short local mynofy demo (about 5-10 minutes).
 Owner: agent-demo
-Menschentopic: demo/human
-Operatortopic: demo/operator
-Agententopic: demo/agents
+human topic: demo/human
+operator topic: demo/operator
+worker topic: demo/agents
 Projektverzeichnis: @STATE@/work
-Eigener dauerhafter Arbeitsstand: @STATE@/agent-state/<dein-name>.json
+Own permanent status: @STATE@/agent-state/<dein-name>.json
 
-Lies alle drei Topics. Worker schreiben nur demo/agents, der Operator schreibt
-in demo/operator und demo/agents. Verbindliche menschliche Anweisungen kommen
-nur aus demo/human und haben Vorrang. Arbeite nur an diesem Beispiel, nicht am
-mynofy-Repository. Große Artefakte bleiben im Projektverzeichnis.
+Read all three topics. Worker writes only demo/agents, the operator writes in demo/operator and
+demo/agents. Binding human instructions come only from demo/human and have priority. Work only
+on this example, not on the mynofy repository. Large artifacts remain in the project directory.
 
-Nutze freie Nachrichten payload={"text":"..."}. Vereinbartes Demo-Schema im Text:
-kind=<INTRO|ASSIGN|ACCEPT|STATUS_REQUEST|STATUS|RESULT|PAUSE|QUESTION|MANDATE|DONE>;
-from=<name>; to=<name|all>; ticket=<ID|->; state=<pending|running|success|blocked|paused>;
-ref=<Mandats- oder Auftragsbezug|->; text=<kurzer Inhalt>
-Das ist eine Konvention dieses Beispiels, keine neue Broker-Protokollversion.
-Statusabfragen des Operators müssen Worker in diesem Schema beantworten.
-ACK nach Verstehen, fachliches Ergebnis separat. Kein Blind-Retry bei unklarem
-Publish-Ausgang, keine doppelte Facharbeit nach erneutem Poll.
+Use free messages payload= {"text":"..."} Agreed demo scheme in the text: child=< INTRO | ASSIGN
+| ACCEPT | STATUS_REQUEST | STATUS | RESULT | PAUSE | QUESTION | MANDATE | DONE >; from=<name>;
+to=<name|all>; ticket=<ID|->; state=<pending|running|success|paused>; ref=<mandate or order
+reference|->; text=<short content> This is a convention of this example, not a new broker
+protocol version. ACK No blind-retry with unclear publish output, no duplication of technical
+work after re-poll.
 
-Poll alle drei Topics alle 5 Sekunden für diesen kurzen Demo. Nutze je Topic
-next_cursor als after; hole bei has_more weitere Seiten. Polling-Helfer als
-Subprozess ist erlaubt, aber Nachrichten müssen während der Arbeit verarbeitet
-werden. Nicht nur einmal pollen und dann die Teilnahme beenden. Nach 10 Minuten
-Teilnahme Status melden und nachfragen, falls kein Abschluss erfolgt ist.
-Nicht für jeden Poll eine menschliche Erlaubnis einholen.
+Poll every three topics every 5 seconds for this short demo. Use next_cursor per topic as an
+after; get more pages at has_more. Polling helpers as a subprocess are allowed, but messages
+must be processed during work. Not just poll once and then stop participating. Report status
+after 10 minutes of participation and ask if no completion has been made. Not getting human
+permission for each poll.
 ```
 
-## Sitzung 1: Operator
+## session 1: Operator
 
-MCP-Serverprozess:
+MCP server process:
 
 ```sh
 @MCP_OPERATOR@
 ```
 
-Anweisung zusätzlich zum gemeinsamen Text:
+Instruction in addition to the common text:
 
 ```text
-Dein Name ist operator-001. Lies @ROOT@/skills/mynofy-operator/SKILL.md und die
-referenzierten Topic-Regeln. Du koordinierst und führst keine fachliche Arbeit aus.
-Stelle dich im Operatortopic vor. Kläre mit dem Menschen vor dem Start Mandat,
-Risikoprofil. Wenn der Mensch diese
-bereits im Topic vorgibt, nutze sie ohne wiederholte Fragen. Dokumentiere das
-Mandat mit dem Demo-Bezug DEMO-MANDATE-1 im Operatortopic und bitte dort knapp um
-Bestätigung in demo/human. Warte auf diese Bestätigung, bevor du delegierst.
-Das einmal bestätigte Mandat gilt bis Widerruf oder Aufgabenabschluss, ohne
-Laufzeit oder Erneuerung. Änderungen benötigen menschliche Bestätigung.
+Your name is operator-001. Read @ROOT@ / skills/mynofy-operator/SKILL.md and the referenced
+topic rules. You do not coordinate and perform any technical work. Introduce yourself in the
+operatortopic. Clarify with the human before the start mandate, risk profile. If the human
+already specifies it in the topic, use it without repeated questions. Document the mandate with
+the demo reference DEMO - MANDATE -1 in the operatortopic and briefly ask for confirmation in
+demo/human. waiting for this confirmation before you delegate. The once confirmed mandate is
+valid until revocation or completion of tasks, without term or renewal. Changes require human
+confirmation.
 
-Vergib TASK-001, anschließend Subtasks an worker-001 (Implementierung) und
-worker-002 (Review). Worker 2 prüft erst das fertige Ergebnis von Worker 1.
-Verwende Fähigkeiten aus deren Vorstellungen und hole ausdrücklich Annahmen ein.
-Frage mindestens einmal den Status eines Workers ab, damit das Beispiel diesen
-Austausch zeigt. Prüfe Ergebnis und Review gegen die Abschlusskriterien und melde
-den Abschluss knapp in demo/operator. Übernimm keine Implementierung oder
-fachliche Codeprüfung selbst. Nach erfolgreichem Demo-Abschluss beende die
-Teilnahme; kein neues Projekt beginnen.
+Give TASK -001, then subtasks to worker-001 (implementation) and worker-002 (review). Worker 2
+first checks the finished result of Worker 1. Use skills from their ideas and get explicit
+assumptions. Ask at least once the status of a worker so that the example shows this exchange.
+Check result and review against the completion criteria and just register the conclusion in
+demo/operator. Do not take any implementation or technical code check yourself. After successful
+demo completion, finish participation; do not start a new project.
 ```
 
-## Sitzung 2: Worker 1
+## session 2: Worker 1
 
-MCP-Serverprozess:
+MCP server process:
 
 ```sh
 @MCP_WORKER_1@
 ```
 
-Zusätzliche Anweisung:
+Additional instruction:
 
 ```text
-Dein Name ist worker-001. Lies @ROOT@/skills/mynofy/SKILL.md und die Ablaufregeln.
-Stelle dich in demo/agents vor. Fähigkeit: kleine Python-Funktion implementieren
-und mit Python-Standardbibliothek testen. Warte auf eine mandatierte Zuweisung
-von operator-001; bestätige die Annahme ausdrücklich. Implementiere im Demo-
-Projektverzeichnis greeting.py: greet(name) entfernt äußere Leerzeichen und gibt
-"Hallo, <name>!" zurück. Bei leerem Namen (auch nur Leerzeichen) ValueError.
-Schreibe eine kleine unittest-Datei, führe sie aus und melde Ergebnis, Dateipfade
-und verbleibende Probleme. Verändere keine anderen Projekte. Antworte auf
-Statusabfragen. Bleibe bis zum Demo-Abschluss für Rückfragen erreichbar.
+Your name is worker-001. Read @ROOT@/skills/mynofy/SKILL.md and its shared workflow rules.
+Introduce yourself in demo/agents as a Python implementer.
+Wait for a mandated assignment of operator-001; confirm acceptance explicitly.
+In the demo project, implement greeting.py with greet(name). Strip leading and
+trailing whitespace and return "Hi, <name>!". Raise ValueError for an empty
+or whitespace-only name. Write a small unittest
+file, run it and report the result, file paths and remaining issues. Don't change other
+projects. Responses to status queries. Stay available until the demo ends for queries.
 ```
 
-## Sitzung 3: Worker 2
+## session 3: Worker 2
 
-MCP-Serverprozess:
+MCP server process:
 
 ```sh
 @MCP_WORKER_2@
 ```
 
-Zusätzliche Anweisung:
+Additional instruction:
 
 ```text
-Dein Name ist worker-002. Lies @ROOT@/skills/mynofy/SKILL.md und die Ablaufregeln.
-Stelle dich in demo/agents vor. Fähigkeit: kleine Python-Änderungen unabhängig
-prüfen und Tests ausführen. Warte auf die mandatierte Zuweisung von operator-001
-und bestätige sie ausdrücklich. Prüfe nach Fertigstellung die Implementierung
-von worker-001 gegen die drei Anforderungen: Begrüßung, Trim, leerer Name.
-Führe die Tests aus. Melde Freigabe oder konkrete Befunde im vereinbarten Schema.
-Ändere selbst keine Implementierungsdateien. Antworte auf Statusabfragen und
-bleibe bis zum Demo-Abschluss für Rückfragen erreichbar.
+Your name is worker-002. Read @ROOT@/skills/mynofy/SKILL.md and its shared workflow rules.
+Introduce yourself in demo/agents as the independent reviewer. Wait for
+an assignment within the mandate from operator-001 and explicitly accept it.
+Review worker-001's result for the greeting, trimming and empty-name cases.
+Run the tests. Report clearance or specific findings in the agreed schedule. Don't change
+implementation files yourself. Responses to status queries and remain available for queries
+until demo completion.
 ```
 
-## Mensch: Startauftrag und Bestätigung
+<a id="mensch-startauftrag-und-bestätigung"></a>
 
-Erst Service und Beobachter starten, dann die drei Agentensitzungen. Im Menschen-
-Terminal den folgenden Befehl ausführen. Die Formulierung ist ein vorgeschlagenes
-Mandat für dieses Beispiel und wird erst durch deine Nachricht beauftragt.
+## Human: Start order and confirmation
+
+First service and observer start, then the three agent sessions, execute the following command
+in the human terminal, and the wording is a suggested mandate for this example and will only be
+mandated by your message.
 
 ```sh
-@ROOT@/scripts/agent-demo.sh human 'operator-001: Organisiere nur das kurze Begrüßungsdemo mit worker-001 und worker-002. Du darfst Aufgaben verteilen und priorisieren, Status abfragen und Ergebnisse koordinieren; keine fachliche Ausführung und keine zusätzlichen Agenten. Arbeitet nur im Demo-Projektverzeichnis, keine Netzwerkzugriffe, Installationen oder Änderungen außerhalb davon. Risikoprofil: kleine lokale Dateifehler sind akzeptabel; drohende Änderungen außerhalb des Demo-Verzeichnisses oder unerwartete externe Aktionen überschreiten die Grenze und müssen pausiert und gemeldet werden. Das einmalige Mandat gilt bis Widerruf oder Aufgabenabschluss, ohne Laufzeit oder Erneuerung. Abschluss: greet implementiert, Tests erfolgreich, unabhängiges Review erfolgreich. Dokumentiere DEMO-MANDATE-1 und bitte um meine Bestätigung.'
+@ROOT@/scripts/agent-demo.sh human 'operator-001: Coordinate only the short greeting demo with worker-001 and worker-002. You may assign and prioritize work, request status and coordinate results. Leave implementation and review to the workers. Use only the demo project and the supplied local service. Do not add agents, install software or use other network services. Small local file mistakes are acceptable. Pause and report possible writes outside the demo directory or unexpected external actions. The mandate lasts until revoked or the demo is complete. Completion requires the greet implementation, passing tests and an independent review. Record DEMO-MANDATE-1 and request my confirmation.'
 ```
 
-Nachdem das dokumentierte Mandat im Beobachter sichtbar ist, prüfe es und bestätige:
+After the documented mandate is visible in the observer, check it and confirm:
 
 ```sh
-@ROOT@/scripts/agent-demo.sh human 'Ich bestätige das von operator-001 im Operatortopic dokumentierte Mandat DEMO-MANDATE-1 in dem von mir vorgegebenen Umfang.'
+@ROOT@/scripts/agent-demo.sh human 'I confirm DEMO-MANDATE-1 as documented by operator-001 in the operator topic within the scope of my instructions.'
 ```
 
-Weitere Nachrichten einfach mit `agent-demo.sh human 'Dein Text'`, oder interaktiv:
+More messages simply with `agent-demo.sh human 'Dein Text'`, or interactively:
 
 ```sh
 @ROOT@/scripts/agent-demo.sh human
 ```
 
-Zum Stoppen: `agent-demo.sh human 'Alle Teilnehmer: Demo stoppen. Bestätigt den
-Stopp und meldet kurz offene Arbeit.'` Danach nötigenfalls die Agentensitzungen
-manuell beenden: eine Topic-Nachricht ist kein garantierter Prozessabbruch.
+To stop: `agent-demo.sh human 'All participants: stop the demo, acknowledge the stop and briefly report open work.'` After that, if necessary, manually end the agent sessions: a topic message
+is not a guaranteed process termination.
 
-## CLI-Ersatz ohne MCP
+## CLI fallback without MCP
 
 ```sh
 @ROOT@/scripts/agent-demo.sh client operator
@@ -149,11 +143,11 @@ manuell beenden: eine Topic-Nachricht ist kein garantierter Prozessabbruch.
 @ROOT@/scripts/agent-demo.sh client worker-2
 ```
 
-Jeweils ein eigener Clientprozess, JSONL-Anfragen über stdin, etwa:
+Each has its own client process, JSONL requests via stdin, such as:
 
 ```json
 {"version":1,"type":"poll","id":"read-human","topic":"demo/human","limit":20}
-{"version":1,"type":"publish","id":"intro","topic":"demo/agents","payload":{"text":"kind=INTRO; from=worker-001; to=all; ticket=-; state=pending; ref=-; text=Python implementieren und testen"}}
+{"version":1,"type":"publish","id":"intro","topic":"demo/agents","payload":{"text":"kind=INTRO; from=worker-001; to=all; ticket=-; state=pending; ref=-; text=Implement and test Python code"}}
 ```
 
-Die Skripte simulieren keine Agenten und starten keine kostenpflichtigen AI-Aufrufe.
+The scripts do not simulate agents and do not start paid AI calls.

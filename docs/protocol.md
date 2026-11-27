@@ -1,40 +1,69 @@
-# Protokoll v1 – Pull-Prototyp
+# Broker protocol v1
 
-Der lokale Owner-Prototyp implementiert dieses Pull-Protokoll. Das Wire-Format bleibt veränderlich; Peer-/Proxy-Tunneling ist noch Entwurf. [operating guide](getting-started.md). Der Client pollt ein Topic und nennt seine zuletzt erreichte Position. Der Service hält Nachrichten einmal pro Topic vor und beantwortet konkrete Abfragen; er erzeugt bei Publish keine Warteschlange oder Zustellung pro Subscriber.
+The owner stores active messages by topic. Clients supply their last known
+position when polling. Direct and tunneled clients use the same binary
+broker protocol.
 
-Das [Schema](../protocol/v1/frame.schema.json), der [Agenten-Ablauf](../protocol/v1/examples.json), die [Polling-Beispiele](../protocol/v1/poll-examples.json) und das [Producer-Status-Beispiel](../protocol/v1/status-examples.json) gehören zusammen. Die Konzeptprüfungen dokumentieren auch frühere, inzwischen ersetzte Push-Annahmen.
+See the [schema](../protocol/v1/frame.schema.json), [examples](../protocol/v1/examples.json),
+[polling fixtures](../protocol/v1/poll-examples.json), and
+[producer inspection fixtures](../protocol/v1/status-examples.json).
+[Getting started](getting-started.md) · [Service networking](service-network.md)
 
-## Umfang und Verbindung
+<a id="umfang-und-verbindung"></a>
 
-Ein Topic-Owner ist zugleich der ACL-Holder. Er verwaltet aktive Nachrichten im RAM, einen geordneten Topic-Index und dessen höchsten Annahmestand. Der Prototyp verwendet binäre Protobuf-Frames über authentifiziertes WSS oder explizit konfigurierte lokale Unix-Sockets, exakte Topic-Namen, sofort beantwortetes Polling, zeitbasierten Ablauf und eigene Producer-Abfragen. Optionale Content-Persistenz ist implementiert. Serverseitiges Long-Polling und Scheduling sind nicht geplant; spontane Push-Zustellung, automatische Retries, Wildcards und exklusive Job-Vergabe sind nicht enthalten. Eine spätere REST-Anbindung kann dieselben Operationen abbilden.
+## Scope and connection
 
-Ein Protobuf-Frame pro binärer WebSocket-Nachricht. JSON-Textcommands werden mit Code 1003 abgewiesen. Die folgenden Beispiele zeigen die lesbare CLI-/SDK-Darstellung: Jedes JSON-Objekt hat `version: 1` und `type`. Zusätzliche Felder und unbekannte Typen werden abgewiesen. Optionale Felder entfallen statt `null`. IDs sind opake, nicht leere Strings; Command-IDs sind pro Verbindung eindeutig. Message- und Delivery-IDs sind pro Owner-Prozesslauf eindeutig. Ein Topic ist eine nicht leere, groß-/kleinschreibungssensitive Zeichenfolge; `/` hat keine eingebaute Hierarchie- oder Wildcard-Semantik.
+A topic owner is also the ACL holder. It manages active messages in the RAM, an ordered topic
+index and its highest acceptance level. The prototype uses binary protobuf frames via
+authenticated WSS or explicitly configured local Unix sockets, exact topic names, immediately
+answered polling, time-based expiration and producer queries. Optional content persistence is
+implemented. Server-side long polling and scheduling are not planned; spontaneous push delivery,
+automatic retries, wild cards and exclusive job assignment are not included. A later REST
+connection can map the same operations.
 
-Vor Anwendungsframes muss der [Client-Keypair-Handshake](client-auth.md) auf derselben Verbindung abgeschlossen sein. Der Owner bindet Pubishes an die daraus bestimmte stabile Client-ID. Die ACL-Aktion `subscribe` bedeutet in diesem Modell die Berechtigung, ein Topic zu pollen. Es gibt kein `subscribe`-/`unsubscribe`-Command und keine dauerhaft registrierte Topic-Anmeldung. Alle Anwendungsbeispiele beginnen nach erfolgreicher Authentifizierung.
+Each binary WebSocket message carries one Protobuf frame. JSON -text commands are rejected with code
+1003. The following examples show the readable CLI-/SDK-representation: Each JSON object has
+`version: 1` and `type`. Additional fields and unknown types are rejected. Optional fields are
+omitted instead of `null`. IDs are opaque, not empty strings; command IDs are unique per
+connection. Message IDs identify active records within one owner. A topic is a non-empty,
+upper/lower case sensitive string; `/` has no built-in hierarchy or wildcard semantics.
 
-Die [Konfigurationsdatei](configuration.md) liefert beim Start Schlüssel, ACL, Topic-Policies, Routen und Rate-Limits. Laufzeit-Zustand bleibt im RAM und wird nicht automatisch zurückgeschrieben. Die [Berechtigungs-/Routingbeschreibung](topic-routing.md) trennt die Entscheidung des Owners von zwischengespeicherten Wegweisern.
+Before application frames, the [Client-Keypair-Handshake](client-auth.md) must be completed on
+the same connection. The owner binds pubishes to the stable client ID determined from them. The
+ACL action `subscribe` in this model means the permission to poll a topic. There is no
+`subscribe` / `unsubscribe` command and no permanently registered topic login. All application
+examples begin after successful authentication.
+
+The [Konfigurationsdatei](configuration.md) delivers keys, ACL, topic policies, routes and rate
+limits. runtime state remains in the RAM and is not automatically written back.
+[permissions and routing guide](topic-routing.md) separates the owner's decision from
+cached signs.
 
 ## Frames
 
-Alle Felder sind Pflichtfelder, sofern nicht als optional bezeichnet. `version` und `type` kommen jeweils hinzu.
+All fields are mandatory unless designated as optional. `version` and `type` are added.
 
-| Typ | Richtung | Felder | Bedeutung |
+| Type | Direction | Fields | Meaning |
 | --- | --- | --- | --- |
-| `publish` | Producer → Owner | `id`, `topic`, `payload`; optional `expires` | Neue Nachricht erzeugen. |
-| `result` | Owner → Client | `request_id`; bei Publish zusätzlich `message_id`, `expires` | Command erfolgreich angenommen/ausgeführt. |
-| `poll` | Client → Owner | `id`, `topic`; optional `after`, `limit` | Aktive Nachrichten nach einer Position abfragen. |
-| `messages` | Owner → Client | `request_id`, `items`, `next_cursor`, `has_more` | Begrenzte Poll-Antwort, auch leer. |
-| `list_messages` | Producer → Owner | `id`; optional `topic`, `limit`, `cursor` | Eigene aktive Nachrichten auflisten. |
-| `messages_page` | Owner → Producer | `request_id`, `items`; optional `next_cursor` | Seite eigener Nachrichtenübersichten. |
-| `get_message` | Producer → Owner | `id`, `message_id` | Eigene aktive Nachricht samt Payload abfragen. |
-| `message_status` | Owner → Producer | `request_id`, `message`, `created_at`; optional `deliveries` | Eigener Inhalt; technische Zustellzähler nur mit Freigabe. |
-| `get_permissions` | Client → Owner | `id`, `topic` | Eigene aktuelle Topic-Rechte abfragen. |
-| `permissions` | Owner → Client | `request_id`, `topic`, `owner_id`, `acl_revision`, `actions` | Aktuelle Auskunft, kein Capability-Token. |
-| `error` | Owner → Client | `code`, `detail`; optional `request_id` | Fehler ohne zugesicherte Verarbeitung. |
+| `publish` | Producer → Owner | `id`, `topic`, `payload`; optional `expires` | Create a new message. |
+| `result` | Owner → Client | `request_id`; with Publish additionally `message_id`, `expires` | The owner accepted or completed the command. |
+| `poll` | Client → Owner | `id`, `topic`; optional `after`, `limit` | Request active messages for a position. |
+| `messages` | Owner → Client | `request_id`, `items`, `next_cursor`, `has_more` | Limited poll response, even empty. |
+| `list_messages` | Producer → Owner | `id`; optional `topic`, `limit`, `cursor` | List your own active messages. |
+| `messages_page` | Owner → Producer | `request_id`, `items`; optional `next_cursor` | Page of your own news overviews. |
+| `get_message` | Producer → Owner | `id`, `message_id` | Request your own active message and payload. |
+| `message_status` | Owner → Producer | `request_id`, `message`, `created_at`; optional `deliveries` | Own content; technical delivery counter only with approval. |
+| `get_permissions` | Client → Owner | `id`, `topic` | Ask for your own current topic rights. |
+| `permissions` | Owner → Client | `request_id`, `topic`, `owner_id`, `acl_revision`, `actions` | Current information, no capability token. |
+| `error` | Owner → Client | `code`, `detail`; optional `request_id` | Error without guaranteed processing. |
 
-Abfrageantworten sind unmittelbar die Bestätigung des Commands, ohne zusätzliches `result`. Spontane `message`- oder `receipt`-Frames sind im Pull-Prototyp nicht vorgesehen; Producer fragen Status selbst ab.
+Query responses are immediately the confirmation of the command, without additional `result`.
+Spontaneous `message` or `receipt` frames are not provided in the pull prototype; producers
+request statuses themselves.
 
-## Topic-Polling mit Cursor
+<a id="topic-polling-mit-cursor"></a>
+
+## Topic polling with cursor
 
 ```json
 {"version":1,"type":"poll","id":"poll-2","topic":"events","after":"00000002","limit":20}
@@ -44,113 +73,236 @@ Abfrageantworten sind unmittelbar die Bestätigung des Commands, ohne zusätzlic
 {"version":1,"type":"messages","request_id":"poll-2","items":[],"next_cursor":"00000002","has_more":false}
 ```
 
-Poll-Cursor bestehen aus genau acht ASCII-Zeichen des Alphabets `0–9A–Za–z`, etwa `00000002`. Clients speichern den zurückgegebenen Wert pro Owner und Topic und senden ihn unverändert zurück.
+Poll cursors consist of exactly eight ASCII characters of the alphabet `0–9A–Za–z`, about
+`00000002`. Clients store the returned value per owner and topic and send it back unchanged.
 
-- **Ohne `after`:** Ab Beginn des noch aktiven Topic-Bestands lesen. Auch zuvor bestätigte Nachrichten können wieder erscheinen. Dies ist eine bewusste neue Abfrage, kein serverseitiger Push beim Reconnect.
-- **Mit `after`:** Aktive Nachrichten strikt nach der im Cursor enthaltenen Annahmeposition lesen. Die Client-Software speichert den zuletzt erfolgreich verarbeiteten Fortschritt und sendet ihn beim nächsten Poll wieder.
-- **Antwort:** `items` sind aufsteigend nach Annahmeposition geordnet. Jeder Eintrag enthält `message`; es gibt keine Zustellungs-ID. Die fachliche Nachricht enthält `id`, `topic`, `payload` und den wirksamen Ablauf `expires.time`.
-- **Seitengröße:** `limit` liegt zwischen 1 und 100, Standard ist 20. Zusätzlich gilt das konfigurierte Antwort-Byte-Limit. Weniger Einträge als `limit` sind zulässig. Ein einzelner akzeptierter Inhalt muss einschließlich sämtlicher Ausgabe-Metadaten in eine Antwort passen.
-- **Fortschritt:** Der Owner bildet beim Poll einen konsistenten Annahmestand H. `next_cursor` liegt hinter den ausgegebenen oder übersprungenen Positionen. Nach Prüfung bis H ist `has_more: false` und der Cursor darf bis H vorrücken. Bei der [budgetierten Ablaufbereinigung](budgeted-expiration.md) werden höchstens 256 Positionen geprüft: Eine leere Seite mit `has_more: true` und fortgeschrittenem Cursor ist möglich. Das Flag garantiert dann keine weitere aktive Nachricht, sondern noch ungeprüfte Positionen. Die nächste Abfrage verwendet den erhaltenen Cursor.
-- **Leere Antwort:** Es gibt keine aktuell aktiven neueren Nachrichten. Das bedeutet nicht, dass seit dem alten Cursor nie etwas veröffentlicht wurde: Nachrichten können bereits abgelaufen sein. Es gibt keine Vollständigkeitsgarantie für einen länger offline gewesenen Client.
+- **Without `after`:** Read from the start of the still active topic stock. Also previously
+  confirmed messages may reappear. This is a conscious new query, not a server-side push on the
+  reconnect.
+- **With `after`:** Read active messages strictly according to the acceptance position contained
+  in the cursor.The client software stores the last successfully processed progress and sends it
+  back to the next poll.
+- **Answer:** `items` are ordered ascending by acceptance position. Each entry contains
+  `message`; there is no delivery ID. The technical message contains `id`, `topic`, `payload`
+  and the effective sequence `expires.time`.
+- **page size:** `limit` is between 1 and 100, default is 20. In addition, the configured
+  response byte limit applies. Fewer entries than `limit` are allowed. A single accepted content
+  must fit into a response, including all output metadata.
+- **Progress:** The owner forms a consistent acceptance status H. `next_cursor` is behind the
+  positions issued or skipped. After checking to H, `has_more: false` and the cursor is allowed
+  to advance to H. At [budgetierten expiration cleanup](budgeted-expiration.md), a maximum of 256
+  positions are checked: A blank page with `has_more: true` and advanced cursor is possible. The
+  flag then does not guarantee any further active message, but still unchecked positions. The
+  next query uses the received cursor.
+- **Empty Answer:** There are no currently active newer messages. This does not mean that
+  nothing has ever been published since the old cursor: messages may have already expired. There
+  is no guarantee of completeness for a longer offline client.
 
-### Quick-Check und geordneter Index
+<a id="quick-check-und-geordneter-index"></a>
 
-Der Topic-Owner vergibt intern fortlaufende Annahmepositionen und hält pro Topic den letzten Stand vor. Ein gültiger Cursor am aktuellen Stand ermöglicht nach Auth-/ACL-Prüfung einen Vergleich ohne Durchlaufen des Nachrichtenbestands: sofort leer antworten. Für Positionen hinter dem aktuellen Stand oder als ungültig erkannte Cursor beginnt der Service wieder am aktiven Anfang; Antwort- und Seitenlimits sowie Auth/ACL gelten unverändert.
+### Quick-check and ordered index
 
-Für einen älteren Cursor wird im geordneten Index direkt nach der Position angesetzt, statt jede aktive Nachricht zu prüfen. Ziel ist ein logarithmisches Aufsuchen plus Arbeit proportional zur gelesenen Seite; das ist eine Architekturabsicht, noch keine gemessene Performanceaussage. Ablaufbereinigung benötigt einen dazu passenden Zeitindex und darf nicht aus jedem leeren Poll einen vollständigen Scan machen.
+The topic owner assigns internally consecutive acceptance positions and keeps the last status
+for each topic. After Auth-/ACL-verification a valid cursor on the current status allows a comparison
+without passing through the message stock: immediately answer empty. For positions behind the
+current status or cursor recognized as invalid, the service starts again at the active
+beginning; response and page limits as well as Auth/ACL apply unchanged.
 
-Der Poll-Cursor ist ein einfacher Index ohne Signatur, MAC oder Bindung an einen Client. Die Topic-Auswahl kommt aus `topic`; Authentifizierung und aktuelle ACL werden bei jeder Abfrage separat geprüft. Ein Client darf bewusst eine andere gültige Position wählen oder eine Position mit einem anderen berechtigten Client teilen. Der Server speichert keinen Fortschritt pro Subscriber. Eine Message-ID ist kein Poll-Cursor: Positionen gelten pro Topic und bleiben auch bei abgelaufener Ankernachricht nutzbar.
+For an older cursor, the ordered index is set directly by the position instead of checking each
+active message. The goal is a logarithmic search plus work proportional to the page read; this
+is an architectural intention, not yet a measured performance statement.
 
-Intern zählt der Owner pro Topic mit `u64`; auf dem Wire erscheinen die letzten acht alphabetischen Stellen. `00000000` bezeichnet zunächst den Stand vor der ersten Nachricht. Nach `zzzzzzzz` folgt `00000000`. Bei der Auswertung wählt der Owner die neueste passende Position, die nicht hinter seinem aktuellen Stand liegt. Ein nicht darstellbarer Rückstand vor Position 0 sowie ungültige Länge/Zeichen setzen den Poll-Start auf den aktiven Anfang zurück. Der aktuelle Cursor braucht keine Bestandssuche, ältere Positionen werden im geordneten Index gesucht.
+The poll cursor is a simple index without a signature, MAC or binding to a client. The topic
+selection comes from `topic`; authentication and current ACL are checked separately for each
+query. A client may deliberately choose a different valid position or share a position with
+another authorized client. The server does not store any progress per subscriber. A message ID
+is not a poll cursor: positions are valid per topic and remain usable even when the anchor
+message expires.
 
-**Grenze des kompakten Index:** Nach 62^8 Annahmen ist ein alter Index nicht mehr eindeutig. Clients dürfen ihren Fortschritt nicht über einen vollständigen Umlauf hinweg aufbewahren. Neustart und Topic-Neuanlage setzen Positionen zurück. Eine alte Position löst zunächst als zukünftig einen Rücksprung zum aktiven Anfang aus, kann aber nach Aufholen des neuen Bestands wieder gültig erscheinen. Der Cursor erkennt solche Neustarts nicht zuverlässig; nach einem bekannten Neustart muss die Anwendung bewusst ohne `after` neu beginnen. Keine Generationserkennung oder MAC-Garantie für Poll-Cursor behaupten. Vorherige lange Poll-Cursor lösen ebenfalls einen Rücksprung zum aktiven Anfang aus.
+Internally, the owner counts for each topic with `u64`; the last eight alphabetical digits
+appear on the wire. `00000000` first indicates the status before the first message. `zzzzzzzz`
+is followed by `00000000`. During the evaluation, the owner selects the latest suitable position
+that is not behind his current status. An unrepresentable backlog before position 0 and invalid
+length/character set the poll start to the active start. The current cursor does not need a
+stock search, older positions are searched in the ordered index.
 
-Producer-Listen-Cursor (`list_messages.cursor` / `messages_page.next_cursor`) bleiben davon getrennt: Sie tragen Snapshot-Wasserstand, Filter und Ablauf und sind weiterhin Base64URL(JSON) plus HMAC-SHA256, an Owner-Generation und Client gebunden. Dafür gilt weiterhin ein Limit von 4096 Bytes. Topic-Namen sind auf 256 UTF-8-Bytes begrenzt.
+**Limit of the compact index:** After 62^8 assumptions, an old index is no longer unique.
+Clients are not allowed to keep their progress over a full cycle. Restart and reinvestment reset
+positions. An old position initially triggers a return to the active start in the future, but
+can appear valid again after catching up with the new stock. The cursor does not reliably detect
+such restarts; after a known restart, the application must deliberately start again without
+`after`. No generation recognition or MAC guarantee for poll cursors claim. Previous long poll
+cursors also trigger a return to the active start.
+
+Producer-Listen-Cursor ( `list_messages.cursor` / `messages_page.next_cursor` ) remain separate
+from it: they carry snapshot water level, filter and drain and are still Base64URL( JSON ) plus
+HMAC - SHA256, tied to owner generation and client, but still has a limit of 4096 bytes. UTF
+-8-Bytes begrenzt.
 
 ## Stateless polling and local progress
 
+Topic names must contain 1–256 UTF-8 bytes. JSON Schema string lengths count
+Unicode characters, so the runtime enforces the byte limit separately.
+
 Poll reads active messages without creating reader state, confirmation pairs or delivery IDs. ACK/NACK commands are removed. Acceptance, rejection and completion are application events published to the agreed topics. See [upgrade notes](message-client-confirmation.md).
 
-Der Client darf einen zurückgegebenen Cursor erst speichern, nachdem er die zugehörige Seite gemäß seiner Anwendung verarbeitet oder zuverlässig lokal übernommen hat. Speichert er vorher und stürzt ab, kann er Nachrichten überspringen. Speichert er erst danach und stürzt zuvor ab, kann dieselbe Arbeit erneut erscheinen. Bei mehreren parallelen Polls desselben Topics muss der Client seine Fortschrittsverwaltung serialisieren oder die Verarbeitung korrekt zusammenführen. Dieser Prototyp definiert keine atomare Kopplung aus Verarbeitung und lokalem Checkpoint.
+The client is not allowed to store a returned cursor until it has processed the related page
+according to its application or reliably taken over locally; if it stores before and crashes, it
+can skip messages; if it stores after and crashes before, the same work can reappear; if there
+are several parallel polls of the same topic, the client must serialize its progress management
+or merge the processing correctly; this prototype does not define atomic coupling of processing
+and local checkpoint.
 
-Die [Polling-Beispiele](../protocol/v1/poll-examples.json) zeigen Seiten, leere Antworten, einen bereits abgelaufenen Anker und anschließend einen neuen Publish. Sofortige Polls sollten mit clientseitiger Pause/Backoff bei leerer Antwort kombiniert werden. Konkrete Intervalle und Limits sind noch festzulegen. Der Service hält Poll-Anfragen nicht bis zu einer neuen Nachricht offen; Warteintervalle und Wiederholungen liegen beim Client.
+The [Polling Examples](../protocol/v1/poll-examples.json) shows pages, empty replies, an anchor
+that has already expired and then a new publish. Immediate polls should be combined with
+client-side Pause/Backoff for empty replies. Concrete intervals and limits have yet to be
+specified. The service does not keep poll requests open until a new message; waiting intervals
+and repetitions are with the client.
 
-## Ablauf und Aufbewahrung
+<a id="ablauf-und-aufbewahrung"></a>
 
-Der Producer kann `expires: {"time":"2026-12-01T12:00:00Z"}` setzen. Ohne Angabe bestimmt der Topic-Owner den Zeitpunkt aus seiner Topic-Policy mit endlicher Standard-TTL. Ungültige, bereits erreichte oder nach Policy zu lange Vorgaben werden abgewiesen, nicht stillschweigend gekürzt. Publish-Result, Poll-Ergebnis und eigene Abfragen enthalten immer den wirksamen Zeitpunkt. Standard-TTL und maximale Laufzeit werden pro Topic in der CFG gesetzt. Zeitauflösung ist Millisekunden.
+## Processing and storage
 
-Jede akzeptierte Nachricht bleibt bis zum Ablauf im RAM aktiv. Fehlende Leser löschen sie nicht. Policy-Änderungen verändern nicht rückwirkend akzeptierte Zeitpunkte. Maßgeblich ist die Owner-Uhr; ein absoluter RFC-3339-UTC-Zeitpunkt mit `Z` wird vorgeschrieben. Uhrabweichungen bleiben ein Betriebsrisiko.
+The producer can set `expires: {"time":"2026-12-01T12:00:00Z"}`. Without specifying, the topic
+owner determines the time from his topic policy with finite standard TTL. Invalid, already
+reached or too long by policy specifications are rejected, not tacitly shortened. Publish
+result, poll result and own queries always contain the effective time. Standard TTL and maximum
+runtime are set per topic in the CFG. Time resolution is milliseconds.
 
-Beim Ablauf wird der Inhalt sofort logisch ungültig. Die physische Bereinigung erfolgt budgetiert in mehreren Schritten. Quotenplätze werden erst bei tatsächlicher Bereinigung freigegeben. Bereits übertragene Inhalte können nicht zurückgerufen werden. Der Topic-Annahmestand bleibt erhalten, auch wenn alle Nachrichten abgelaufen sind. Topic-Neuanlage und ein Neustart ohne Content-Checkpoint setzen den Topic-Annahmestand zurück. Ein vollständiger Content-Restore erhält gespeicherte Topic-Kopfstände und entfernt abgelaufene Nachrichten vor Ausgabe. Ohne gespeicherten Stand wird der RAM-Bestand verworfen. Jeder Neustart erzeugt eine neue Owner-Generation für Producer-Listen-Cursor. Es gibt keine Historie abgelaufener Inhalte.
+Any accepted message remains active until expiration in the RAM. Missing readers do not delete
+them. Policy changes do not retroactively change accepted times. Decisive is the owner clock; an
+absolute RFC -3339- UTC -time with `Z` is prescribed.
 
-## Eigene aktive Nachrichten und Status
+When it expires, the content immediately becomes logically invalid. The physical cleanup is
+budgeted in several steps. Quota slots are released only when it is actually cleaned up. Content
+that has already been transferred cannot be recalled. Topic acceptance status is retained even
+after all messages have expired. Topic reset and a restart without content checkpoint reset the
+topic acceptance status. A full content restore receives stored topic headstands and remotely
+expired messages before output. Without saved status, the RAM stock is discarded. Each restart
+generates a new owner generation for producer list cursors. There is no history of expired
+content.
 
-Aktiv bedeutet akzeptiert, noch nicht abgelaufen und seitdem nicht durch Neustart verloren. Producer – auch selbst publizierende Dienste – können ihre ursprünglichen eigenen aktiven Inhalte bei gültiger Anmeldung unabhängig von verbliebenen Topic-Rechten weiter lesen. Fremde Antworten bleiben separate Nachrichten und erfordern `subscribe` zum Pollen; erneutes Publish erfordert aktuelle Publish-Rechte.
+<a id="eigene-aktive-nachrichten-und-status"></a>
+
+## Own active messages and status
+
+Active means accepted, not yet expired and has not since been restarted. Producers – even
+self-publishing services – can continue to read their original active content when validly
+registered, regardless of remaining topic rights. Foreign replies remain separate messages and
+require `subscribe` to poll; re-publish requires current publish rights.
 
 `get_message` returns the original content and `created_at`. Foreign, unknown or expired IDs return `not_found`. `list_messages` returns the producer's own active messages, optionally filtered by exact topic, with `id`, `topic`, `created_at` and `expires`. Neither response contains reader or confirmation counters. These queries remain available to authenticated producers after losing topic rights.
 
-Producer-Listen können wegen des Scanbudgets auch leere Seiten mit `next_cursor` liefern; allein die leere Eintragsliste ist kein Endekriterium. Producer-Listen verwenden ein eigenes Paging: `limit` 1–100, Standard 20, plus Antwort-Byte-Limit. Der Listen-Cursor bindet Identität, Topic-Filter, Seitengröße und einen Annahme-Wasserstand. Folgeseiten überspringen inzwischen abgelaufene Einträge und enthalten keine späteren Publishes. Zwischen Seiten können sich Statusdaten ändern. Topic-Filter und Seitengröße bleiben unverändert. Der Cursor einer Producer-Liste ist kein Topic-Poll-Cursor und umgekehrt. `next_cursor` entfällt bei Listenende. Producer-Listen-Cursor gelten im Prototyp 60 Sekunden und sind zusätzlich an die ACL-Revision gebunden.
+Producer lists can also deliver blank pages with `next_cursor` because of the scan budget; only
+the empty entry list is not an end criterion. Producer lists use their own paging: `limit`
+1-100, standard 20, plus response byte limit. The list cursor binds identity, topic filter, page
+size and an acceptance water level. Subsequent pages skip now expired entries and contain no
+later publishes. Status data can change between pages. Topic filters and page size remain
+unchanged. The cursor of a producer list is not a topic poll cursor and vice versa.
+`next_cursor` is omitted at the end of the list. Producer list cursor applies in the prototype
+60 seconds and is additionally bound to the ACL revision.
 
-## Bewusst erneut veröffentlichen
+<a id="bewusst-erneut-veröffentlichen"></a>
 
-Ein Producer kann anhand eigener Abfragen entscheiden, per neuem `publish` erneut zu veröffentlichen. Dies erzeugt eine neue Message-ID und einen neuen Ablauf; die alte Nachricht bleibt aktiv. Es gibt keine Löschoperation, keinen automatischen Retry und kein `resend` unter derselben ID. Die fachliche Laufkennung kann für denselben Auftrag erhalten bleiben, damit die Anwendung Wiederholungen erkennt. Für einen unabhängigen Workflow ist eine neue Kennung nötig.
+## Deliberately re-publish
 
-Abfrage, Retry und ein eventuell spätes Ergebnis sind nicht atomar. RAM-Aufbewahrung, Cursor und Status garantieren keine At-least-once-Verarbeitung oder Exactly-once-Wirkung. Bei verlorenem Publish-Result bleibt der Ausgang möglicherweise unklar. Die [Status-Beispiele](../protocol/v1/status-examples.json) zeigen bewussten Retry und Inhaltsabfrage nach Rechteentzug. Alle Uhrzeiten und Cursor der Beispiele sind illustrative Werte, keine unmittelbar ausführbare Konfiguration.
+A producer can use their own queries to decide to re-publish using a new `publish`, creating a
+new message ID and a new sequence; the old message remains active. There is no deletion
+operation, no automatic retry, and no `resend` under the same ID. The professional run
+identifier can be retained for the same job for the application to detect repetitions. A new
+identifier is required for an independent workflow.
 
-## Ressourcen und Vernetzung
+Query, Retry and a possibly late result are not atomic. RAM -Retention, cursor and status do not
+guarantee at-least-once processing or exact-once effects. If the publish result is lost, the
+output may remain unclear. [Status examples](../protocol/v1/status-examples.json) shows
+deliberate retry and content query for rights revocation. All times and cursors of the examples
+are illustrative values, not an immediately executable configuration.
 
-Publish erzeugt einen aktiven Inhalt mit initialem Status, ohne Subscriber-Fan-out. Erst ein Poll erzeugt begrenzte Ausgabe und Zustellungsmetadaten. Clients pollen unabhängig voneinander; es gibt keine vorab gefüllten Sendewarteschlangen für alle möglichen Leser. N Inhalte und S tatsächliche vollständige Leser können weiterhin N × S Übertragungen benötigen, aber dieser Aufwand entsteht durch deren Abfragen und nicht vorab bei jedem Publish.
+<a id="ressourcen-und-vernetzung"></a>
 
-Begrenzt werden müssen aktive Bytes, Poll-Seitengröße/Antwortbytes, gleichzeitig offene Commands, tatsächlich offene Zustellversuche und Anfragehäufigkeit. Konfigurierbare Testwerte stehen in den Szenariodateien; sie sind noch keine produktiven Defaults. Annahme eines Publish samt Status und einer nicht leeren Poll-Seite samt Zustellversuchen müssen bei Kapazitätsmangel konsistent mit `resource_exhausted` scheitern. Ein langsamer Leser blockiert keine Warteschlange anderer Leser. Bei Rechteentzug sind noch nicht freigegebene Antworten gegen die aktuelle ACL abzusichern; bereits übertragene Bytes können nicht zurückgerufen werden.
+## Resources and networking
 
-[Peer-Identität und Handshake](service-links.md) bleiben vom Client-Protokoll getrennt. Owner-/Next-Hop-Auflösung und Berechtigungsauskunft sind in [topic-routing.md](topic-routing.md) beschrieben. Der ursprüngliche Client authentifiziert sich selbst beim Owner über eine vermittelte, Owner-terminierte Sitzung. The implemented tunnel carries the original client protocol to the owner without reader-confirmation state. Eine Zwischeninstanz darf sich durch Weiterleitung nicht zum Producer machen oder einen Hop als bestätigten Endempfang ausweisen. Globale Producer-Abfragen über mehrere Owner sind nicht Teil des Prototyps.
+The owner stores each accepted publish once. Polling reads active history.
+For N messages and S full readers, their polls can transfer the content
+N×S times. The owner applies limits to active records and bytes, response
+pages, concurrent commands and request rate. If necessary, a request
+fails with `resource_exhausted`. A revoked session cannot send a protected
+reply that has not already been released.
 
-## Fehlercodes
+[Peer Identity and Handshake](service-links.md) remain separate from the client protocol. Owner-/Next-Hop-resolution and permissions information are described in [topic-routing.md](topic-routing.md). The original client authenticates itself to the owner via a mediated, owner-terminated session. The implemented tunnel carries the original client protocol to the owner without reader-confirmation state. An intermediate entity may not make itself a producer or identify a hop as a confirmed final receipt by forwarding. Global producer queries about multiple owners are not part of the prototype.
 
-| Code | Bedeutung |
+## error codes
+
+| Code | Meaning |
 | --- | --- |
-| `invalid_frame` | Ungültiges JSON, Feldstruktur oder Ablauf außerhalb der Policy. |
-| `unsupported_version` | Version wird nicht unterstützt. |
-| `unknown_type` | Typ wird nicht unterstützt. |
-| `invalid_direction` | Typ wurde in falscher Richtung gesendet. |
-| `unknown_delivery` | Kein auf dieser Verbindung offener Versuch dieser Delivery-ID. |
-| `not_found` | Eigene aktive Nachricht nicht auffindbar. |
-| `invalid_cursor` | Producer-Listen-Cursor ungültig, falscher Scope, nicht mehr gültige Generation oder unzulässige Position. Ungültige Topic-Poll-Cursor starten am aktiven Anfang. |
-| `unauthorized` | Client-Identität fehlt oder ist ungültig. |
-| `forbidden` | Topic-Operation ist nicht erlaubt. |
-| `resource_exhausted` | Ressourcenlimit verhindert die Operation. |
-| `security_storage_busy` | Security-Schreibqueue voll; keine Änderung des Sicherheitszustands. |
-| `security_storage_unavailable` | Security-Writer ausgefallen; Details zum RAM-/Speicherstand liefert die Admin-Diagnose. |
-| `rate_limited` | Client-/Quellenbudget erreicht; `retry_after_ms` gibt die Wartezeit an. |
-| `owner_unavailable` | Verantwortlicher Owner nicht erreichbar; keine lokale Ersatzfreigabe. |
-| `route_conflict` | Widersprüchliche Topic-Zuständigkeiten oder unzulässiger Pfad. |
-| `internal_error` | Interner Fehler ohne sensible Details. |
+| `invalid_frame` | Invalid JSON, field structure or expiration outside the policy. |
+| `unsupported_version` | The version is not supported. |
+| `unknown_type` | Type is not supported. |
+| `invalid_direction` | Type was sent in the wrong direction. |
+| `not_found` | Your own active message cannot be found. |
+| `invalid_cursor` | Producer list cursor invalid, incorrect scope, no longer valid generation or inadmissible position. |
+| `unauthorized` | Client identity is missing or invalid. |
+| `forbidden` | Topic operation is not allowed. |
+| `resource_exhausted` | Resource limit prevents the operation. |
+| `security_storage_busy` | Security writing queue full; no change in security status. |
+| `security_storage_unavailable` | Security writer failed; details about the RAM-/stored state provides the admin diagnosis. |
+| `rate_limited` | client or source budget is reached; `retry_after_ms` indicates the waiting time. |
+| `owner_unavailable` | Responsible owner unavailable; no local replacement release. |
+| `route_conflict` | Conflicting topical responsibilities or impermissible path. |
+| `internal_error` | Internal error without sensitive details. |
 
-## Implementiertes Protobuf-Format
+<a id="implementiertes-protobuf-format"></a>
 
-[Schema und Migration](protobuf.md) beschreiben binäre Protobuf-Frames mit oneof-Nachrichtenkörpern, Bytes-/Event-Payloads und die lesbare JSON-Darstellung für CLI/SDK. Die hier gezeigten JSON-Beispiele bleiben die lesbare Darstellung der CLI. Identität, ACL, Cursor, Ablauf und technische Statusregeln gelten für den Protobuf-Clienttransport und die interne lesbare Darstellung.
+## Implemented Protobuf format
+
+[Scheme and migration](protobuf.md) describe binary protobuf frames with oneof message bodies, Bytes-/Event-Payloads and the readable JSON representation for CLI/SDK. The JSON examples shown here remain the readable representation of the CLI. Identity, ACL, cursor, execution and technical status rules apply to the protobuf client transport and the internal readable representation.
 
 
-## Implementierter clientseitiger Schlüsselwechsel
+<a id="implementierter-clientseitiger-schlüsselwechsel"></a>
 
-Auf einer bereits authentifizierten WSS- oder lokalen Unix-Socket-Verbindung gilt:
+## Implemented client-side key change
 
-| Request | Response | Felder zusätzlich zu Version/Typ und Command-/Request-ID |
+On an already authenticated WSS or local Unix socket connection, the following applies:
+
+| Request | Response | Fields in addition to Version/Type and Command-/Request-ID |
 | --- | --- | --- |
 | `rotation_start` | `rotation_offer` | Antwort: `rotation_id`, `expires_at`, `new_valid_until`. |
 | `rotation_confirm` | `rotation_ready` | Request: `rotation_id`, `shared_secret`; Antwort: `rotation_id`, `nonce`, `challenge`, `aad`, `expires_at`, `new_valid_until`. |
 | `rotation_commit` | `rotation_complete` | Request: `rotation_id`, `encrypted_public_key`, `signature`; Antwort: `rotation_id`, `client_id`, `token_id`, `valid_until`. |
 
-Der Client ist hier Initiator und erzeugt nach dem Offer das 32-Byte-Shared-Secret. Es wird kanonisch Base64-kodiert im Confirm übertragen und vom Service nicht zurückgesendet. Der Service liefert eine zufällige 12-Byte-AES-GCM-Nonce und eine eigene 32-Byte-Proof-Challenge. Der neue Public Key wird mit AES-256-GCM verschlüsselt; der Authentifizierungs-Tag wird an den Ciphertext angehängt, dann Base64-kodiert.
+The client here is the initiator and generates the 32-byte shared secret after the offer. It is
+transmitted canonically base64-encoded in the confirm and is not returned by the service. The
+service provides a random 12-byte AES - GCM -nonce and its own 32-byte proof challenge. The new
+public key is encrypted with AES -256- GCM; the authentication tag is attached to the
+ciphertext, then base64-encoded.
 
-AAD ist das kompakte UTF-8-JSON-Tupel `["mynofy-rotation-v1", owner_id, stable_client_id, rotation_id, old_token_id, new_valid_until_unix_ms]`. Clients konstruieren dieses Tupel selbst und vergleichen die vom Service zur Orientierung Base64-kodiert zurückgegebenen Bytes. Die Proof-Signatur mit dem neuen privaten Schlüssel gilt über `ASCII("mynofy-rotation-proof-v1") || 0x00 || aad_raw || new_public_key_raw_32 || challenge_raw_32`.
+AAD is the compact UTF -8- JSON -Tupel `["mynofy-rotation-v1", owner_id, stable_client_id,
+rotation_id, old_token_id, new_valid_until_unix_ms]` Clients construct this tuple themselves and
+compare the bytes returned by the service in base64-encoded form for orientation.
+`ASCII("mynofy-rotation-proof-v1") || 0x00 || aad_raw || new_public_key_raw_32 ||
+challenge_raw_32`.
 
-Fehlgeschlagener Commit verbraucht den passenden Vorgang samt Secret/Nonce. Ein neuer Versuch muss mit neuer Wechsel-ID beginnen. Fristende und Widerruf verhindern einen noch offenen Commit; ein abgeschlossener Commit wird nicht zurückgerollt. Die neue Gültigkeit folgt der Owner-CFG (`key_validity_seconds`). Serverinitiierte Offers sind nicht vorgesehen; die Rotation initiiert der Client. `rotation_in_progress` und `rotation_invalid` ergänzen die Fehlercodes. Auch `security_storage_busy`/`security_storage_unavailable` können den Commit verhindern; ein bereits konsumierter Vorgang muss neu begonnen werden. Ein erfolgreicher Commit wirkt sofort im RAM und wird asynchron im [Security-Journal](security-journal.md) gespeichert; die Antwort ist keine Datenträgerbestätigung. [Fehlerbeispiele](../protocol/v1/security-storage-examples.json).
+Failed commit consumes the appropriate process together with Secret/Nonce. A new attempt must
+start with a new change ID. Deadline and revocation prevent a still open commit; a completed
+commit is not rolled back. The new validity follows the owner-CFG (`key_validity_seconds` ).
+Server-initiated offers are not provided; the rotation is initiated by the client.
+`rotation_in_progress` and `rotation_invalid` supplement the error codes.
+`security_storage_busy` / `security_storage_unavailable` can also prevent the commit; an already
+consumed process must be restarted. A successful commit applies immediately in RAM. With the default
+`security_storage.sync: true`, the success response confirms journal
+synchronization. [Security journal](security-journal.md) ·
+[Error examples](../protocol/v1/security-storage-examples.json)
 
-Der lokale Prototyp vergibt Message-IDs als achtstellige ASCII-Zähler aus dem Alphabet `0–9A–Za–z`, Owner-lokal aus reservierten Bereichen. Sie sind innerhalb des aktiven Owner-Bestands eindeutig, können nach Ablauf und Umlauf sowie nach Neustart wiederverwendet werden und sind keine Autorisierungsnachweise. Anwendungen dürfen aus ihrer Reihenfolge keinen Poll-Fortschritt ableiten. Delivery-ID und Cursor besitzen weiterhin eigene Formate.
+The local prototype assigns message IDs as eight-digit ASCII counters from the alphabet
+`0–9A–Za–z`, owner-local from reserved areas. They are unique within the active owner inventory,
+can be reused after expiration, circulation and restart, and are not proofs of authorization.
+Applications must not derive poll progress from their order. Poll and producer-list cursors have separate formats.
 
-## Ereigniskatalog abrufen
+## event catalog abrufen
 
-`get_catalog` ist eine authentifizierte Metadatenabfrage mit `id`, `name` und `catalog_version` (numerisch). Der Owner antwortet mit `catalog`, `request_id` und der vollständigen Definition unter `catalog`. Aktuell verfügbar: `mynofy`, Version `1` (Entwurf). Kein Topic-Recht erforderlich; Client-Rate-Limit und Antwortbudget gelten unverändert. Unbekannter Name/Version: `not_found`. Server-Frames vom Typ `catalog` sind keine Client-Commands. Dies ist weder ein automatischer Handshake-Abgleich noch eine Registrierung eigener Kataloge.
+`get_catalog` is an authenticated metadata query with `id`, `name` and `catalog_version` (numerical). The owner responds with `catalog`, `request_id` and the full definition under `catalog`. Currently available: `mynofy`, version `1` (draft). No topic right is required; client rate limit and response budget are unchanged. Unknown Name/Version: `not_found`. Server frames of type `catalog` are not client commands. This is neither an automatic handshake comparison nor a registration of own catalogs.
 
-Die Definition einschließlich Parametertypen ist im [Ereigniskatalog](event-catalog.md#vom-client-abrufen) beschrieben. Die dortigen 4096 Byte begrenzen freie Payloads; sie begrenzen nicht diese Metadatenantwort. Bisherige JSON-Payloads werden kompatibel als JSON-Bytes gespeichert und unterliegen ebenfalls dem 4096-Byte-Limit.
+The definition including parameter types is described in the
+[event catalog](event-catalog.md#vom-client-abrufen). The 4096 bytes there limit free
+payloads; they do not limit this metadata response. Previous JSON payloads are stored compatible
+as JSON bytes and are also subject to the 4096 byte limit.

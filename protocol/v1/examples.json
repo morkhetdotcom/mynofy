@@ -46,7 +46,7 @@
       "version": 1,
       "type": "result",
       "request_id": "codex-pub",
-      "message_id": "msg-1",
+      "message_id": "00000001",
       "expires": {
         "time": "2026-12-01T12:00:00Z"
       }
@@ -73,7 +73,7 @@
       "items": [
         {
           "message": {
-            "id": "msg-1",
+            "id": "00000001",
             "topic": "reviews/run-42/request",
             "payload": {
               "task": "review",
@@ -101,7 +101,7 @@
       "topic": "reviews/run-42/result",
       "payload": {
         "decision": "approved",
-        "summary": "Keine Einwände zum geprüften Commit."
+        "summary": "No findings for the reviewed commit."
       },
       "expires": {
         "time": "2026-12-01T12:00:00Z"
@@ -115,23 +115,10 @@
       "version": 1,
       "type": "result",
       "request_id": "claude-pub",
-      "message_id": "msg-2",
+      "message_id": "00000002",
       "expires": {
         "time": "2026-12-01T12:00:00Z"
       }
-    }
-  },
-  {
-    "connection": "claude",
-    "direction": "client_to_service"
-  },
-  {
-    "connection": "claude",
-    "direction": "service_to_client",
-    "frame": {
-      "version": 1,
-      "type": "result",
-      "request_id": "claude-ack"
     }
   },
   {
@@ -155,34 +142,21 @@
       "items": [
         {
           "message": {
-            "id": "msg-2",
+            "id": "00000002",
             "topic": "reviews/run-42/result",
             "payload": {
               "decision": "approved",
-              "summary": "Keine Einwände zum geprüften Commit."
+              "summary": "No findings for the reviewed commit."
             },
             "expires": {
               "time": "2026-12-01T12:00:00Z"
             },
-            "producer_id": "client:ed25519:AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="
+            "producer_id": "client:ed25519:AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI="
           }
         }
       ],
       "next_cursor": "00000001",
       "has_more": false
-    }
-  },
-  {
-    "connection": "codex",
-    "direction": "client_to_service"
-  },
-  {
-    "connection": "codex",
-    "direction": "service_to_client",
-    "frame": {
-      "version": 1,
-      "type": "result",
-      "request_id": "codex-ack"
     }
   },
   {
@@ -205,7 +179,7 @@
       "request_id": "codex-list",
       "items": [
         {
-          "id": "msg-1",
+          "id": "00000001",
           "topic": "reviews/run-42/request",
           "created_at": "2026-11-11T10:00:00Z",
           "expires": {
@@ -222,7 +196,7 @@
       "version": 1,
       "type": "get_message",
       "id": "codex-status",
-      "message_id": "msg-1"
+      "message_id": "00000001"
     }
   },
   {
@@ -233,7 +207,7 @@
       "type": "message_status",
       "request_id": "codex-status",
       "message": {
-        "id": "msg-1",
+        "id": "00000001",
         "topic": "reviews/run-42/request",
         "payload": {
           "task": "review",

@@ -2,16 +2,9 @@
 
 **A lightweight communication layer for people, software, devices, and AI agents.**
 
-Coordinating independent tools usually means custom integrations, scattered status
-updates, and no shared communication channel. mynofy provides one lightweight,
-self-hosted message and notification service for people, software, devices, and AI
-agents. Publish short messages to topics and let participants poll them when they
-are ready, on one machine or across networks. Written in Rust, it keeps the core
-small and uses a compact Protobuf protocol.
+Coordinating independent tools usually means custom integrations, scattered status updates, and no shared communication channel. mynofy provides one lightweight, self-hosted message and notification service for people, software, devices, and AI agents. Publish short messages to topics and let participants poll them when they are ready, on one machine or across networks. Written in Rust, it keeps the core small and uses a compact Protobuf protocol.
 
-**Compact status messages.** Typed catalog events express status without repeating
-field names or status strings. A complete status publish is **37 bytes**, compared
-with **176 bytes** in its JSON representation:
+**Compact status messages.** Typed catalog events express status without repeating field names or status strings. A complete status publish is **37 bytes**, compared with **176 bytes** in its JSON representation:
 
 | Status content | Protobuf message | JSON representation | Size reduction |
 | --- | ---: | ---: | ---: |
@@ -29,11 +22,7 @@ Application-message sizes; transport headers excluded.
 | Active-event RSS growth | **103 bytes/event** | 20,000 parameterless events, including indexes and allocator effects |
 | Active process RSS | **7.90 MiB** | 20,000 parameterless events; core plus benchmark driver |
 
-Throughput is the median of five optimized Core runs on 26 November 2026
-(Linux x86-64, AMD Ryzen 5 5500U, Rust 1.100.0). Memory figures are from the
-23 November campaign on the same host with Rust 1.99.1. Core timings exclude
-network, TLS, disk I/O and request preparation. RSS growth is relative to the
-initialized benchmark baseline, and active RSS includes the driver. Reproduce with `cargo bench --locked -p mynofy-server --bench core -- --messages 100000 --payload-bytes 256`.
+Throughput is the median of five optimized Core runs on 26 November 2026 (Linux x86-64, AMD Ryzen 5 5500U, Rust 1.100.0). Memory figures are from the 23 November campaign on the same host with Rust 1.99.1. Core timings exclude network, TLS, disk I/O and request preparation. RSS growth is relative to the initialized benchmark baseline, and active RSS includes the driver. Reproduce with `cargo bench --locked -p mynofy-server --bench core -- --messages 100000 --payload-bytes 256`.
 
 [Get started](docs/getting-started.md) · [Networking](docs/networking.md) ·
 [Security](docs/security.md) · [Examples](examples/code-review/README.md) ·
@@ -41,64 +30,50 @@ initialized benchmark baseline, and active RSS includes the driver. Reproduce wi
 
 ## Networking
 
-A service can own topics, proxy connections to other topic owners, or do both.
-Connect locally, across a LAN, or through publicly reachable services.
+A service can own topics, proxy connections to other topic owners, or do both. Connect locally, across a LAN, or through publicly reachable services.
 
 ### Local
 
-Connect processes on one machine through a local service. Unix sockets on Linux
-and macOS provide local access without setting up network certificates.
+Connect processes on one machine through a local service. Unix sockets on Linux and macOS provide local access without setting up network certificates.
 
 ```text
 Your machine
 `-- mynofy: local topic owner
     |-- Local topics
     |-- CLI / shell tools      [Unix socket]
-    |-- Applications / devices [Unix socket]
-    `-- AI agents              [Unix socket, via CLI or MCP]
+    |-- Applications / devices [Unix socket] `-- AI agents              [Unix socket, via CLI or MCP]
 ```
 
 ### Local + LAN
 
-Keep local topics on each machine and reach shared topics through a LAN service.
-A local instance can proxy remote connections; clients can also connect directly
-to the LAN service over WSS (WebSocket over TLS).
+Keep local topics on each machine and reach shared topics through a LAN service. A local instance can proxy remote connections; clients can also connect directly to the LAN service over WSS (WebSocket over TLS).
 
 ```text
 Your machine
 `-- mynofy: local owner + proxy
     |-- Local topics
-    |-- Local clients                  [Unix socket]
-    `-- LAN machine                    [mTLS/WSS service link]
+    |-- Local clients                  [Unix socket] `-- LAN machine                    [mTLS/WSS service link]
         `-- mynofy: LAN topic owner
-            |-- Shared LAN topics
-            `-- Other LAN clients      [WSS]
+            |-- Shared LAN topics `-- Other LAN clients      [WSS]
 ```
 
 ### Local + LAN + Public
 
-Extend the same setup through a LAN gateway to a publicly reachable service.
-Each service can own its own topics while forwarding connections to other owners.
-Public reachability still requires authentication and explicit topic permissions.
+Extend the same setup through a LAN gateway to a publicly reachable service. Each service can own its own topics while forwarding connections to other owners. Public reachability still requires authentication and explicit topic permissions.
 
 ```text
 Your machine
 `-- mynofy: local owner + proxy
     |-- Local topics
-    |-- Local clients                      [Unix socket]
-    `-- LAN machine                        [mTLS/WSS service link]
+    |-- Local clients                      [Unix socket] `-- LAN machine                        [mTLS/WSS service link]
         `-- mynofy: LAN owner + gateway
             |-- Shared LAN topics
-            |-- LAN clients                [WSS]
-            `-- Public server              [mTLS/WSS service link]
+            |-- LAN clients                [WSS] `-- Public server              [mTLS/WSS service link]
                 `-- mynofy: remote topic owner
-                    |-- Remote topics
-                    `-- Remote clients     [WSS]
+                    |-- Remote topics `-- Remote clients     [WSS]
 ```
 
-Each topic owner enforces its own access permissions. Service links use mutual
-TLS; proxied clients authenticate at the final owner. Local topics remain usable
-when an upstream is unavailable.
+Each topic owner enforces its own access permissions. Service links use mutual TLS; proxied clients authenticate at the final owner. Local topics remain usable when an upstream is unavailable.
 
 [Transport layers, configuration, limits, and a three-service setup →](docs/networking.md)
 
@@ -116,8 +91,7 @@ Your applications and agents define the workflow; mynofy provides communication.
 
 ## Run it locally
 
-Use a normal, unprivileged account on Linux or macOS. Install Rust **1.88 or
-newer**, a C compiler, CMake, and Python 3 for the setup script.
+Use a normal, unprivileged account on Linux or macOS. Install Rust **1.88 or newer**, a C compiler, CMake, and Python 3 for the setup script.
 
 ```sh
 git clone https://github.com/morkhetdotcom/mynofy.git
@@ -145,8 +119,11 @@ Enter one JSON request per line:
 {"version":1,"type":"poll","id":"read-1","topic":"local/events","limit":20}
 ```
 
-The CLI accepts JSON and communicates with the service over Protobuf. Publish
-returns a message ID; poll returns messages and a cursor for the next request.
+The CLI accepts JSON and communicates with the service over Protobuf. Publish returns a message ID; poll returns messages and a cursor for the next request.
+
+For agents, [MCP polling and local checkpoints](docs/mcp.md#client-side-polling-and-checkpoints)
+provide a 30-second default polling interval and save the cursor with optional
+workflow state after explicit confirmation.
 
 [Full quick start, WSS, and the Bash client →](docs/getting-started.md)
 
@@ -166,47 +143,30 @@ returns a message ID; poll returns messages and a cursor for the next request.
 | Security durability | Security changes receive durable journal confirmation by default; `security_storage.sync: false` opts into asynchronous confirmation. |
 | Optional content encryption | Encrypt per-topic snapshots using a shared startup secret. |
 
-Cryptography and TLS use established libraries. Security state is stored separately
-from message content.
+Cryptography and TLS use established libraries. Security state is stored separately from message content.
 
 [Trust boundaries, persistence, key rotation, and disclosure policy →](docs/security.md)
 
 ## Example: coder and reviewer
 
-In the [code-review example](examples/code-review/README.md), a human authorizes a
-small task, an operator coordinates it, Codex writes a function, and Claude reviews
-it. The agents first agree on a protocol revision, actor IDs, ticket references,
-and event meanings. They then report routine state with typed catalog events;
-free text carries the original instruction, protocol agreement, and useful detail.
+In the [code-review example](examples/code-review/README.md), a human authorizes a small task, an operator coordinates it, Codex writes a function, and Claude reviews it. The agents first agree on a protocol revision, actor IDs, ticket references, and event meanings. They then report routine state with typed catalog events; free text carries the original instruction, protocol agreement, and useful detail.
 
-Includes English role prompts, runnable commands, and a scripted protocol demo
-that requires no AI accounts.
+Includes English role prompts, runnable commands, and a scripted protocol demo that requires no AI accounts.
 
 ## Guarantees that matter
 
-- A successful publish means the owner accepted the message into RAM. It does not
-  promise a disk commit, delivery to every participant, or completed work.
-- An interrupted publish can have an unknown outcome. Request IDs are correlation
-  values, not idempotency keys. Reconcile before retrying external effects.
-- Message expiry is time-based. The owner supplies the topic default when the
-  producer does not specify a time. Expired content is not an audit log.
-- Content is loaded completely at startup. Security changes apply in RAM
-  immediately; their success confirmations wait for disk synchronization by default.
-  Setting `security_storage.sync: false` allows asynchronous confirmation and can lose
-  unsynced changes on a crash. There is no exactly-once execution, replication, or offline forwarding.
+- A successful publish means the owner accepted the message into RAM. It does not promise a disk commit, delivery to every participant, or completed work.
+- An interrupted publish can have an unknown outcome. Request IDs are correlation values, not idempotency keys. Reconcile before retrying external effects.
+- Message expiry is time-based. The owner supplies the topic default when the producer does not specify a time. Expired content is not an audit log.
+- Content is loaded completely at startup. Security changes apply in RAM immediately; their success confirmations wait for disk synchronization by default. Setting `security_storage.sync: false` allows asynchronous confirmation and can lose unsynced changes on a crash. There is no exactly-once execution, replication, or offline forwarding.
 
-REST, MQTT/Kafka/SQS connectors, and custom runtime catalogs are future options,
-not current features.
+REST, MQTT/Kafka/SQS connectors, and custom runtime catalogs are future options, not current features.
 
 ## Development and contributions
 
-Public pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the
-review and integration process, and [SECURITY.md](SECURITY.md) for security reports.
-The public repository contains released source snapshots without CI workflows;
-maintainers develop and validate changes in `mynofy-private`.
+Public pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the review and integration process, and [SECURITY.md](SECURITY.md) for security reports. The public repository contains released source snapshots without CI workflows; maintainers develop and validate changes in `mynofy-private`.
 
-**All CI and release jobs run exclusively on self-hosted runners.** Validated
-source snapshots are published automatically from private releases.
+**All CI and release jobs run exclusively on self-hosted runners.** Validated source snapshots are published automatically from private releases.
 
 ```sh
 cargo test --locked --workspace
@@ -219,5 +179,4 @@ cargo fmt --all -- --check
 
 ## License
 
-Licensed under the [MIT License](LICENSE). Third-party dependencies retain their
-own licenses.
+Licensed under the [MIT License](LICENSE). Third-party dependencies retain their own licenses.

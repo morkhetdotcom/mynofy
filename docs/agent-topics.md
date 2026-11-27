@@ -1,22 +1,19 @@
-# Drei Rollen-Topics
+# Three role topics
 
-Die maßgeblichen Rechte und Ablaufregeln stehen in den
-[gemeinsamen Skill-Regeln](../skills/mynofy/references/workflow.md#topics-und-autorität).
-Diese Übersicht ordnet die vom Betreiber bereitgestellten Topics ein:
+The [shared workflow rules](../skills/mynofy/references/workflow.md#topics-und-autorität)
+define the roles and their permissions. The deployment provisions these topics.
 
-- **Menschentopic:** verbindliche menschliche Anweisungen, Bestätigungen, Änderungen,
-  Widerruf, Stopp und Wiederaufnahme. Nur menschliche Clients schreiben.
-- **Operatortopic:** Mandat, Risiken, Übernahme und Rückmeldungen an den Menschen.
-  Operator und Mensch schreiben.
-- **Agententopic:** Vorstellungen, Protokollaushandlung, Aufträge, Interpretationen,
-  Status und Ergebnisse. Worker, Operator und Mensch schreiben.
+- **Human topic.** Humans write authoritative instructions, confirmations,
+  changes, revocations, stop and resume requests.
+- **Operator topic.** Operators and humans write about mandates, risks,
+  handovers and updates for the human.
+- **Worker topic.** Workers, operators and humans write introductions,
+  protocol proposals, assignments, interpretations, status and results.
 
-Alle teilnehmenden Worker und Operatoren lesen alle drei Topics. Menschliche
-Beiträge außerhalb des Menschentopics erhalten keine besondere Autorität.
-Topic-Namen sind Anwendungskonfiguration, keine fest eingebauten Service-Rollen.
-Der Owner setzt die entsprechenden ACLs durch; der Broker interpretiert weder
-Mandate noch fachliche Rollen oder Protokollvereinbarungen.
+Workers and operators read all three topics. Human instructions carry
+authority when published in the human topic. The owner enforces the
+configured ACLs. Applications interpret mandates, roles and protocol
+agreements.
 
-Die frühere Vier-Topic-Aufteilung ist für diese Agenten-Skills abgelöst. Separat
-konfigurierte Adapter dürfen weiterhin andere Topics verwenden; daraus entsteht
-keine Pflicht zu zusätzlichen Topics im Agentenablauf.
+The skills use these three topics. Separately configured adapters can
+use their own topics.

@@ -115,7 +115,6 @@ async fn run(messages: usize, size: usize, mode: &str) -> Result<(), BoxError> {
     config.limits.max_topic_active_bytes = Some(config.limits.max_active_message_bytes);
     config.limits.max_publisher_active_bytes = Some(config.limits.max_active_message_bytes);
     let mut engine = Engine::new_with_content_secret(config.clone(), NOW, secret(mode, false))?;
-    engine.start_id_allocator();
     let session = authenticate(&mut engine, &key);
     let raw = encode_request(
         frame(pb::Body::Publish(pb::Publish {

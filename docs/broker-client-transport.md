@@ -1,7 +1,7 @@
 # Broker client transport
 
 Broker application commands now use one Protobuf frame per binary WebSocket
-message. This applies to authentication, publish/poll, ACK/NACK, producer queries,
+message. This applies to authentication, publish/poll, producer queries,
 permissions, catalog retrieval and key rotation over WSS, local Unix sockets and
 the inner owner connection of a proxy tunnel.
 

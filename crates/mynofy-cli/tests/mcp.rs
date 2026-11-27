@@ -60,16 +60,25 @@ struct Mcp {
 }
 impl Mcp {
     fn start(f: &Fixture) -> Self {
-        let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_mynofy"))
-            .args([
-                "mcp",
-                "--socket",
-                f.socket.to_str().unwrap(),
-                "--key",
-                f.key.to_str().unwrap(),
-                "--owner",
-                "local",
-            ])
+        Self::start_with_checkpoint(f, false)
+    }
+    fn start_with_checkpoint(f: &Fixture, checkpoint: bool) -> Self {
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_mynofy"));
+        command.args([
+            "mcp",
+            "--socket",
+            f.socket.to_str().unwrap(),
+            "--key",
+            f.key.to_str().unwrap(),
+            "--owner",
+            "local",
+        ]);
+        if checkpoint {
+            command
+                .arg("--checkpoint")
+                .arg(f.dir.join("checkpoint.json"));
+        }
+        let mut child = command
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -152,7 +161,7 @@ async fn mcp_cli_exposes_existing_client_operations_and_preserves_poll_and_acl_s
     let mut m = Mcp::start(&f);
     m.initialize().await;
     let tools = m.request(2, "tools/list", json!({}), false).await;
-    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 7);
+    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 10);
     let info = m.tool(3, "mynofy_connection_info", json!({}), false).await;
     assert_eq!(info["result"]["structuredContent"]["owner_id"], "local");
     assert_eq!(info["result"]["structuredContent"]["restart_counter"], 0);
@@ -304,7 +313,7 @@ async fn modern_mcp_is_discoverable_without_a_live_broker_and_does_not_inherit_m
         json!([MODERN, "2025-11-25"])
     );
     let tools = m.request(2, "tools/list", json!({}), true).await;
-    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 7);
+    assert_eq!(tools["result"]["tools"].as_array().unwrap().len(), 10);
     let failed = m.tool(3, "mynofy_connection_info", json!({}), true).await;
     assert_eq!(failed["result"]["isError"], true);
     assert_eq!(
@@ -384,9 +393,7 @@ async fn lost_publish_response_is_reported_uncertain_and_never_replayed_on_recon
     let f = fixture();
     let listener = tokio::net::UnixListener::bind(&f.socket).unwrap();
     std::fs::set_permissions(&f.socket, std::fs::Permissions::from_mode(0o600)).unwrap();
-    let mut engine =
-        mynofy_server::engine::Engine::new(f.config.clone(), transport::now_ms()).unwrap();
-    engine.start_id_allocator();
+    let engine = mynofy_server::engine::Engine::new(f.config.clone(), transport::now_ms()).unwrap();
     let engine = std::sync::Arc::new(std::sync::Mutex::new(engine));
     let state = engine.clone();
     let publications = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -626,4 +633,175 @@ async fn mcp_preserves_event_shaped_legacy_bytes() {
     );
     server.abort();
     let _ = server.await;
+}
+
+#[tokio::test]
+async fn managed_poll_commits_workflow_state_and_resumes_across_client_restarts() {
+    if support::under_unprivileged_identity(
+        "managed_poll_commits_workflow_state_and_resumes_across_client_restarts",
+    ) {
+        return;
+    }
+    let f = fixture();
+    let bound = transport::bind_unix(&f.socket).unwrap();
+    let cfg = f.config.clone();
+    let server = tokio::spawn(async move { support::run_unix_fixture(bound, cfg).await });
+    let topic = "local/events";
+    let mut plain = Mcp::start(&f);
+    plain.initialize().await;
+    let disabled = plain
+        .tool(2, "mynofy_poll_next", json!({"topic":topic}), false)
+        .await;
+    assert_eq!(
+        disabled["result"]["structuredContent"]["code"],
+        "checkpoint_disabled"
+    );
+    plain.finish().await;
+    let mut m = Mcp::start_with_checkpoint(&f, true);
+    m.initialize().await;
+    for id in [2, 3] {
+        let sent = m
+            .tool(
+                id,
+                "mynofy_publish",
+                json!({"topic":topic,"payload":"review"}),
+                false,
+            )
+            .await;
+        assert_eq!(sent["result"]["isError"], false, "{sent}");
+    }
+    let first = m
+        .tool(
+            4,
+            "mynofy_poll_next",
+            json!({"topic":topic,"limit":1}),
+            false,
+        )
+        .await;
+    let page = &first["result"]["structuredContent"];
+    assert_eq!(page["response"]["has_more"], true, "{first}");
+    let receipt = page["checkpoint_receipt"].clone();
+    let cursor = page["response"]["next_cursor"].clone();
+    let deferred = m
+        .tool(5, "mynofy_poll_next", json!({"topic":topic}), false)
+        .await;
+    let data = &deferred["result"]["structuredContent"];
+    assert_eq!(data["type"], "poll_deferred", "{deferred}");
+    assert!(
+        data["retry_after_ms"]
+            .as_u64()
+            .is_some_and(|n| n > 0 && n <= 30_000)
+    );
+    let wrong_topic = m
+        .tool(
+            6,
+            "mynofy_checkpoint_commit",
+            json!({"topic":"human/messages","receipt":receipt}),
+            false,
+        )
+        .await;
+    assert_eq!(
+        wrong_topic["result"]["structuredContent"]["code"],
+        "stale_checkpoint_receipt"
+    );
+    assert!(!f.dir.join("checkpoint.json").exists());
+
+    let commit = m
+        .tool(
+            7,
+            "mynofy_checkpoint_commit",
+            json!({"topic":topic,"receipt":receipt,"state":{"ticket":"TASK-001"}}),
+            false,
+        )
+        .await;
+    assert_eq!(
+        commit["result"]["structuredContent"]["cursor"], cursor,
+        "{commit}"
+    );
+    let next = m
+        .tool(8, "mynofy_poll_next", json!({"topic":topic}), false)
+        .await;
+    let next = &next["result"]["structuredContent"];
+    assert_eq!(next["response"]["items"].as_array().unwrap().len(), 1);
+    assert_ne!(next["response"]["next_cursor"], cursor);
+    let discarded_receipt = next["checkpoint_receipt"].clone();
+    m.finish().await;
+
+    let mut m = Mcp::start_with_checkpoint(&f, true);
+    m.initialize().await;
+    let loaded = m
+        .tool(2, "mynofy_checkpoint_status", json!({"topic":topic}), false)
+        .await;
+    let saved = &loaded["result"]["structuredContent"];
+    assert_eq!(saved["cursor"], cursor, "{loaded}");
+    assert_eq!(saved["state"], json!({"ticket":"TASK-001"}));
+    let stale = m
+        .tool(
+            3,
+            "mynofy_checkpoint_commit",
+            json!({"topic":topic,"receipt":discarded_receipt}),
+            false,
+        )
+        .await;
+    assert_eq!(
+        stale["result"]["structuredContent"]["code"],
+        "stale_checkpoint_receipt"
+    );
+    let replay = m
+        .tool(4, "mynofy_poll_next", json!({"topic":topic}), false)
+        .await;
+    let replay = &replay["result"]["structuredContent"];
+    let receipt_from_old_boot = replay["checkpoint_receipt"].clone();
+    assert_eq!(replay["response"]["items"], next["response"]["items"]);
+    assert_eq!(
+        replay["response"]["next_cursor"],
+        next["response"]["next_cursor"]
+    );
+    server.abort();
+    assert!(server.await.unwrap_err().is_cancelled());
+
+    let blocked = m
+        .tool(
+            5,
+            "mynofy_checkpoint_commit",
+            json!({"topic":topic,"receipt":receipt_from_old_boot,"state":{"ticket":"wrong"}}),
+            false,
+        )
+        .await;
+    assert_eq!(
+        blocked["result"]["structuredContent"]["code"],
+        "transport_error"
+    );
+    m.finish().await;
+
+    let mut m = Mcp::start_with_checkpoint(&f, true);
+    m.initialize().await;
+    let offline = m
+        .tool(2, "mynofy_checkpoint_status", json!({"topic":topic}), false)
+        .await;
+    let offline = &offline["result"]["structuredContent"];
+    assert_eq!(offline["owner_context"], "unchecked");
+    assert_eq!(offline["committed_cursor"], cursor);
+    assert_eq!(offline["state"], json!({"ticket":"TASK-001"}));
+
+    let bound = transport::bind_unix(&f.socket).unwrap();
+    let cfg = f.config.clone();
+    let server = tokio::spawn(async move { support::run_unix_fixture(bound, cfg).await });
+    let info = m.tool(3, "mynofy_connection_info", json!({}), false).await;
+    let info = &info["result"]["structuredContent"];
+    assert_eq!(info["response"]["owner_context"], "authenticated_now");
+    let reset = m
+        .tool(4, "mynofy_checkpoint_status", json!({"topic":topic}), false)
+        .await;
+    let reset = &reset["result"]["structuredContent"];
+    assert!(reset["cursor"].is_null());
+    assert_eq!(reset["committed_cursor"], cursor);
+    assert_ne!(
+        reset["committed_owner"]["boot_id"],
+        reset["observed_owner"]["boot_id"]
+    );
+    assert_eq!(reset["observed_owner"]["boot_id"], info["boot_id"]);
+    assert_eq!(reset["state"], json!({"ticket":"TASK-001"}));
+    m.finish().await;
+    server.abort();
 }

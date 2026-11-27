@@ -57,10 +57,9 @@ async fn run(
         .unwrap()
         .default_ttl_seconds;
     let mut engine = Engine::new(config, NOW)?;
-    engine.start_id_allocator();
     let session = authenticate(&mut engine, &key);
     let mut output = (output_mode == "direct").then(|| {
-        mynofy_server::output::ResponseBuffer::new(engine.config.limits.max_response_bytes)
+        mynofy_server::output::ResponseBuffer::new(engine.config().limits.max_response_bytes)
     });
     let payload = if kind.starts_with("event") {
         Payload::event(Event {
@@ -122,7 +121,7 @@ async fn run(
             output.as_mut(),
         )
         .check_result();
-        // Model the listener yielding to the runtime; allow bounded RID refill.
+        // Preserve the benchmark driver's existing pacing between batches.
         if i % 256 == 255 {
             tokio::task::yield_now().await;
         }

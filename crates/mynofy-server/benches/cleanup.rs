@@ -63,12 +63,11 @@ async fn run(messages: usize, clients: usize) -> Result<(), BoxError> {
     cfg.limits.max_topic_active_bytes = Some(cfg.limits.max_active_message_bytes);
     cfg.limits.max_publisher_active_bytes = Some(cfg.limits.max_active_message_bytes);
     let mut engine = Engine::new(cfg, NOW)?;
-    engine.start_id_allocator();
     let sessions: Vec<_> = keys
         .iter()
         .map(|key| authenticate(&mut engine, key))
         .collect();
-    let mut output = ResponseBuffer::new(engine.config.limits.max_response_bytes);
+    let mut output = ResponseBuffer::new(engine.config().limits.max_response_bytes);
     let payload = Payload::event(Event {
         catalog: 1,
         catalog_version: 1,

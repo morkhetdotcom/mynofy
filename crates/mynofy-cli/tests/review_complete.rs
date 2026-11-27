@@ -46,7 +46,7 @@ mod fixtures {
         let nonce = crypto::decode(h["nonce"].as_str().unwrap()).unwrap();
         let sig = crypto::sign(
             &key,
-            &crypto::auth_bytes(&nonce, &public, &e.config.service.id),
+            &crypto::auth_bytes(&nonce, &public, &e.config().service.id),
         )
         .unwrap();
         assert_eq!(
@@ -76,7 +76,7 @@ mod transport_tests {
     #[tokio::test]
     async fn rotation_cancels_other_old_key_session_output() {
         let (e, key, _) = setup();
-        let mut cfg = e.config.clone();
+        let mut cfg = e.config().clone();
         drop(e);
         let directory =
             std::env::temp_dir().join(format!("mynofy-review3-rotation-{}", std::process::id()));
@@ -191,7 +191,7 @@ mod transport_tests {
     #[tokio::test]
     async fn expiry_cancels_blocked_output() {
         let (e, key, _) = setup();
-        let mut cfg = e.config.clone();
+        let mut cfg = e.config().clone();
         drop(e);
         let directory =
             std::env::temp_dir().join(format!("mynofy-review3-expiry-{}", std::process::id()));
@@ -308,7 +308,7 @@ mod snapshot_tests {
     #[test]
     fn snapshot_growth_is_rejected_before_mutation_and_capacity_is_reusable() {
         let (e, _, _) = setup();
-        let mut cfg = e.config.clone();
+        let mut cfg = e.config().clone();
         drop(e);
         let base = cfg.topics[0].clone();
         cfg.topics = (0..63)
@@ -401,7 +401,7 @@ mod snapshot_tests {
         assert_eq!(error.code, "security_snapshot_too_large");
         assert!(
             !engine
-                .config
+                .config()
                 .accepted_peers
                 .iter()
                 .any(|p| p.service_id == "extra2.test")
@@ -440,14 +440,14 @@ mod snapshot_tests {
         let restarted = Engine::new(baseline, 1_800_000_001_000).unwrap();
         assert!(
             restarted
-                .config
+                .config()
                 .accepted_peers
                 .iter()
                 .any(|p| p.service_id == "extra2.test")
         );
         assert!(
             !restarted
-                .config
+                .config()
                 .accepted_peers
                 .iter()
                 .any(|p| p.service_id == "extra.test")

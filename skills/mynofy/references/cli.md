@@ -1,39 +1,39 @@
-# CLI-Ersatzweg für den Entwurf
+<a id="cli-ersatzweg-für-den-entwurf"></a>
 
-Verwende diesen Weg ausschließlich, wenn keine MCP-Anbindung bereitgestellt ist,
-nicht zur automatischen Wiederholung fehlgeschlagener MCP-Aufrufe.
-Verwende ein bereitgestelltes `mynofy`-Binary. Diese Beispiele zeigen vorhandene
-Schnittstellen; tatsächliche Owner, Topic-Namen und Pfade kommen aus dem Auftrag.
-Private Schlüssel werden als Dateipfad angegeben, nicht im Topic veröffentlicht.
+# CLI -Replacement path for the design
 
-Direkt über einen geschützten lokalen Socket:
+Use this path only if no MCP link is provided, not to automatically repeat failed MCP calls. Use
+a provided `mynofy` binary. These examples show existing interfaces; actual owners, topic names,
+and paths come from the job. Private keys are specified as file path, not published in the
+topic.
+
+Directly via a protected local socket:
 
 ```sh
 mynofy client --socket /provided/mynofy.sock --key /provided/agent.pk8 --owner owner
 ```
 
-Direkt über TLS/WebSocket:
+Directly from TLS/WebSocket:
 
 ```sh
 mynofy client --url wss://provided-host:8092 --ca /provided/ca.crt --key /provided/agent.pk8 --owner owner
 ```
 
-Über einen bereitgestellten Einstiegspunkt zum Remote-Owner:
+From a provided entry point to the remote owner:
 
 ```sh
 mynofy client --url wss://provided-proxy:8090 --ca /provided/proxy-ca.crt --key /provided/agent.pk8 --owner owner --via-topic project/work --owner-ca /provided/owner-ca.crt
 ```
 
-Bei abweichendem Owner-Zertifikatsnamen `--owner-name` verwenden. Nach
-Schlüsselrotation kann `--client-id` die bereits bestehende stabile Identität
-angeben. Keine eigene oder ungeprüfte CA-/Owner-Zuordnung erfinden.
+For different owner certificate name `--owner-name` After the key rotation, it is possible to
+`--client-id` Indicate the already existing stable identity. CA-/Owner-mapping erfinden.
 
-Die CLI liest JSONL von stdin und liefert die jeweilige Antwort als JSONL auf
-stdout. Sie erzeugt keine Poll-Schleife und keine regelmäßigen Bekanntgaben von
-selbst. Ein ausführender Agent beziehungsweise ein passender Client-Treiber muss
-Intervalle und Fristen steuern; ein solcher Skill-Helfer ist noch nicht gebaut.
+The CLI reads JSONL from stdin and provides the respective answer as JSONL on stdout. It does
+not generate a poll loop and does not generate regular announcements by itself. An executive
+agent or a suitable client driver has to control intervals and deadlines; such a skill helper
+has not yet been built.
 
-Beispiele für einzelne Anfragen auf einer authentifizierten Verbindung:
+Examples of individual requests on an authenticated connection:
 
 ```json
 {"version":1,"type":"get_catalog","id":"catalog","name":"mynofy","catalog_version":1}
@@ -41,21 +41,18 @@ Beispiele für einzelne Anfragen auf einer authentifizierten Verbindung:
 {"version":1,"type":"poll","id":"poll","topic":"project/work","limit":20}
 ```
 
-Beim nächsten Poll desselben Topics den gelieferten `next_cursor` als `after`
-verwenden. `has_more` und Seiten-/Byte-Limits beachten. Cursor pro Owner und Topic
-getrennt halten. Menschen-, Operator- und Agententopic werden unabhängig gelesen,
-ohne gemeinsame atomare Reihenfolge.
+For the next poll of the same topic, use the delivered `next_cursor` as `after`. `has_more` and
+Seiten-/Byte-Limits. Keep the cursor separate per owner and topic. Human, operator and agent
+topics are read independently, without common atomic order.
 
 The broker has no ACK/NACK commands or delivery IDs. Publish acceptance, rejection and completion as separate messages using the negotiated application protocol. Store read progress locally; losing a cursor can replay active messages.
 
-Publish verwendet bestehende Payload-Varianten: bekannte typisierte Ereignisse
-oder freie Inhalte bis 4096 tatsächliche Bytes. Die CLI unterstützt eine
-JSON-Kompatibilitätsdarstellung; ein eigenes Ticket-/Nachrichten-Wireformat wird
-hier nicht neu definiert. Große Artefakte gehören nicht in die Nachricht.
+Publish uses existing payload variants: known typed events or free content up to 4096 actual
+bytes. CLI supports JSON compatibility representation; its own Ticket-/messages-wire format is
+not redefined here. Large artifacts do not belong in the message.
 
-`--progress FILE` speichert unter Unix Poll-Fortschritt und Owner-Neustartwissen.
-Es speichert keine vollständige Ticketbearbeitung, verhindert nicht allein doppelte
-Fachaktionen und ist kein globales Stoppregister. Nach bekanntem Owner-Neustart
-können noch aktive Nachrichten erneut gelesen werden. Der vorhandene Binary-Adapter
-bestätigt Trigger vor der Ausführung und ist kein Ersatz für einen dauerhaften
-Agenten-Arbeitsstand.
+`--progress FILE` stores under Unix Poll progress and owner reboot knowledge.
+It does not store complete ticket processing, does not only prevent duplicate trade promotions
+and is not a global stop register. After a known owner restart, active messages can still be
+read again. The existing binary adapter confirms triggers before execution and is not a
+substitute for permanent agent work.

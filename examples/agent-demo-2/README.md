@@ -1,89 +1,85 @@
-# Demo 2: Protokollaushandlung
+# Demo 2: protocol negotiation
 
-Wie Demo 1, aber mit eigenem Service, Schlüsseln und persistenten Topics unter
-`.local/agent-demo-2/`. Die erste Demo wird nicht verändert. Linux/macOS,
-Python 3, Rust und normaler OS-Benutzer; alle Clients unter derselben UID.
+Like Demo 1, but with its own service, keys and persistent topics under `.local/agent-demo-2/`.
+The first demo is not changed. Linux/macOS, Python 3, Rust and normal OS users; all clients
+under the same UID.
 
 ```sh
 # Einmalig:
 ./scripts/agent-demo-2.sh setup
-# Terminal 1, auch bei späterem Neustart:
+# Terminal 1, even if restarted later:
 ./scripts/agent-demo-2.sh start
 # Terminal 2:
 ./scripts/agent-demo-2.sh watch
-# Terminal 3, eine Nachricht pro Zeile:
+# Terminal 3, one message per line:
 ./scripts/agent-demo-2.sh human
 ```
 
-Die generierte Datei `.local/agent-demo-2/AGENT-COMMANDS.md` enthält die menschlichen
-Start-/Bestätigungsbefehle und alle Rollen. Gib stattdessen jeder der drei
-Agentensitzungen **ihre eigene vollständige Startdatei**:
+The generated `.local/agent-demo-2/AGENT-COMMANDS.md` file contains the human
+startup and confirmation commands and all roles. Instead, give each of the three agent sessions **their
+own full startup file**:
 
 - `.local/agent-demo-2/operator-START.md`
 - `.local/agent-demo-2/worker-1-START.md`
 - `.local/agent-demo-2/worker-2-START.md`
 
-Jede Datei enthält gemeinsamen Ablauf, eindeutige Rolle und passenden MCP-/CLI-
-Befehl. MCP vorher im Host bereitstellen; ohne MCP ist die vorhandene CLI zulässig.
-Generierte absolute Pfade gelten für die Setup-Umgebung. Wenn der Agent anders
-mountet, die Pfade in seinen Startdateien **vorher** passend zuordnen. Keine
-Schlüssel anderer Rollen an eine Sitzung geben.
+Each file contains common expiration, unique role, and matching MCP-/CLI- command. MCP Deploy
+before in the host; without MCP, the existing CLI is allowed. Absolute paths generated apply to
+the setup environment. If the agent mounts differently, match the paths in his startup files
+**previously**. Do not give keys of other roles to a session.
 
-## Was diesmal anders ist
+<a id="was-diesmal-anders-ist"></a>
 
-Kein vorgegebenes Semikolon-Schema und keine vorab festgelegte Ereignis-/Parameter-
-belegung. Alle drei rufen den vorhandenen Katalog ab. Sie handeln auf dem
-Agententopic eine konkrete Version mit Ereignisbedeutung und Zuordnungen aus.
-Beide Worker müssen ausdrücklich zustimmen; technisches ACK ist keine Zustimmung.
-Maximal zwei Überarbeitungen und zwei Minuten Aushandlung. Keine Einigung bedeutet
-Blockade, keinen stillen Rückfall auf ausschließlich Text.
+## What is different this time
 
-Nach Einigung werden echte typisierte Ereignisse für wiederkehrende Status-/
-Lebenszyklusmeldungen verwendet, darunter mindestens eine je Worker und eine
-Statusabfrage mit Antwort. Freitext bleibt für Aushandlung, Erklärungen und
-Fachdetails zulässig. Nicht vorgegeben ist, welche konkrete Ereignisabbildung
-sie wählen. Das Broker-Protokoll wird nicht verändert.
+No pre-determined semicolon scheme and no pre-determined Ereignis-/Parameterbelegung. All three
+retrieve the existing catalog. They negotiate a concrete version with event significance and
+assignments on the agent topic. Both workers must expressly agree; technical ACK is no consent.
+Maximum two revisions and two minutes of negotiation. No agreement means blockage, no silent
+reversion to exclusively text.
 
-Das Mandat wird einmal bestätigt und gilt bis Widerruf oder Aufgabenabschluss;
-es gibt keine Laufzeit und keine periodische Erneuerung. Änderungen benötigen
-weiterhin menschliche Bestätigung. Anforderungen, Zuweisungen und Abschluss
-dürfen ohne ergänzenden Text im vereinbarten Protokoll erfolgen.
+Once agreed, real typed events are used for recurring status/lifecycle messages, including at
+least one per worker and one status query with response. Free text is allowed for negotiation,
+explanation and technical details.
 
-Die kurze Fachaufgabe kommt diesmal über den Operator: Zeitformatierungsfunktion,
-kleine Tests und unabhängiges Review. Worker-Startdateien liefern die Lösung oder
-konkreten Anforderungen nicht vorab. Zielgröße 5–10 Minuten.
+The mandate is confirmed once and is valid until revocation or termination; there is no term and
+no periodic renewal. Changes still require human confirmation. Requirements, assignments and
+completion may be made without supplementary text in the agreed protocol.
 
-## Zustand und Auswertung
+The short technical task this time comes via the operator: time formatting function, small tests
+and independent review. Worker start files do not provide the solution or specific requirements
+in advance. Target size 5-10 minutes.
 
-Topics: `demo2/human`, `demo2/operator`, `demo2/agents`; Owner `agent-demo-2`.
-Rechte und Persistenz wie Demo 1: alle lesen, nur Mensch schreibt ins Menschentopic,
-Operator schreibt in Operator-/Agententopic, Worker nur ins Agententopic.
-Inhalte werden sekündlich bei Änderungen gesichert und standardmäßig 24 Stunden
-aufbewahrt; lokaler Agentenzustand bleibt separat. Beobachter zeigt Text und echte
-Event-Payloads als JSON. Nach Neustart Beobachter neu starten.
+<a id="zustand-und-auswertung"></a>
 
-Für die spätere Auswertung Zustand, Verhandlungsnachrichten und endgültige
-Vereinbarung erhalten. Der Operator hält Revision, Zustimmungsnachrichten und
-Event-Nachrichten lokal nachvollziehbar fest; es geht um beobachtete Einigung und Anwendung,
-nicht um behauptete Performancewerte. Der Testaufbau selbst enthält keine
-Simulation der AI-Einigung.
+## Condition and evaluation
 
-Vor Beenden ohne weitere Publishes:
+Topics: `demo2/human`, `demo2/operator`, `demo2/agents`; Owner `agent-demo-2`. Rights and
+persistence like demo 1: read all, only human writes to the human topic, operator writes to
+Operator-/worker topic, Worker only to the agent topic. Content is backed up every second of the
+time when changes occur and kept by default 24 hours; local agent state remains separate.
+Observer shows text and real event payloads as JSON. Restart Observer.
+
+For later evaluation, the operator records revision, consent messages and event messages in a
+locally traceable manner; it is about observed agreement and application, not claimed
+performance values. The test setup itself does not contain a simulation of the AI agreement.
+
+Before quitting without further publishing:
 
 ```sh
 ./scripts/agent-demo-2.sh save
 ./scripts/agent-demo-2.sh status
 ```
 
-Warten auf `save_in_progress: false`, `dirty: false`, `last_error: null`, dann
-Service mit Ctrl-C beenden. Ein Publish bestätigt zunächst RAM, keinen Disk-Commit.
+Wait for `save_in_progress: false`, `dirty: false`, `last_error: null`, then terminate service
+with Ctrl-C. A publish first confirms RAM, no disk commit.
 
-Technischer Integrationstest (keine AI-Simulation):
+Technical integration test (no AI simulation):
 
 ```sh
 cargo build --locked -p mynofy-cli
 MYNOFY_DEMO_VARIANT=2 python3 examples/agent-demo/test_demo.py
 ```
 
-`MYNOFY_DEMO_DIR` und `MYNOFY_BIN` funktionieren wie bei Demo 1. Für eigene Pfade
-bei allen Befehlen dieselben Umgebungsvariablen verwenden.
+`MYNOFY_DEMO_DIR` and `MYNOFY_BIN` work as in Demo 1.
+Use the same environment variables for all commands.

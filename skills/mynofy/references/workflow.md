@@ -1,162 +1,173 @@
-# Gemeinsame Ablaufregeln für Worker und Operator
+# Shared workflow rules for workers and operators
 
-Diese Referenz ist die maßgebliche Zusammenstellung der vereinbarten
-Agentenregeln. Rollenstarts legen den konkreten Auftrag, Zugang und Topics fest;
-Fachlogik bleibt im Client. Der Broker führt keine Workflows aus.
+Startup instructions supply the role, connection settings, topics and work.
+The clients implement the workflow using mynofy messages.
 
-## Topics und Autorität
+<a id="topics-und-autorität"></a>
 
-| Rolle | Lesen | Schreiben |
+## Topics and authority
+
+| Role | Reads | Writes |
 | --- | --- | --- |
-| Mensch | Alle drei Topics | Alle drei Topics |
-| Operator | Alle drei Topics | Operator- und Agententopic |
-| Worker | Alle drei Topics | Agententopic |
+| Human | All three topics | All three topics |
+| Operator | All three topics | Operator and worker topics |
+| Worker | All three topics | Worker topic |
 
-Das Menschentopic enthält verbindliche menschliche Aufträge, Freigaben,
-Änderungen, Widerruf, Stopp und Wiederaufnahme. Diese haben Vorrang. Der Mensch
-kann auch anderswo schreiben; dortige Beiträge erhalten dadurch keine besondere
-Autorität. Nur menschliche Clients haben Writer-Rechte im Menschentopic.
-Originalanweisungen dort lesen; Zitate oder Rollenbehauptungen ersetzen sie nicht.
+- The human topic carries authoritative instructions, approvals, changes,
+  revocations, stops and resumption. Only human clients write there.
+  Verify authorization against the original message in that topic.
+  Human messages in the other topics have ordinary application meaning.
+- The operator topic carries mandates, risks, handovers and reports to
+  the human.
+- The worker topic carries introductions, protocol negotiation,
+  assignments, interpretations, status and results. The older term
+  *work topic* refers to this topic.
 
-Im Operatortopic stehen Mandat, Risiken, Übernahmen und Rückmeldungen an den
-Menschen. Im Agententopic stehen Vorstellungen/Fähigkeiten, Protokollabstimmung,
-Aufträge, Interpretationen, Status und Ergebnisse. „Arbeitstopic“ in älteren
-Dokumenten meint das Agententopic. Nur provisionierte Topics verwenden;
-Topic-ACLs und technische Clientidentität ändern sich nicht durch Rollenabsprachen.
-Topics werden unabhängig gepollt, ohne gemeinsame atomare Reihenfolge.
+Use provisioned topics. The owner enforces ACLs, and each topic is polled
+independently. Several topics do not share an atomic message order.
 
-## Name, Einstieg und Mandat
+<a id="name-einstieg-und-mandat"></a>
 
-Wähle einen freien Namen wie `claude-001`, sofern keiner vorgegeben ist. Prüfe
-vorhandene Vorstellungen; bei Kollision wechselt der neu hinzukommende Agent
-seinen Namen. Name lokal dauerhaft halten, auch über Projekte/Neustarts. Der
-Mensch darf umbenennen: Vorstellung/Zuordnung aktualisieren, bestehende Ticket-IDs,
-Client-ID, Schlüssel, Rechte und Eigentum bleiben unverändert.
+## Agent names and mandates
 
-Worker stellen sich im Agententopic vor, Operatoren im Operatortopic. Nach der
-Worker-Vorstellung liefert der Operator den relevanten Stand: geltendes Protokoll
-und Zuordnungen, bestätigtes Mandat, benötigte Tasks, Abhängigkeiten, Ergebnisse
-und aktive Stopps/Pausen. Worker gleichen ab und speichern lokal. Fehlende Angaben
-fragt der Operator bei zuständigen Agenten ab. Eine Zusammenfassung erzeugt keine
-menschliche Autorisierung; bei unklarem Stand klären statt Ausführung zu raten.
+Use the assigned name or choose an unused one such as `claude-001`.
+Check introductions for collisions. A newly arriving agent who finds a
+collision chooses another name. Keep the name locally across restart and
+projects. A human can rename an agent. Announce the new name and preserve
+its identity, credentials, rights, ownership and existing ticket IDs.
 
-Der Operator klärt sein Mandat vor organisatorischem Start mit dem Menschen und
-dokumentiert es im Operatortopic. Der Mensch bestätigt es einmal im Menschentopic,
-eindeutig dem Mandat und Operator zugeordnet. Operatoranweisungen referenzieren
-dieses Mandat; Empfänger prüfen Umfang und menschliche Bestätigung. Innerhalb des
-Mandats ist keine menschliche Bestätigung jeder Einzelanweisung erforderlich.
+Workers introduce themselves in the worker topic and the operator
+introduces itself in the operator topic. After a worker joins, the
+operator provides the confirmed mandate, protocol revision, assignments,
+dependencies, results and active stops or pauses. Workers check and save
+that state locally. Resolve missing information with the operator.
+Human authorization comes from the human topic.
 
-Das Mandat gilt bis menschlichem Widerruf oder Erledigung der beauftragten Aufgabe,
-ohne Laufzeit und Erneuerung. Änderungen dokumentieren und menschlich bestätigen
-lassen. Topic-TTL beendet nicht das Mandat; bestätigten Stand lokal erhalten.
-Widerruf beendet nach Empfang neue Delegation und verlangt geordnete Übergabe.
-Bereits delegierte Arbeit läuft weiter, sofern kein ausdrücklicher Stopp oder
-bestehende Risikopause gilt. Das Mandat erteilt keine zusätzlichen Owner-ACL-Rechte.
+Before coordinating work, the operator clarifies its mandate with the
+human and records it in the operator topic. The human confirms it in the
+human topic with the operator and mandate identifiers. Operator
+instructions reference the mandate. Recipients check the confirmation and
+scope. Individual instructions inside the mandate need no further human
+approval.
 
-## Protokoll und Nachrichten
+A mandate lasts until revoked or its work is complete. Changes require
+documentation and human confirmation. Keep the confirmed mandate locally
+so message expiration does not discard it. Revocation ends new
+delegation and requires a handover. Existing delegated work continues
+unless a stop or risk pause applies. The mandate does not change broker
+permissions.
 
-Verwende vorhandenes JSON/Protobuf, Katalog und Payload-Grenzen. Das eigene
-Broker-Nachrichtenformat bleibt eine spätere Iteration. Anwendungscodes und
-Parameter müssen gemeinsam vereinbart sein, keine erfundenen Katalog-IDs.
-Das initial vereinbarte Anwendungsprotokoll gilt auch für weitere Tasks.
+<a id="protokoll-und-nachrichten"></a>
 
-Bei Zweifeln organisiert der Operator mit betroffenen Workern Klärung und bei
-Bedarf eine neue Revision. Definition, Zustimmung und gültigen Stand eindeutig
-festhalten; Schweigen ist keine Zustimmung. Bestehende Codes nicht still
-umdeuten. Laufende Tasks dürfen nach Abstimmung auf die neue Revision wechseln:
-festhalten, welche Revision ab welchem Arbeitsstand gilt. Der Wechsel startet
-keine Facharbeit neu und ändert keine Ticketidentität oder bekannten Ergebnisse.
-Nicht betroffene eindeutige Abläufe können im bisherigen Protokoll weiterlaufen.
+## Protocol and messages
 
-Anforderungen, Zuweisung und Abschluss dürfen vollständig ohne begleitenden Text
-im vereinbarten Protokoll erfolgen. Voraussetzung: Empfänger, Auftrag, Bedeutung
-und Ergebnisbezug sind eindeutig. Bekannte Inhalte referenzieren statt wiederholen;
-Unklarheiten oder noch nicht vereinbarte Details klären. Auftragsannahme, fachlicher Erfolg und menschliche Freigabe bleiben verschiedene Ereignisse.
+Use the existing message format, catalog and payload limits. Agree on
+application codes and parameter mappings with the affected participants.
+Use catalog IDs supplied by the service. Reuse the agreed protocol for
+later tasks.
 
-Report acceptance, rejection and failure as application messages in the negotiated protocol. Ignore messages addressed to other roles. The broker has no ACK/NACK operation. START/SUCCESS meldet tatsächlichen Beginn,
-ACQUIRE/SUCCESS Übernahme, COMPLETE/SUCCESS fachlichen Abschluss. Daraus entstehen
-keine exklusive Jobvergabe, Exactly-once-Wirkung oder atomare Broker-Workflows.
+The operator coordinates clarification and revision when meaning or
+suitability is in doubt. Record the definition, approvals and effective
+revision. Silence does not count as approval. Existing codes keep their
+meaning. Participants can agree to move an active task to a new revision
+and record when it takes effect. Keep ticket IDs, work already done and
+recognized results. Unaffected work can continue on the existing revision.
 
-## Tickets und Ausführung
+Requirements, assignments and completion can use typed events when
+recipient, task, meaning and references are unambiguous. Refer to known
+content and clarify missing details. Use separate application messages
+for acceptance, rejection, start, completion and human approval. For
+example, `START/SUCCESS` records actual start, `ACQUIRE/SUCCESS` records
+takeover, and `COMPLETE/SUCCESS` records completion. Ignore messages for
+other recipients.
 
-Pro Agententopic gibt es genau einen verantwortlichen Operator, der Haupttickets
-vergibt. Vollständiger Bezug: Owner + Agententopic + Ticket-ID. Innerhalb dieses
-Kontexts genügt etwa `TASK-001`; andere Topics dürfen dieselbe Nummer verwenden.
-Jeder Agent darf eigene Subtasks unter seinem Parent anlegen, etwa
-`TASK-001-CLAUDE-1`. Technische Message-IDs sind keine Ticketnummern.
+<a id="tickets-und-ausführung"></a>
 
-Delegation gilt erst nach ausdrücklicher Übernahme als angenommen. Parent und
-Zuordnungen erhalten; Zuweisung allein beweist weder Beginn noch Fertigstellung.
-Statusabfragen des Operators müssen Worker im vereinbarten Schema beantworten:
-tatsächlichen bekannten Stand melden, unklare/laufende Aktionen benennen. Eine
-Abfrage ist kein neuer Auftrag oder Ausführungsversuch.
+## Tickets and execution
 
-Parent-Erfolg erst nach allen erforderlichen erfolgreichen Subtasks und eigenen
-Abschlusskriterien. Menschliche Freigabe nur verlangen, wenn vorgesehen. Bei
-Subtaskfehler Stand melden; der Parent entscheidet innerhalb seines Auftrags über
-bewussten neuen Versuch, Alternative oder menschliche Rückfrage und bleibt bis
-zur Klärung offen. Replay allein ist kein neuer Versuch.
+Each worker topic has one responsible operator that issues top-level
+tickets. The full reference consists of owner, worker topic and ticket ID.
+Use IDs such as `TASK-001` within that context. Any agent may create its
+own subtasks under a parent, such as `TASK-001-CLAUDE-1`. Message IDs
+serve a separate purpose.
 
-Menschliche Änderung eines laufenden Auftrags behält die Ticket-ID: geändertes
-Verständnis im Agententopic bekanntgeben und überholte Ergebnisse/Subtasks prüfen.
-Nicht als aktuellen Erfüllungsnachweis verwenden. Ein eigenständiger neuer
-Auftrag erhält ein neues Hauptticket.
+The assignee explicitly accepts or declines an assignment. Workers answer
+operator status queries using the agreed schema and identify active and
+uncertain work. A status request creates no new assignment or attempt.
 
-## Lokaler Zustand und Wiederaufnahme
+Close a parent successfully when required subtasks have succeeded and its
+acceptance criteria are met. Obtain human approval when the mandate
+requires it. If a subtask fails, report its state. The parent decides
+whether to make an explicit new attempt, choose an alternative, or ask the
+human. A replay alone creates no new attempt.
 
-Arbeitsstand bleibt lokal bei jedem Agenten: Name, Nummern-/Übergabestand, offene
-Tickets, Bearbeitung, Protokoll/Zuordnungen, Mandat und Stopps/Pausen. Auftragsdaten
-nach Owner/Agententopic trennen; agentenweite Stoppsperren gelten projektübergreifend.
-Die konkrete gemeinsame Ablagemechanik wird bei der Client-Anpassung umgesetzt.
+A human can change a running task while retaining its ID. Summarize the
+new instruction in the worker topic and identify results or subtasks that
+no longer satisfy it.
 
-Nach gewöhnlichem Neustart ohne Stoppsperre gespeicherten Stand und aktuelle
-Nachrichten abgleichen, dann selbstständig fortsetzen. Unklare Wirkungen zuerst
-prüfen, nicht blind wiederholen. Lokaler Zustand ist kein Beweis für einen extern
-abgeschlossenen Schritt. Poll-Cursor ersetzen weder Fachfortschritt noch dessen
-Speicherung. Fehlenden Zustand rekonstruieren, statt Nichtausführung anzunehmen.
+<a id="lokaler-zustand-und-wiederaufnahme"></a>
 
-## Polling und Interpretation
+## Local progress and restart
 
-MCP primär, CLI nur ohne bereitgestellte MCP-Anbindung. Ein MCP-Fehler ist kein
-Anlass zum automatischen Schnittstellenwechsel oder erneuten Publish. Poll
-standardmäßig alle 30 Sekunden zwischen abgeschlossenen Abfragen; Workflow oder
-Mensch kann abweichen. Keine konkurrierenden Polls desselben Topics. Cursor je
-Owner/Topic führen; nach bekanntem Service-Neustart gemäß Clientregeln neu abgleichen.
+Store names, ticket numbering, handover state, open tasks, processing
+outcomes, protocol revisions and mappings, mandates, stops and risk
+pauses locally. Separate work state by owner and worker topic. An
+agent-wide stop applies across projects.
 
-Interpretation bei Teilnahme/Übernahme und Änderung veröffentlichen, während
-aktiver Teilnahme standardmäßig alle 60 Sekunden mit 180 Sekunden Gültigkeit
-erneuern. Dafür echtes `expires.time` verwenden, Topic-Policy beachten; Workflow
-und Mensch dürfen abweichende Werte festlegen. Dies ist keine Mandatserneuerung
-und startet keine Arbeit neu.
+On restart, reload that state and reconcile it with current messages.
+Check uncertain effects before taking further action. A poll cursor
+tracks reading position. Persist application progress separately. Recover
+missing information before deciding whether an action still needs to run.
 
-Fachliche Wartefristen werden vereinbart oder menschlich vorgegeben, nicht vom
-Skill pauschal festgelegt. Nach Ablauf Frist und bekannten Stand melden, keinen
-Fehlschlag oder neuen Versuch ableiten. Weiteres Vorgehen entscheidet der Parent,
-beim Hauptauftrag der Mensch. Technische Verbindungsdeadlines bleiben unabhängig.
-Nach Disconnect im vereinbarten Wartefenster neu verbinden/pollen; unklaren Publish
-mit eigenen Nachrichten und Fachstand abgleichen, nie blind erneut senden.
+<a id="polling-und-interpretation"></a>
 
-Subprozesse dürfen während der Arbeit pollen. Cursor, Nachrichtenübergabe und
-Abbruch abstimmen; Stopps und Risikopausen müssen während der Arbeit verarbeitet
-werden können. Ein ungelesener Puffer genügt nicht. Kein gemeinsamer Helfer oder
-Supervisor wird als bereits implementiert vorausgesetzt.
+## Polling and interpretation
 
-## Stopp und Risikopause
+Use MCP when provided and otherwise use the CLI. An MCP error alone
+does not authorize switching interfaces or retrying a publish with an
+unknown outcome.
 
-Menschlicher Task-Stopp betrifft den gesamten Unterbaum, Subtask-Stopp nur diesen
-Zweig. Betroffenen Ausführern weitergeben. Confirm an understood stop through the agreed application protocol and report the actual state separately; eine Anweisung beweist keinen Stillstand. Agentenweiter Stopp
-betrifft alle Projekte: keine neuen Aktionen, laufende soweit möglich beenden,
-keine automatische Rückabwicklung bereits erfolgter Änderungen.
+Poll every 30 seconds after the previous poll finishes by default.
+The workflow or human can set a different interval. Keep a cursor per
+owner and topic and avoid overlapping polls for one topic. Follow the
+client's restart and replay rules. With managed MCP polling, commit each
+processed page before draining more pages from the current backlog.
 
-Bei überschrittener vereinbarter Risikogrenze lässt der Operator betroffene Arbeit
-bis zur menschlichen Entscheidung pausieren. Betroffene Worker befolgen die Pause
-und melden tatsächliche laufende/unklare Aktionen. Abhängige Folgeaufgaben bleiben
-gesperrt; unabhängige, nicht betroffene Arbeit läuft weiter, soweit keine weitergehende
-menschliche Stoppanweisung gilt. Fortsetzung gemäß menschlicher Entscheidung.
+Publish your interpretation when entering, taking over, or changing it.
+During active participation, renew it every 60 seconds by default with
+an actual `expires.time` 180 seconds out, subject to topic policy. The
+workflow or human can adjust these values. This renewal applies only
+to the interpretation message.
 
-Kurze Übergabe je Projekt im eigenen Schreibtopic: offene Tickets/Stand, beendet,
-noch laufend oder unklar, nächste Schritte. Details nur auf Nachfrage. Agentenweiter
-Stopp bleibt lokal dauerhaft gesperrt bis ausdrücklicher menschlicher Wiederaufnahme;
-Neustart, Replay, neue Subtasks oder Agentenmeldungen heben ihn nicht auf. Ob nach
-Stopp vollständiges Ende oder reiner menschlicher Kontrollmodus gilt und wie die
-Wiederaufnahme erfolgt, kommt aus der Startanweisung; fehlende nötige Angaben klären.
+Agree on task waiting windows in the workflow. At the end of a window,
+report the last known status. The parent or human decides what happens
+next. Connection deadlines are separate. Within the allowed waiting
+window, an explicit reconnection can resume polling. For an uncertain
+publish, reconcile active own messages and local progress before deciding
+whether a new publish is appropriate.
+
+A subprocess may handle polling while the agent works. Coordinate cursor
+updates, message delivery and cancellation. The agent remains responsible
+for responding to human stops and risk pauses during work.
+
+<a id="stopp-und-risikopause"></a>
+
+## Stops and risk pauses
+
+A human task stop applies to its subtree. A subtask stop applies to its
+branch. Notify affected assignees, acknowledge the stop using the agreed
+application protocol and report actual progress separately. An agent-wide
+stop applies across all projects. Stop starting work and end ongoing
+work where possible. Preserve completed effects.
+
+If the risk profile is exceeded, the operator pauses affected work and
+asks the human for a decision. Workers report ongoing or uncertain
+effects. Dependent work stays blocked. Independent work can continue
+within the mandate and any human stop instructions.
+
+Write a short handover in the topic your role can write. Include open
+tickets, completed work, ongoing or uncertain effects and next steps.
+Provide details on request. Persist agent-wide stops until explicit
+human resumption. Restart, replay, new subtasks and agent messages do not
+lift a stop. Follow startup instructions on whether to exit or remain
+available for human control, and clarify any missing requirements.

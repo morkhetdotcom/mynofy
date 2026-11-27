@@ -1,6 +1,6 @@
-# Lokale Topics zur Laufzeit verwalten
+# Managing local topics at runtime
 
-Die separate Admin-API unterstützt `topics list|get|create|policy|delete`. Nachrichtenclients erhalten damit keine neuen Verwaltungsrechte; ausschließlich der lokale Admin-Socket erlaubt diese Befehle. Owner bleibt immer die lokale `service.id`. Remote-Routen lassen sich darüber nicht verändern.
+The separate Admin API supports `topics list|get|create|policy|delete`. These commands are available through the local Admin socket. The owner is the local `service.id`. Remote routes are configured at startup.
 
 ```sh
 mynofy admin topics list --socket run/admin.sock --limit 20
@@ -11,45 +11,49 @@ mynofy admin topics policy jobs/status --default-ttl 120 --max-ttl 7200 --socket
 mynofy admin topics delete jobs/status --socket run/admin.sock
 ```
 
-`create` verlangt eine ausdrückliche Policy, erzeugt ein RAM-Topic und vergibt keine ACL-Freigaben. Ein Publish erzeugt niemals implizit ein Topic. Namen müssen wie in der Startkonfiguration eindeutig, nicht leer und höchstens 256 UTF-8-Bytes lang sein; höchstens 10.000 konfigurierte Topics einschließlich Remote-Routen. TTL: `1 <= default <= max <= 31.536.000` Sekunden. Ein vorhandenes lokales oder konfiguriertes Remote-Topic führt zu `conflict`.
+`create` requires an explicit policy, creates a RAM topic and starts with
+an empty ACL. A publish requires an existing topic. As at startup, names must be unique, nonempty and at most 256 UTF-8 bytes. The configuration limit is 10,000 topics including remote routes. TTL must satisfy `1 <= default <= max <= 31536000` seconds. An existing local or configured remote topic returns `conflict`.
 
-`list` liefert lokale Topics in lexikalischer Reihenfolge. `limit` ist 1–100, Default 20; `--after NAME` setzt exklusiv nach diesem Namen fort. `next_after: null` kennzeichnet das Ende. Zwischen Seiten darf sich die Liste ändern; es ist kein eingefrorener Snapshot. Ein inzwischen entfernter Anker ist zulässig. `get` und Listeneinträge zeigen Owner, Policy, Storage-Strategie sowie aktive und noch physisch residente Nachrichten. Diagnosezähler scannen den Bestand; diese Admin-Operationen sind keine konstantzeitigen Datenpfad-Requests.
+`list` returns local topics in lexical order. The limit is 1–100 and
+defaults to 20. `--after NAME` resumes after that name, even if the named topic was deleted. `next_after: null` marks the end. Each page reflects the current list. `get` and list entries report the owner, policy, storage mode, active messages and physically resident records. The diagnostic counts scan the message stock.
 
-## Policy und vorhandene Inhalte
+## Policy and existing messages
 
-`policy` ändert die TTL-Vorgaben für künftige Publishes. Bereits akzeptierte Nachrichten behalten ihre Ablaufzeit, auch wenn das neue Maximum kürzer ist. Bei persistenten Topics wird die Änderung als dirty erfasst und erst durch einen erfolgreichen Save dieses Topics dauerhaft. Ungültige Änderungen werden vor der Mutation abgewiesen. Es gibt kein beliebiges Update von Listenern, Ressourcenlimits oder Routing.
+`policy` changes TTL defaults and limits for future publishes. Accepted
+messages retain their original expiration. A persistent topic becomes dirty and the new policy becomes durable on its next successful save. Validation precedes mutation. Listener settings, resource limits and routing are outside this command's scope.
 
-## Entfernen und Neuanlage
+## Deleting and recreating topics
 
-`delete` akzeptiert ausschließlich vollständig geleerte RAM-Topics. Aktive oder noch nicht physisch bereinigte abgelaufene Nachrichten führen zu `topic_not_empty`. Es gibt keinen Force-Schalter und keine vorzeitige Löschung von Nachricht/Client-Bestätigungen. Die normale budgetierte Bereinigung läuft weiter; danach kann der Admin den Befehl erneut ausführen.
+`delete` requires an empty RAM topic. Active messages and expired
+records awaiting cleanup return `topic_not_empty`. Retry after the normal bounded cleanup finishes.
 
-Bei `manual` oder `interval` lautet der Fehler `storage_transition_forbidden`, auch wenn der Bestand leer ist. Zuerst den Dienst stoppen, CFG-RAM-Baseline setzen und den bestehenden Offline-Befehl `storage topic-ram` verwenden; dessen Regeln stehen unter [Neustart und Speicher](restart-and-storage.md). Nach dem nächsten Start lässt sich das RAM-Topic entfernen. Ein Online-Delete umgeht damit nicht die beschlossene Offline-Grenze.
+A `manual` or `interval` topic returns `storage_transition_forbidden` even when empty. Stop the service, configure the RAM baseline and run `storage topic-ram` offline before deleting the RAM topic after restart. [Restart and storage](restart-and-storage.md)
 
-Delete entfernt alle ACL-Freigaben des Topics und invalidiert Revisionen, Sessions und ausstehende Wechsel der betroffenen Clients. Andere Topics und deren Nachricht/Client-Referenzen bleiben gültig. Numerische Slots werden kompakt gehalten: Bei Bedarf verschiebt sich der letzte Topic-Slot samt Record-Verweisen, ACLs und Content-Zeitplan atomar unter dem Core-Lock. Diese Admin-Arbeit kann proportional zum Bestand sein; es gibt dafür keinen zusätzlichen Scan im Publish-/Poll-Hotpath.
+Deletion clears the topic ACL and invalidates revisions, sessions and pending rotations for affected clients. Other topics retain their message references. The core keeps numeric slots compact. When needed, it moves the last topic slot and its record references, ACLs and content schedule atomically under the core lock. This Admin operation can take time proportional to the stock it moves.
 
-Ein später neu angelegtes Topic gleichen Namens hat eine leere ACL. Der initiale Kopfstand liegt beim globalen Annahmestand des laufenden Owners, damit alte Cursor im selben Boot neue Nachrichten nicht durch wiederverwendete kleine Positionen überspringen. Neustart-/Umlaufgrenzen der kompakten Cursor bleiben wie bisher.
+A recreated topic starts with an empty ACL and takes its initial head from the current owner's global acceptance position. Older cursors in the same boot can thus continue without skipping new messages because of a reused position. Restart and cursor rollover rules still apply.
 
-## Speicherung und Neustart
+## Persistence and restart
 
-Topic-Definitionen und Policies gehören zum RAM-/Content-Zustand, ACLs zum Security-Zustand:
+Topic definitions and policies are part of RAM or content state. ACLs belong to the security state.
 
-- Neue RAM-Topics verschwinden beim Neustart, sofern sie nicht ausdrücklich exportiert und als neue Startkonfiguration verwendet werden.
-- Für ein neues Topic kann der bestehende Befehl `topics storage` RAM→manual/interval aktivieren, sofern Backend und gegebenenfalls Secret beim Start provisioniert wurden. Ein anschließender erfolgreicher Content-Save speichert das Topic einschließlich Policy und gegebenenfalls Nachrichten. Start-Restore stellt es auch ohne Eintrag in der ursprünglichen CFG wieder her.
-- Create-/Policy-Antworten melden `durable: false`: Die RAM-Wirkung bestätigt keinen Save. Status und Content-Save zeigen den dauerhaften Stand.
-- Die Entfernung eines ursprünglichen CFG-RAM-Topics verändert die CFG nicht. Bei Neustart mit derselben Datei erscheint dessen Definition wieder, nach synchronisiertem Security-Reset aber ohne die entfernten Freigaben. Für die dauerhafte Änderung exportieren und die exportierte Konfiguration ausdrücklich beim nächsten Start verwenden.
-- `security_storage.sync: true` confirms the Create/Delete security reset only after journal synchronization; it does not persist the topic definition or message content.
-- Create/Delete erzeugen automatisch einen begrenzten asynchronen Security-Record `topic_reset`. Er setzt ACLs zurück und verwaltet einen Marker für dynamische Topics; er speichert keine Policy und macht ein RAM-Topic nicht dauerhaft. Beim Recovery werden ACLs markierter Topics verworfen, wenn weder CFG noch Content sie wiederherstellt. Fehlende nicht markierte lokale ACL-Ziele bleiben Recovery-Fehler.
+- A new RAM topic disappears on restart unless an exported configuration containing it becomes the startup configuration.
+- `topics storage` can switch a RAM topic to `manual` or `interval` if the backend and any required secret were configured at startup. A successful save records the topic, policy and messages. Startup can restore that topic even if it is absent from the original configuration.
+- Create and policy responses report `durable: false` for the topic definition or policy. Use content save status to confirm persistence.
+- Deleting a RAM topic from the running configuration leaves the configuration file unchanged. After a restart with the same file the topic definition reappears, with an empty ACL if the reset was durable. To persist the new topology, export it and use that configuration at the next start.
+- Create and delete enqueue a bounded `topic_reset` security record. It clears ACLs and maintains a marker for dynamic topics. Recovery discards ACLs for marked topics absent from both configuration and content. An unmarked missing local ACL target causes recovery to fail.
+- With `security_storage.sync: true`, the Admin response confirms the security reset after journal sync. With `sync: false`, an unsynced reset can be lost in a crash. A full security queue rejects create or delete before mutation.
 
-Wie alle Security-Mutationen warten diese Antworten nicht auf den Datenträger. Eine volle Security-Queue weist Create/Delete vor der Wirkung ab. Nach einem Absturz vor dem Security-Sync kann noch der vorherige Sicherheitsstand gelten; `security_storage` zeigt eingereihte und dauerhafte Sequenz. Alle Topologie-/Policy-Mutationen werden während eines laufenden oder unbestätigten Content-Saves abgelehnt (`content_save_busy` beziehungsweise `content_storage_requires_restart`). Es gibt kein Laufzeit-Nachladen.
+Topology and policy changes are rejected during a running or unresolved content save with `content_save_busy` or `content_storage_requires_restart`.
 
-## Admin-JSON und Tests
+## Admin JSON and tests
 
-Beispiel auf dem separaten JSONL-Admin-Socket:
+Send a JSON line to the separate Admin socket.
 
 ```json
 {"version":1,"command":{"op":"topic_create","topic":"jobs/status","policy":{"default_ttl_seconds":60,"max_ttl_seconds":3600}}}
 ```
 
-[Schema](../protocol/admin/v1.schema.json) und [Beispiele](../protocol/admin/examples.json) enthalten alle neuen Operationen. Das normale Protobuf-Nachrichtenprotokoll bleibt unverändert.
+See the [schema](../protocol/admin/v1.schema.json) and [examples](../protocol/admin/examples.json) for all Admin operations.
 
-Core-Tests prüfen Default-Deny, Paging, atomare Validierung, unveränderte alte expires-Werte, Queue-/Busy-Ablehnung, Record-/ACL-/Schedule-Slotverschiebung, Bestätigungsreferenzen, Cursor nach Neuanlage, Export und Neustart mit verlorenen RAM- beziehungsweise gesicherten neuen Topics. Ein echter CLI-/Unix-Socket-Test prüft Anlegen, Anzeigen, Paging, Policy, ACLs, Export und Entfernen. Die bestehende Abbruchmatrix läuft unverändert mit der gesamten Workspace-Suite.
+Core tests cover default deny, paging, atomic validation, expiration, queue and save-busy handling, slot moves, cursors after recreation, export and restart. A CLI integration test uses a real Unix socket to check creation, queries, paging, policy, ACLs, export and deletion. The workspace suite also runs the storage interruption tests.

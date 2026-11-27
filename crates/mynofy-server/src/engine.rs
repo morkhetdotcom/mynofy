@@ -165,7 +165,7 @@ pub struct Engine {
     restart_counter: u32,
     content: Option<crate::content::ContentRuntime>,
     security: Option<crate::security::Journal>,
-    pub config: Config,
+    config: Config,
     topic_owners: HashMap<String, String>,
     shutting_down: bool,
     pub(crate) egress: Option<std::sync::Arc<crate::transport::Egress>>,
@@ -199,6 +199,22 @@ pub struct Engine {
     maintenance_cursor: usize,
 }
 impl Engine {
+    /// Inspect the engine configuration without changing validated settings.
+    ///
+    /// Use the admin API to inspect effective client credentials and ACLs or
+    /// to apply supported runtime changes.
+    ///
+    /// ```compile_fail
+    /// use mynofy_server::engine::Engine;
+    ///
+    /// fn set_rate(engine: &mut Engine) {
+    ///     engine.config().limits.client_requests_per_second = 0;
+    /// }
+    /// ```
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
     pub fn restart_counter(&self) -> u32 {
         self.restart_counter
     }
@@ -530,10 +546,10 @@ impl Engine {
         }
         progress
     }
-    /// Start bounded asynchronous RID refill when attaching the core to a runtime.
-    pub fn start_id_allocator(&mut self) {
-        self.message_ids.start();
-    }
+    /// Compatibility method for callers that previously started a refill task.
+    ///
+    /// ID blocks are now reserved automatically on demand.
+    pub fn start_id_allocator(&mut self) {}
     pub fn connect(&mut self, now: u64) -> Result<u64> {
         let now = now.max(self.last_cleanup_now);
         if self.sessions.len() >= self.config.limits.max_connections {
@@ -1454,7 +1470,7 @@ impl Engine {
             .checked_add(1)
             .ok_or_else(ApiError::exhausted)?;
         let seq = t.head.checked_add(1).ok_or_else(ApiError::exhausted)?;
-        let raw_id = self.message_ids.take().ok_or_else(ApiError::exhausted)?;
+        let raw_id = self.message_ids.take();
         let mid = Id(raw_id);
         // A wrapped range must never overwrite an active message.
         if self.index.contains_key(&mid) {

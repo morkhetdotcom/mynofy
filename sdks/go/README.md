@@ -3,14 +3,12 @@
 
 The broker uses stateless polling: ACK/NACK, delivery IDs and confirmation counters have been removed. Application results are published messages. See [upgrade notes](../../docs/message-client-confirmation.md).
 
-Nativer Client ab Go 1.27.4 für direkte WSS- und Unix-Verbindungen. Keine CLI-
-Unterprozesse im SDK. Die API und das gemeinsame Protobuf-v1-Protokoll sind noch
-veränderliche Prototypen.
+Native client from Go 1.27.4 for direct WSS and Unix connections. No CLI subprocesses in SDK.
+The API and the common prototype v1 protocol are still variable prototypes.
 
 ## Einbinden
 
-Das Modul ist noch nicht veröffentlicht. Im eigenen Go-Projekt einen lokalen
-Repository-Pfad verwenden:
+The module has not yet been published. Use a local repository path in your own Go project:
 
 ```sh
 go mod edit -require=mynofy.local/sdk/go@v0.0.0
@@ -18,18 +16,18 @@ go mod edit -replace=mynofy.local/sdk/go=/absoluter/pfad/mynofy/sdks/go
 go mod tidy
 ```
 
-Imports zuerst im eigenen Programm ergänzen. Die drei direkten Abhängigkeiten sind
-[`coder/websocket`](https://github.com/coder/websocket),
-[`golang.org/x/sys`](https://pkg.go.dev/golang.org/x/sys) und die offizielle
-[Protobuf-Runtime](https://pkg.go.dev/google.golang.org/protobuf).
-Ed25519, TLS und AES-GCM kommen aus der Go-Standardbibliothek. Generierte
-Protobuf-Typen werden mitgeliefert; Python, protoc und gRPC sind keine Laufzeitabhängigkeiten.
+The three direct dependencies are [`coder/websocket`](https://github.com/coder/websocket),
+[`golang.org/x/sys`](https://pkg.go.dev/golang.org/x/sys) and the official
+[Protobuf-Runtime](https://pkg.go.dev/google.golang.org/protobuf). Ed25519, TLS and AES - GCM
+come from the Go standard library. Generated protobuf types are included; Python, protoc and
+gRPC are not runtime dependencies.
 
-## Lokal senden und lesen
+<a id="lokal-senden-und-lesen"></a>
 
-Der Public Key muss beim Owner registriert sein und die nötigen Topic-Rechte
-besitzen. `mynofy keygen` erzeugt kompatible Schlüssel. Client und Unix-Service
-laufen als derselbe normale OS-Benutzer.
+## Send locally and read
+
+The public key must be registered with the owner and have the necessary topic rights. `mynofy
+keygen` creates compatible keys. Client and Unix service run as the same normal OS user.
 
 ```go
 package main
@@ -53,7 +51,7 @@ func run() error {
     })
     if err != nil { return err }
     defer client.Close()
-    fmt.Println(client.Info()) // Owner, stabile Client-ID, Neustartzähler
+    fmt.Println(client.Info()) // Owner, stable client ID, restart counter and optional boot ID
     sent, err := client.Publish(ctx, "local/events",
         mynofy.Bytes([]byte("Hallo"), "text/plain"), nil)
     if err != nil { return err }
@@ -61,7 +59,7 @@ func run() error {
     if err != nil { return err }
     for _, item := range page.Items {
         fmt.Println(item.Message.GetId(), item.Message.Payload)
-        // Nach Verstehen/Zuordnen; kein fachlicher Abschluss:
+        // After Verstehen/Zuordnen; no professional degree:
     }
     fmt.Println(sent.GetMessageId(), page.GetNextCursor(), page.GetHasMore())
     return nil
@@ -71,94 +69,90 @@ func main() {
 }
 ```
 
-`Poll` startet keine Hintergrundschleife. Bei `has_more` weitere Seiten sofort
-abholen. Den Cursor erst nach eigener Verarbeitung oder dauerhafter Übernahme
-speichern. Nach bekanntem Service-Neustart anhand von `Info().RestartCounter`
-neu ohne Cursor lesen und mit lokalem Zustand abgleichen. Keine automatische fachliche Bestätigung,
-keine Zustandsdatei und keine automatische Wiederholung fachlicher Aktionen.
-Poll reads without recording reader state; the client keeps its progress locally.
+`Poll` does not start a background loop. `has_more` more pages immediately
+Retrieve. Save the cursor only after own processing or permanent takeover. Read it again without
+cursor after a known service restart using `Info().RestartCounter` and compare it with local
+state. No automatic professional confirmation, no status file and no automatic repetition of
+professional actions. Poll reads without recording reader state; the client keeps its progress
+locally.
 
-## WSS und weitere Operationen
+<a id="wss-und-weitere-operationen"></a>
 
-Für WSS `URL: "wss://localhost:8080"` statt `Socket` setzen, optional
-`CAFile: ".local/demo/ca.crt"`. Ohne CA-Datei gelten die System-Trustroots.
-TLS mindestens 1.3, Hostname-Prüfung, keine unsichere Option, Redirects oder
-Proxy-Umgebungsvariablen. Unix prüft Socketmodus 0600, Verzeichnisschutz und
-Kernel-Peer-UID unter Linux/macOS; fehlende Peer-Prüfung führt zum Abbruch.
-Native macOS-Tests stehen noch aus; der Darwin-Code wird crosskompiliert.
+## WSS and other operations
 
-Alle Operationen nehmen einen `context.Context`. `Config.Timeout` begrenzt
-Verbindungsaufbau einschließlich Authentifizierung und jeweils einen Austausch;
-Standard zehn Sekunden. Ein früheres Context-Limit hat Vorrang.
+Set WSS `URL: "wss://localhost:8080"` instead of `Socket`, optional `CAFile:
+".local/demo/ca.crt"`. Without CA file, the system trustroots apply. TLS at least 1.3, hostname
+check, no unsafe option, redirects or proxy environment variables. Unix checks socket mode 0600,
+directory protection and kernel peer UID below Linux/macOS; missing peer check leads to
+cancellation. Native macOS tests are pending; the Darwin code is crosscompiled.
 
-- `Publish(ctx, topic, payload, expires)`: maximal 4096 rohe Bytes oder ein Event;
-  `expires` ist optional `*time.Time`, andernfalls entscheidet die Topic-Policy.
-- `Event(*protocol.Event)`: Katalog 1/v1, gültige Enum-IDs, bis zu drei typisierte
-  Parameter. Protobuf erhält `uint64` und `int64` ohne Fließkommakonvertierung.
-- `ListMessages(ctx, ListOptions{Topic: ..., Limit: 20})`: eigene aktive Nachrichten;
-  beim Paging denselben Filter **und dieselbe Seitengröße** beibehalten.
-- `GetMessage(ctx, id)`, `GetPermissions(ctx, topic)` und
-  `GetCatalog(ctx, "mynofy", 1)`: letzteres liefert `json.RawMessage` mit geprüfter
-  Katalogidentität. Alle übrigen Antworten sind generierte Protobuf-Typen aus
-  `mynofy.local/sdk/go/protocol`; optionale Felder sind Zeiger.
+All operations take a `context.Context`. `Config.Timeout` limits connection setup including
+authentication and one exchange each; default ten seconds.
 
-Payloads und ihre Byte-Slices während eines Aufrufs nicht parallel verändern.
-`Bytes` übernimmt den Slice ohne vorsorgliche Kopie.
+- `Publish(ctx, topic, payload, expires)`: maximum 4096 raw bytes or one event; `expires` is
+  optional `*time.Time`, otherwise the topic policy will decide.
+- `Event(*protocol.Event)`: Catalogue 1/v1, valid enum IDs, up to three typed parameters.
+  Protobuf gets `uint64` and `int64` without floating point conversion.
+- `ListMessages(ctx, ListOptions{Topic:..., Limit: 20})`: own active messages; keep the same
+  filter ** and the same page size** when paging.
+- `GetMessage(ctx, id)`, `GetPermissions(ctx, topic)` and `GetCatalog(ctx, "mynofy", 1)`: the
+  latter yields `json.RawMessage` with verified catalog identity. All remaining answers are
+  generated prototype types from `mynofy.local/sdk/go/protocol`; optional fields are pointers.
 
-## Fehler und Schlüsselwechsel
+Payloads and their byte slices do not change in parallel during a call. `Bytes` takes over the
+slice without a precautionary copy.
 
-`errors.As` unterscheidet `*BrokerError` (Code, Detail, optional RetryAfterMS) und
-`*TransportError`. Bei I/O-/Protokollfehler wird die Verbindung verworfen.
-`OutcomeUnknown` bedeutet, dass eine Mutation bereits angenommen worden sein
-kann. Nicht blind erneut veröffentlichen. Context-Abbruch und Timeout sind mit
-`errors.Is` prüfbar. `ErrBusy` verweigert gleichzeitige Operationen ohne Queue;
-`Close` bricht auch einen laufenden Austausch ab. Keine automatischen Retries,
-Neu-Verbindungen oder Backoff-Strategien.
+<a id="fehler-und-schlüsselwechsel"></a>
 
-`GenerateKey`, `PublicKey`, `TokenID`, `ClientID` liefern Registrierungsdaten;
+## Mistakes and key changes
+
+`errors.As` distinguishes `*BrokerError` (code, detail, optional RetryAfterMS) and
+`*TransportError`. Bei I/O-/protocol errors The connection is discarded.
+`OutcomeUnknown` means that a mutation has already been assumed
+Context cancellation and timeout are testable with `errors.Is`. `ErrBusy` denies simultaneous
+operations without queue; `Close` also cancels an ongoing exchange. No automatic retries,
+reconnections or backoff strategies.
+
+`GenerateKey`, `PublicKey`, `TokenID`, `ClientID` liefern registration data;
 `PrivateBytes` exportiert Rust/Python-kompatibles PKCS#8 v2. `ParseKey` akzeptiert
-kanonisches PKCS#8 v1 und die exakt geprüfte Rust-v2-Struktur einschließlich
-Abgleich des enthaltenen Public Keys. Private Schlüsseldateien mit 0600 speichern.
-Go garantiert keine vollständige Löschung aller Schlüsselkopien aus dem Speicher.
+canonical PKCS #8 v1 and the thoroughly checked Rust v2 structure including matching of the
+included public key. Store private key files with 0600. Go does not guarantee complete deletion
+of all key copies from memory.
 
-`Rotate(ctx, newKey)` setzt voraus, dass der neue Schlüssel bereits sicher gespeichert
-ist. Erfolg schließt die alte Sitzung; mit neuem Schlüssel und ursprünglicher
-`Config.ClientID` neu verbinden. Bei unklarem Commit beide Schlüssel behalten
-und den neuen Zugang prüfen. Das SDK schreibt selbst keine Dateien.
+`Rotate(ctx, newKey)` assumes that the new key is already stored securely
+Success closes the old session; reconnect with new key and original `Config.ClientID`; keep both
+keys and check the new access if the commit is unclear; the SDK does not write files itself.
 
-## Tests und Generierung
+<a id="tests-und-generierung"></a>
 
-Als normaler Benutzer mit Rust/Cargo und Go:
+## Testing and generation
+
+As a normal user with Rust/Cargo and Go:
 
 ```sh
 ./scripts/test-go-sdk.sh
-# Optional zusätzlicher Test mit installiertem Python-SDK:
+# Optional additional test with installed Python SDK:
 MYNOFY_PYTHON=/pfad/zum/venv/bin/python ./scripts/test-go-sdk.sh
 ```
 
-Die Tests starten temporäre Rust-Services und prüfen Unix/WSS, TLS/Auth/ACL,
-Bytes/Events, Integergrenzen, Cursor, Rotation und Rust-Schlüsselinterop.
-Gemeinsame Wire-/Auth-/Rotationsvektoren gelten für Rust, Python und Go.
-Fehlerpeers prüfen Antwortverlust, falsche Frames, Timeout, Cancellation und Busy;
-`-race` prüft nebenläufige Zugriffe. Vorhandene Demo-Daten werden nicht verändert.
+The tests start temporary Rust services and check Unix/WSS, TLS/Auth/ACL, Bytes/Events, integer
+limits, cursor, rotation and Rust key interop. Common Wire-/Auth-/Rotationsvektoren apply to
+Rust, Python and Go. Error peers check response loss, false frames, timeout, cancellation and
+busy; `-race` check concurrent accesses. Existing demo data is unchanged.
 
-Bindings nur aus der kanonischen `.proto`-Quelle und dem Katalog regenerieren:
+Regenerate bindings only from the canonical `.proto` source and the catalog:
 
 ```sh
 go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
-# Python-Entwicklungsumgebung wie beim Python-SDK einrichten:
+# Set up Python development environment as in the Python SDK:
 PROTOC_GEN_GO="$(go env GOPATH)/bin/protoc-gen-go" python sdks/go/generate.py
 ```
 
-Kein Peer-/Owner-Tunnel, Admin-Zugang oder Workflow-/Polling-Helfer im ersten Go-SDK.
-Für Owner-Tunnel bleibt der Rust-Client verfügbar. Weitere Sprachen: [SDK-Übersicht](../../docs/sdks.md).
+Kein Peer-/Owner-Tunnel, admin access, or Workflow-/Polling-Helfer In the first go-- SDK For
+owner tunnels, the Rust client remains available. [SDK - Overview](../../docs/sdks.md).
 
 ## Owner-authenticated producer identity
 
-Read `item.Message.GetProducerId()` for the stable client identity stamped by the owner.
-It is immutable, survives authorized key rotation and storage restore, and is
-separate from any sender or actor claim inside the payload. Match workflow roles
-to this value. This is an assertion over the protected owner connection, not a
-portable cryptographic message signature.
+Read `item.Message.GetProducerId()` for the stable client identity stamped by the owner. It is immutable, survives authorized key rotation and storage restore, and is separate from any sender or actor claim inside the payload. Match workflow roles to this value. This is an assertion over the protected owner connection, not a portable cryptographic message signature.
 
 For cursor continuity, compare `ConnectionInfo.BootID` between authenticated sessions. An empty value indicates a legacy owner.

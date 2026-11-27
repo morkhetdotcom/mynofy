@@ -1,79 +1,129 @@
-# Einheitliche Abläufe für Menschen, Agenten und Maschinen
+<a id="einheitliche-abläufe-für-menschen-agenten-und-maschinen"></a>
 
-Dieses Dokument präzisiert die Produktentscheidung zu `(Kategorie, Aktion, Status)`. Es ist die fachliche Grundlage für den [UC-Katalog](use-cases.md) und einen späteren AI-Skill. Es führt keine neuen Wire-Felder oder Broker-Automatik ein. Typisierte Ereignisse und freie Bytes sind implementiert; der Core prüft Kennungen und Größen, aber keine fachlichen Übergänge oder Parameterbedeutungen. Der lokal konfigurierte Adapter kann bereits exakte Ereignisse als Trigger auswerten.
+# Uniform processes for people, agents and machines
+
+This document specifies the product decision for `(Kategorie, Aktion, Status)`. It is the
+technical basis for the [UC-catalog](use-cases.md) and a later AI skill. It does not introduce
+new wire fields or broker automatics. Typed events and free bytes are implemented; the core
+checks identifiers and sizes, but no technical transitions or parameter meanings. The locally
+configured adapter can already evaluate exact events as triggers.
 
 ## Grundregel
 
-Kategorie = betroffener Bereich. Aktion = konkreter Vorgang. Status = Stand oder Ergebnis genau dieses Vorgangs.
+Category = affected area. Action = specific task. Status = status or result of that task.
 
-| Muster | Bedeutung | Empfänger darf daraus ableiten |
+| Muster | Meaning | Consignee may derive from this |
 | --- | --- | --- |
-| `(JOB, START, PENDING)` | Der Start dieses Jobs steht aus. | Nur der im Ablauf bestimmte Ausführer prüft, ob er starten darf; Beobachter warten. |
-| `(JOB, START, SUCCESS)` | Dieser Job wurde gestartet. | Start ist erfolgt; Arbeit und Ergebnis sind noch nicht abgeschlossen. |
-| `(JOB, ACQUIRE, PENDING)` | Die Übernahme steht aus. | Vergabestelle prüft den im Profil genannten Kandidaten. |
-| `(JOB, ACQUIRE, SUCCESS)` | Die Übernahme wurde erfolgreich vollzogen. | Der bezeichnete Ausführer hat nach dem Vergabevertrag übernommen. Nicht jeder Leser wird dadurch Inhaber. |
-| `(JOB, EXECUTE, PENDING)` | Ein definierter Arbeitsschritt steht aus. | Zuständiger Ausführer prüft die Voraussetzungen dieses Schritts. |
-| `(JOB, EXECUTE, SUCCESS)` | Der definierte Arbeitsschritt wurde erfolgreich ausgeführt. | Nur daran gebundene Abhängigkeiten können erfüllt sein. |
-| `(JOB, VALIDATE, SUCCESS)` | Die Prüfung im benannten Profil war erfolgreich. | Genau diese Prüfung dieses Stands ist bestanden; andere Prüfungen bleiben offen. |
-| `(JOB, COMPLETE, SUCCESS)` | Der Job ist für diesen Versuch erfolgreich abgeschlossen. | Vereinbarte Ergebnisverbraucher können nach ihren Regeln fortfahren. |
-| `(JOB, COMPLETE, FAILED)` | Der Job ist für diesen Versuch fehlgeschlagen. | Kein Erfolgspfad; Fehlerbehandlung des Profils anwenden. |
-| `(JOB, CANCEL, CANCELLED)` | Der Abbruch wurde tatsächlich vollzogen. | Nicht mehr bloß ein Abbruchwunsch. Bereits eingetretene Nebenwirkungen bleiben möglich. |
+| `(JOB, START, PENDING)` | The start of this job is pending. | Only the exporter specified in the expiry checks whether it is allowed to take off; observers wait. |
+| `(JOB, START, SUCCESS)` | This job was started. | Start has been made; work and result are not yet completed. |
+| `(JOB, ACQUIRE, PENDING)` | The takeover is pending. | The awarding authority shall examine the candidate named in the profile. |
+| `(JOB, ACQUIRE, SUCCESS)` | The takeover was successfully completed. | The designated exporter has taken over under the contract and not every reader becomes the holder. |
+| `(JOB, EXECUTE, PENDING)` | A defined work step is pending. | Competent exporter shall examine the conditions of this step. |
+| `(JOB, EXECUTE, SUCCESS)` | The defined work step was successfully carried out. | Only dependencies linked to it can be fulfilled. |
+| `(JOB, VALIDATE, SUCCESS)` | The examination in the named profile was successful. | Exactly this examination of this stand has been passed; other examinations remain open. |
+| `(JOB, COMPLETE, SUCCESS)` | The job is successfully completed for this attempt. | Agreed result consumers can proceed according to their rules. |
+| `(JOB, COMPLETE, FAILED)` | The job failed for this attempt. | No success path; apply error handling of the profile. |
+| `(JOB, CANCEL, CANCELLED)` | The termination was actually carried out. | It is no longer just a wish to discontinue, but side effects that have already occurred remain possible. |
 
-Vorhandene Schreibweise: `ACQUIRE` (ID 72), nicht `AQUIRE`. `SUCCESS` bezieht sich immer auf die Aktion: Ein erfolgreicher CANCEL wäre erfolgreicher Abbruch, kein erfolgreicher Job. Für vollzogenen Abbruch verwendet das Standardbeispiel einheitlich `CANCEL/CANCELLED`.
+Use `ACQUIRE` (ID 72). `SUCCESS` always refers to the
+action: a successful CANCEL would be successful termination, not a successful job. for completed
+termination, the standard example uses uniformly `CANCEL/CANCELLED`.
 
-`PENDING` ist kein universelles „führe das jetzt aus“. Es kann auch die eigene ausstehende Arbeit eines Producers bekanntgeben. Nur das vorab vereinbarte Profil benennt den zuständigen Ausführer und dessen Voraussetzungen. SUCCESS ist eine Meldung über ein eingetretenes Ergebnis, keine allgemeine Aufforderung an alle Consumer. Manche Meldungen, z. B. Messwerte oder Lebenszeichen, sind unmittelbare Beobachtungen ohne vorgelagertes PENDING.
+`PENDING` is not a universal ‘perform this now’. It can also announce a producer’s own pending work. Only the pre-agreed profile indicates the exporter responsible and its requirements. SUCCESS is a notification of a result that has occurred, not a general request to all consumers. Some notifications, e.g. readings or signs of life, are immediate observations without prior PENDING.
 
-## Beispiel: Agent startet und übernimmt Arbeit
+<a id="beispiel-agent-startet-und-übernimmt-arbeit"></a>
 
-Ein Ablauf kann wie vom Produkt beschrieben aussehen:
+## Example: Agent starts and takes over work
 
-1. Agent meldet `(JOB, START, PENDING)` für seinen ausstehenden Start.
-2. Wenn seine Startvoraussetzungen erfüllt sind und er tatsächlich beginnt, meldet er `(JOB, START, SUCCESS)`.
-3. Er übernimmt einen bestimmten Arbeitsschritt oder eine Ressource und meldet nach erfolgreicher Vergabe `(JOB, ACQUIRE, SUCCESS)`.
-4. Er führt den geschützten Schritt aus und meldet `(JOB, EXECUTE, SUCCESS)`.
-5. Nach allen nötigen Schritten meldet er `(JOB, COMPLETE, SUCCESS)`.
+A process can look as described by the product:
 
-Die Reihenfolge ergibt sich aus den Abhängigkeiten: Wenn schon der Jobstart exklusiv vergeben werden muss, liegt die erfolgreiche Übernahme vor START/SUCCESS. Wenn der Start lediglich unkritische Initialisierung bedeutet, kann die Ressourcenübernahme danach und vor der geschützten Arbeit stattfinden. Jedes konkrete Profil legt eine dieser Varianten fest; ein Agent darf die Reihenfolge nicht eigenständig umdeuten.
+1. Agent reports `(JOB, START, PENDING)` for its pending start.
+2. If his starting requirements are met and he actually starts, he reports `(JOB, START,
+   SUCCESS)`.
+3. He takes over a certain work step or resource and reports after successful allocation `(JOB,
+   ACQUIRE, SUCCESS)`.
+4. It performs the protected step and reports `(JOB, EXECUTE, SUCCESS)`.
+5. After all necessary steps, he reports `(JOB, COMPLETE, SUCCESS)`.
 
-Mynofy vergibt derzeit keine Jobs oder Leases. Bei einem einzigen fest zugeordneten Ausführer kann dessen Übernahmevereinbarung genügen. Bei konkurrierenden Ausführern braucht es eine verlässliche Vergabestelle; zwei selbst veröffentlichte ACQUIRE/SUCCESS-Meldungen ergeben keine atomare Exklusivität. Eine Nachricht über Vergabe ersetzt die maßgebliche Vergabe nicht.
+The order results from the dependencies: If the job start has to be exclusively assigned, the
+successful takeover is before START/SUCCESS. If the start only means uncritical initialization,
+the resource takeover can take place afterwards and before the protected work. Each specific
+profile determines one of these variants; an agent must not reinterpret the order independently.
 
-## Kontext, der ein Tripel eindeutig macht
+Mynofy does not currently provide jobs or leases; for a single fixed exporter, its takeover
+agreement may be sufficient; for competing exporters, a reliable contracting authority is
+required; two self-published ACQUIRE/SUCCESS-messages do not produce atomic exclusivity; a
+notification of award does not replace the relevant award.
 
-Jedes Ablaufprofil beschreibt mindestens:
+<a id="kontext-der-ein-tripel-eindeutig-macht"></a>
 
-- Katalogname/-version und seine eigene feste Bedeutung/Version; die konkrete Profilkennung ist noch nicht als Wire-Feld beschlossen.
-- Exakte Topics für die Schritte und deren Schreib-/Leserechte; keine impliziten Wildcards oder Reply-Felder.
-- Lauf, Versuch, Schritt und gegebenenfalls unveränderlichen Artefaktstand. Ein erneuter Versuch oder geänderter Stand muss von alten Ergebnissen unterscheidbar sein.
-- Zuständigen Producer beziehungsweise autorisierte Anwendung für jede Meldung und welche Consumer handeln dürfen. Die Enums behaupten keine Identität.
-- Feste Typen, Reihenfolge, Einheit und Bedeutung der Parameter. Vorschlag für einfache Jobs: bis zu drei U64-Werte für Lauf, Versuch und Schritt. Benötigt ein Fall mehr Kontext, muss das Profil ihn bereits im Topic/externen Zustand kennen oder die freie Payload verwenden; nichts still weglassen.
-- Voraussetzungen, erlaubte Übergänge, Abschlusskriterien und Reaktion auf Fehler, Duplikate und unbekannten Ausgang.
+## Context that makes a triple clear
 
-Diese Angaben sind die Semantik, keine zusätzlichen Felder, die jede Message wiederholt übertragen muss. Eine einzelne Category/Action/Status-Kombination ohne solches Profil reicht nicht zur sicheren Interpretation. Der Katalogabruf enthält derzeit die Werte, noch keine installierten Workflow-Profile oder die komplette UC-Liste.
+Each flow profile shall describe at least:
 
-Aktuelle ACLs können Writer-Rollen über getrennte Topics begrenzen; sie autorisieren keine einzelnen Tripel innerhalb eines gemeinsam beschreibbaren Topics. Nachrichten enthalten derzeit keinen vom Consumer geprüften individuellen Producer-Nachweis. Ein künftiger Skill darf aus beliebigen Rollenbehauptungen im Inhalt keine Ausführungsberechtigung ableiten. Für entscheidungsrelevante Schritte müssen Anwendung und Topic-Vertrag sicherstellen, dass der zulässige Producer dort schreiben kann.
+- catalog name and version and its own fixed Meaning/Version; the concrete profile identifier has
+  not yet been decided as a wire field.
+- Exact topics for the steps and their Schreib-/Leserechte; no implicit wildcards or reply
+  fields.
+- Run, test, step and, where applicable, unchangeable artifact status; a new test or changed
+  status must be distinguishable from old results.
+- Responsible producers or authorized applications for each message and which consumers are
+  allowed to act.
+- Fixed types, order, unity and meaning of the parameters. Suggest for simple jobs: up to three
+  U64 values for run, trial and step. If a case requires more context, the profile must already
+  know it in the Topic/externen state or use the free payload; do not leave anything silent.
+- Requirements, allowed transitions, completion criteria and response to errors, duplicates and
+  unknown exits.
 
-## Reaktionsregeln für einen späteren AI-Skill
+This information is the semantics, no additional fields that each message must transmit
+repeatedly. A single Category/Action/Status-Kombination without such a profile is not sufficient
+for secure interpretation. The catalog retrieval currently contains the values, no installed
+workflow profiles or the complete UC list.
+
+Current ACLs can limit writer roles over separate topics; they do not authorize individual
+triples within a commonly describable topic. Messages do not currently contain a
+consumer-certified individual producer proof. A future skill may not derive execution
+authorization from any role claims in the content. For decision-relevant steps, the application
+and topic contract must ensure that the authorized producer can write there.
+
+<a id="reaktionsregeln-für-einen-späteren-ai-skill"></a>
+
+## Response rules for a later AI skill
 
 | Eingang / Situation | Reaktion |
 | --- | --- |
-| Unbekannter Katalog, Profil oder Parameterbedeutung | Nicht raten und keine Nebenwirkung auslösen. Verfügbare Definition abrufen beziehungsweise Konfiguration klären. |
-| PENDING für den eigenen Schritt | Kontext und aktuelle Voraussetzungen prüfen; erst dann nach festgelegter Zuständigkeit übernehmen/ausführen. |
-| PENDING für einen anderen Ausführer | Beobachten oder nach Profil warten, nicht zusätzlich loslegen. |
-| SUCCESS für eine Voraussetzung | Lauf, Versuch, Stand und alle weiteren Abhängigkeiten prüfen; ausschließlich den dadurch freigegebenen Schritt starten. |
-| SUCCESS zu einem alten Versuch/Artefakt | Nicht als aktuelle Freigabe verwenden. |
-| Derselbe fachliche Schritt wird erneut zugestellt | Vor erneuter Wirkung den eigenen Fortschritt/maßgeblichen Zustand prüfen. Neue Delivery-ID bedeutet keine neue Aufgabe. |
-| FAILED, PERMISSION_DENIED, INVALID_ARGUMENT oder anderer negativer Ausgang | Erfolgspfad sperren und die konkrete Fehlerregel anwenden. Keine Fehlerursache erfinden. |
-| DEFERRED oder BUSY | Aufschub/Belegung melden oder weiter warten nach Profil; keine unbeschränkte Poll-/Publish-Schleife. |
-| RETRY | Als Information interpretieren; nur bei expliziter Retry-Regel und Entscheidung des Producers neuen Versuch beginnen. |
-| Timeout, Ablauf oder Verbindungsabbruch | Ausgang unbekannt. Eigene aktive Inhalte/Status gegebenenfalls abfragen, maßgeblichen Zustand prüfen und Wiederholung bewusst entscheiden. |
-| Poll/ACK erfolgreich | Nur Transport-/Zustellfortschritt. Keine fachliche Arbeit, Freigabe oder Fertigstellung daraus ableiten. |
+| Unknown catalog, profile or parameter significance | Do not guess and do not trigger a side effect. Get available definition or clarify configuration. |
+| PENDING for your own step | Check the context and current conditions; only then take over/execute according to defined responsibility. |
+| PENDING for another exporter | Watch or wait by profile, do not get started additionally. |
+| SUCCESS for a requirement | Check the run, test, stand and all other dependencies; only start the step that has been released. |
+| SUCCESS to an old Versuch/Artefakt | Do not use as current release. |
+| The same professional step will be delivered again | Check your own progress/authoritative state before taking effect again. A replayed message does not mean a new task. |
+| FAILED, PERMISSION_DENIED, INVALID_ARGUMENT or other negative output | Blocking the path of success and applying the specific error rule. |
+| DEFERRED or BUSY | deferral or assignment report or continue to wait by profile; no unlimited poll or publish loop. |
+| RETRY | Interpret as information; only in the case of explicit retry rule and decision of the producer to start a new attempt. |
+| Timeout, expiration or disconnection | Own active content/Status query if necessary, check the relevant state and deliberately decide repetition. |
+| Poll succeeds | The reply contains active history. Application work, approval and completion are reported separately. |
 
-Ein dauerhafter fachlicher Fortschritt ist Anwendungszustand. Die RAM-Historie von mynofy und der Client-Cursor garantieren keine dauerhafte Deduplizierung, keinen aktuellen Geräte-Istzustand und kein atomisches ACK plus Folgeereignis. Ein späterer Skill muss seine zulässigen Aktionen aus dem konkreten Ablauf beziehen, nicht aus einer pauschalen Liste aller bekannten Aktionsnamen.
+The RAM history of mynofy and the client cursor do not guarantee permanent deduplication,
+current device status and atomic processing and follow-up publish. A later skill must obtain its
+allowable actions from the specific process, not from a blanket list of all known action names.
 
-## Was vor der Skill-Erstellung noch geprüft werden muss
+<a id="was-vor-der-skill-erstellung-noch-geprüft-werden-muss"></a>
 
-Die 50 UCs sind bewusst breiter als das erste Standardprofil. Als nächste Konkretisierung eignen sich drei vollständig durchgespielte Profile: JOB mit einem festen Ausführer, Code/Tests/Review mit mehreren fest zugeordneten Agenten und menschliche Freigabe eines konkreten Artefaktstands. Für jedes Profil müssen gültige und ungültige Ereignisfolgen sowie Timeout-/Duplikatfälle beschrieben werden. Erst daraus wird ein ausführbarer Skill; diese Dokumente sind bislang dessen Entwurfsgrundlage.
+## What else needs to be checked before skill creation
 
-## Gemeinsame Kommunikation und lokale Vereinbarungen
+The 50 UCs are deliberately broader than the first standard profile. The next step is three
+fully played profiles: JOB with a fixed executor, Code/Tests/Review with several permanent
+agents and human release of a concrete artifact status. Valid and invalid sequences of events
+and Timeout-/duplicate cases must be described for each profile.
 
-Die [Agentenkoordination mit drei Topics](agent-coordination.md) ergänzt dieses Modell: ein Kommunikationstopic für Abstimmung einschließlich menschlicher Mitwirkung, ein Statustopic für kompakte Ereignisse und ein Interpretationstopic für regelmäßig erneuerte Client-Regeln. Der Katalog ist die gemeinsame Basis; Agenten dürfen effizient eigene laufbezogene Anwendungsprotokolle vereinbaren. Brokerregeln und Kataloggrundbedeutungen werden dabei nicht verändert. Unbekannte Protokollstände oder ungeklärte Zustimmung sind keine Ausführungsfreigabe.
+<a id="gemeinsame-kommunikation-und-lokale-vereinbarungen"></a>
+
+## Joint communication and local agreements
+
+The [Agent coordination with three topics](agent-coordination.md) complements this model: a
+communication topic for tuning including human participation, a status topic for compact events
+and an interpretation topic for regularly renewed client rules. The catalog is the common basis;
+agents are allowed to efficiently agree on their own running-related application protocols.
+Broker rules and catalog basic meanings are not changed. Unknown protocol statuses or
+unexplained consent are not execution clearance.

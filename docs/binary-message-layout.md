@@ -1,54 +1,94 @@
-# Gemeinsames binäres Nachrichtenlayout
+<a id="gemeinsames-binäres-nachrichtenlayout"></a>
 
-Der Nachrichtenbestand verwendet ein initialisiertes, zeigerfreies Byte-Layout sowohl im RAM als auch in einem Nachrichtenabbild. Speichern und Einlesen wandeln Records, Payload-Blöcke und Inhaltstyp-Tabelle nicht in JSON, Protobuf oder native Rust-Objekte um. Dateirahmen und Prüfsummen werden zusätzlich erzeugt beziehungsweise geprüft. Alle eigenen Zugriffe bleiben ohne `unsafe`.
+# Common binary message layout
 
-Der Umbau betrifft den laufenden Core, nicht nur einen Export-Encoder. Der direkte Protobuf-Poll-Encoder liest dieselben Byte-Records und Payload-Blöcke. JSON und die typisierte Protobuf-API bilden daraus bei Bedarf Antworten. Die bereits vorhandenen Such-/Sortier-/Ablaufindizes bleiben separate Laufzeitstrukturen.
+The message stock uses an initialized, pointer-free byte layout both in the RAM and in a message
+image. Saving and reading do not convert records, payload blocks and content type table into
+JSON, prototype or native Rust objects. File frames and checksums are additionally generated or
+checked. All own accesses remain without `unsafe`.
+
+The conversion affects the running core, not just an export encoder. The direct Protobuf-Poll
+encoder reads the same byte records and payload blocks. JSON and the typed Protobuf-API form
+answers as needed. The existing Such-/Sortier-/expiration indexes remain separate runtime structures.
 
 ## Record v1
 
-Ein Record belegt exakt **80 Byte**, einschließlich einer 32-Byte-Payload-Union. Ein belegter Arena-Slot hat dieselben 80 Byte, ohne `Option<Record>` oder native Enum-/Paddingrepräsentation. Mehrbytezahlen sind Little Endian; Message-IDs enthalten acht ASCII-Bytes aus dem bestehenden Alphabet.
+A record occupies exactly **80 bytes**, including a 32-byte payload union.A occupied arena slot
+has the same 80 bytes, with no `Option<Record>` or native enum or padding representation. multibyte
+numbers being Little Endian; message IDs contain eight ASCII bytes from the existing alphabet.
 
-| Offset | Breite | Feld |
+| Offset | Width | Field |
 | --- | --- | --- |
 | 0 | 8 | Message-ID |
-| 8 | 8 | Absoluter Ablaufzeitpunkt, Unix-ms |
+| 8 | 8 | Absolute expiration time, Unix-ms |
 | 16 | 8 | Producer-Annahmeposition |
 | 24 | 8 | Topic-Annahmeposition |
-| 32 | 8 | Vollständiger Erstellungszeitpunkt, Unix-ms |
+| 32 | 8 | Complete creation time, Unix-ms |
 | 40 | 2 | Producer-Registry-Slot |
 | 42 | 2 | Topic-Registry-Slot |
-| 44 | 4 | Inhaltstyp-ID, 0 = keiner |
+| 44 | 4 | Content type ID, 0 = none |
 | 48 | 32 | Payload-Union |
 
-Der vollständige Erstellungszeitpunkt ersetzt den alten U32-Zeitanteil samt Sondertabelle für lange TTLs. Deren Diagnosefeld `extended_time_entries` bleibt vorerst mit 0 erhalten. Es gibt keine zeitabhängige Uminterpretation gespeicherter Records.
+The complete time of creation replaces the old U32 time component together with a special table
+for long TTLs, whose diagnostic field `extended_time_entries` is retained for the time being
+with 0. There is no time-dependent reinterpretation of stored records.
 
-Die Union enthält ihr Typkennzeichen an relativem Offset 6, reserviertes Byte 7 ist 0:
+The Union contains its type mark at relative offset 6, reserved byte 7 is 0:
 
-- **Bytes, Kennzeichen 1:** Länge u32 an 0; reservierte Bytes 4–5 sind 0; relative Blockadresse u64 an 8; Bytes 16–31 sind 0. Länge maximal 4096. Leere Payloads haben Adresse 0 und brauchen keinen Block.
-- **Event, Kennzeichen 2:** Kategorie U16/Aktion U8/Status U8 als gemeinsamer u32-Schlüssel an 0; drei 3-Bit-Parametertypen als u16 an 4; 24 Wertebytes ab 8. Nicht genutzte Bits/Bytes sind 0. Der eingebaute Katalog 1/v1 bleibt implizit. Typfolge, Bool-Werte und endliche Floats werden beim Einlesen geprüft; Floatbits einschließlich negativem Nullwert bleiben erhalten.
+- **Bytes, number 1:** Length u32 at 0; reserved bytes 4–5 are 0; relative block address u64 at
+  8; bytes 16–31 are 0. Length maximum 4096. Empty payloads have address 0 and do not need a
+  block.
+- **Event, License 2:** Category U16/Aktion U8/Status U8 as common u32 key at 0; three 3-bit
+  parameter types as u16 at 4; 24 value bytes from 8. Unused Bits/Bytes are 0. The built-in
+  catalog 1/v1 remains implicit. Type sequence, bool values and finite floats are checked upon
+  reading in; float bits including negative zero value are retained.
 
-Records liegen in Byte-Chunks zu 256 Slots: live-Zähler u32 an 0, vier reservierte Nullbytes, 32 Byte Belegungsbitmap und anschließend 256 × 80 Recordbytes. Die Bitmap ist das Belegungsmerkmal; freie Records sind vollständig 0. Die gesamte persistierte Chunkgröße ist 20.520 Byte. Freilisten und Chunk-Suchpositionen gehören nicht zu diesem Block.
+Records are in byte chunks to 256 slots: live counter u32 at 0, four reserved zero bytes, 32
+bytes occupancy bitmap and then 256 × 80 record bytes. The bitmap is the occupancy feature; free
+records are completely 0. The total persisted chunk size is 20,520 bytes. Free lists and chunk
+search positions do not belong to this block.
 
-## Variable Daten und Inhaltstypen
+<a id="variable-daten-und-inhaltstypen"></a>
 
-Byte-Payloads und internierte Inhaltstypnamen liegen in separaten Seiten mit je **16 KiB Datenbereich**. Größenklassen von 16 bis 4096 Byte erlauben Wiederverwendung freier Plätze ohne Verschieben lebender Payloads. Eine Adresse enthält `(Seiten-ID + 1)` in den oberen 32 Bits und den Offset innerhalb des Datenbereichs in den unteren 32 Bits. Sie enthält keinen Prozesszeiger.
+## Variable data and content types
 
-Eine Seite beginnt mit Klassen-Log2 (1 Byte), drei reservierten Nullbytes, live-Zähler u32 und einer zur Klasse passenden Bitmap aus u64-Worten. Der Rest ist der Datenbereich. Die Seitengröße umfasst daher 16 KiB plus 16–136 Headerbytes. Nur die benötigte Bitmap wird gespeichert. Unbenutzte Slots und der Rest eines belegten Klassenplatzes nach der tatsächlichen Datenlänge sind 0.
+Byte payloads and internal content type names are located in separate pages with **16 KiB data
+range**. Size classes from 16 to 4096 bytes allow for reuse of free spaces without moving living
+payloads. One address contains `(Seiten-ID + 1)` in the top 32 bits and the offset within the
+data range in the bottom 32 bits. It does not contain a process pointer.
 
-Die Inhaltstyp-Tabelle besteht aus 16-Byte-Einträgen: Blockadresse u64, UTF-8-Länge u32 und Referenzzahl u32. Freie Einträge sind 0. Ihre Namenssuche ist ein flüchtiger Hash-Index; beim Lesen wird er aus den geprüften Bytes rekonstruiert. Die unveränderte Inhaltstyp-ID verbindet Records mit dieser Tabelle.
+A page starts with class log2 (1 byte), three reserved zero bytes, live counter u32 and a
+class-matched bitmap of u64 words, the rest is the data area, so the page size is 16 KiB plus
+16-136 headerbytes, only the required bitmap is stored, unused slots and the rest of a occupied
+class space according to the actual data length is 0.
 
-Beim Entfernen einer Nachricht werden Record und freigegebene Blockplätze vollständig genullt. Alte Inhalte in bereits freigegebenen Plätzen werden dadurch nicht versehentlich mitgesichert. Leere Seiten und Chunks werden budgetiert während der vorhandenen Maintenance freigegeben; freie Plätze bleiben vorher wiederverwendbar. Neue Diagnosefelder `payload_allocated_bytes`, `payload_pages` und `content_type_table_bytes` machen Seitenkapazität und Tabellenkosten sichtbar. Die logische Annahmequote ist weiterhin keine exakte RSS-Grenze.
+The content type table consists of 16-byte entries: block address u64, UTF -8 length u32 and
+reference number u32. Free entries are 0. Your name search is a volatile hash index; when read,
+it is reconstructed from the tested bytes. The unchanged content type ID connects Records to
+this table.
 
-Die bisherige individuelle `Bytes`-Allokation ist kein Bestandteil mehr des dauerhaften Records. Der direkte Wire-Encoder schreibt aus geliehenen Block-Slices. Die typisierte API erzeugt dagegen unabhängige `Bytes`-Antworten durch Kopieren; dadurch können Antworten den Core-Lock sicher verlassen, während die Seiten weiter verändert werden. Diese Kosten werden im Vergleich getrennt ausgewiesen.
+When a message is removed, record and shared block spaces are completely zeroed out. Old
+contents in already shared spaces are not inadvertently backed up. Empty pages and chunks are
+released budgeted during the existing maintenance; free spaces remain reusable beforehand. New
+diagnostic fields `payload_allocated_bytes`, `payload_pages` and `content_type_table_bytes` make
+page capacity and table costs visible. The logical acceptance rate is still not an exact RSS
+limit.
 
-## Abbild-API und Dateirahmen
+The previous individual `Bytes` allocation is no longer part of the permanent record. The direct
+wire encoder writes from borrowed block slices. The typed API generates independent `Bytes`
+responses by copying; this allows answers to safely leave the core lock while the pages are
+further modified.
+
+<a id="abbild-api-und-dateirahmen"></a>
+
+## Image API and file frame
 
 ```rust,no_run
 use mynofy_server::message_image::{ImageLimits, MessageImage};
 # fn example(engine: &mynofy_server::engine::Engine) -> Result<(), mynofy_server::BoxError> {
-// Unter der Synchronisierung des einbettenden Owners eine konsistente Kopie erfassen:
+// Under the synchronization of the embedding owner, capture a consistent copy:
 let image = engine.capture_message_image(ImageLimits::default())?;
-// Danach außerhalb des Core-Locks schreiben; der Aufrufer bestimmt Dateirechte/Atomarität.
+// Then write outside the core lock; the caller determines file permissions and atomicity.
 let mut options = std::fs::OpenOptions::new();
 options.write(true).create_new(true);
 #[cfg(unix)]
@@ -64,18 +104,42 @@ assert_eq!(image.message_count(), restored.message_count());
 # Ok(()) }
 ```
 
-Für Produktbetrieb neue private Dateien verwenden und bei Ersetzung einen synchronisierten temporären Stand atomar umbenennen; der generische Writer erledigt keine Dateiverwaltung. Die API ist eine Bibliotheksgrundlage, kein neuer Admin-Command. `capture_message_image` kopiert unter der Owner-Synchronisierung Byte-Blöcke und Registry-Bindungen. Es ist keine konstante Arbeit und benötigt zusätzlichen RAM. Das zurückgegebene Abbild bleibt von nachfolgenden Publishes/Abläufen unabhängig; Datenträger-I/O erfolgt mit dem eigenen Abbild außerhalb des Locks.
+Using new private files for product operation and renaming a synchronized temporary state
+atomically when replaced; the generic writer does not handle file management. The API is a
+library base, not a new admin command. `capture_message_image` copied under the owner
+synchronization byte blocks and registry bindings. It is not constant work and requires
+additional RAM. The returned image remains independent of subsequent Publishes/expirations; disk
+I/O is done with its own image outside the lock.
 
-Der 96-Byte-Dateiheader enthält `MYNIMG01`, Formatversion 1, Recordbreite, Slot-/Tabellengrößen, Registry-Anzahlen und Recordanzahl. Die ersten 64 Byte enthalten Felder und reservierte Nullen, die letzten 32 ihren SHA-256. Danach folgen Owner-ID, Client- und Topic-Bindungen, Inhaltstyp-Tabelle, Record-Chunks und Blockseiten in festgelegter Reihenfolge. Jeder Block hat einen 48-Byte-Rahmen mit Ordnungsnummer u64, Länge u32, vier reservierten Nullbytes und SHA-256 über die Nutzbytes.
+The 96-byte file header contains `MYNIMG01`, format version 1, record width,
+Slot-/table dimensions, registry numbers and record number. The first 64 bytes contain fields and
+reserved zeros, the last 32 contain their SHA -256. Then follows owner ID, client and topic
+bindings, content type table, record chunks and block pages in a set order. Each block has a
+48-byte frame with order number u64, length u32, four reserved zero bytes and SHA -256 over the
+payload bytes.
 
-Die Registry-Bindungen enthalten stabile Client-IDs und Topic-Namen. Sie identifizieren die numerischen Referenzen des Records und enthalten keine ACLs oder Schlüssel. Stringbytes werden direkt als UTF-8-Blöcke geschrieben; Record-/Union-/Tabellen-/Seitenbytes entsprechen exakt dem RAM-Bestand. Eine spätere Formatversion darf das native Rust-Layout nicht stillschweigend zum Dateiformat machen.
+The registry bindings contain stable client IDs and topic names; they identify the numeric
+references of the record and do not contain ACLs or keys; stringbytes are written directly as
+UTF -8 blocks; Record-/Union-/Tabellen-/Seitenbytes correspond exactly to the RAM stock; a later
+format version must not implicitly make the native Rust layout a file format.
 
-`read_from` liest die Blöcke direkt in dieselben RAM-Container, prüft vor Freigabe und rekonstruiert deren Allokatorlisten und Namensindex. Das ist kein ungeprüftes Speicher-Mapping. Defaultgrenzen: 64 MiB gesamte Datei, 100.000 residente Records, 4096 Chunk-Slots und 65.536 Seiten-Slots; der Aufrufer kann engere oder andere passende Grenzen wählen. Header/Blocklängen werden vor Allokationen begrenzt.
+`read_from` reads the blocks directly into the same RAM containers, checks before sharing and reconstructs their allocator lists and name index. This is not an unchecked memory mapping. Default limits: 64 MiB entire file, 100,000 resident records, 4096 chunk slots and 65,536 page slots; the caller can choose narrower or other matching limits. header and block lengths are limited before allocations.
 
-Validiert werden Version/Breiten, Prüfsummen und Blockreihenfolge, vollständiges EOF ohne Nachlauf, Bitmap/Zähler/Reserviertbytes, IDs und Zeitwerte, Registry-Grenzen, doppelte IDs/Positionen, Union-Typen, Parameter, sämtliche Adressen und Inhaltstyp-Referenzzahlen. Gemeinsam verwendete Inhaltstypen bleiben referenzgezählt; unerlaubt doppelt verwendete Payload-Allokationen und nicht referenzierte belegte Blöcke werden abgewiesen. Es gibt keinen halb übernommenen Datenbestand bei einem Lesefehler.
+Validated are Version/Breiten, checksums and block order, complete EOF without follow-up,
+Bitmap/counter/Reserviertbytes, IDs and time values, registry limits, double IDs/Positionen,
+Union types, parameters, all addresses and content type reference numbers. Shared content types
+remain reference counted; unauthorized duplicate payload allocations and unreferenced occupied
+blocks are rejected. There is no half-accepted database in the event of a read error.
 
-## Umfang und Einbindung
+<a id="umfang-und-einbindung"></a>
 
-`MessageImage` ist ein **Nachrichten-Speicherabbild**, noch kein vollständiger Owner-Checkpoint. Es enthält die residenten Nachrichten samt Ablaufzeiten, Payloads und Registry-Bindungen. Residente, logisch bereits abgelaufene Records können enthalten sein; ein künftiger Owner-Restore muss sie vor Ausgabe weiterhin nach ihrer unveränderten absoluten Zeit verwerfen. `message()` dient der expliziten Offline-Inspektion, führt keine Client-Authentifizierung oder Topic-Autorisierung aus und ist kein Server-Lesepfad.
+## Scope and involvement
 
-Der vollständige [Content-Checkpoint](content-storage.md) bettet dieses Nachrichtenabbild inzwischen zusammen mit ACK/NACK, Policies, Kopfständen und Vergabemetadaten ein. `MessageImage` bleibt die schmalere Bibliotheks-Schnittstelle; der Service lädt ausschließlich den vollständigen Checkpoint und nur während des Starts. Sicherheitszustand und Content bleiben getrennt. Ein als ungültig erkannter Topic-Cursor beginnt inzwischen automatisch am aktiven Anfang; die Mehrdeutigkeit eines erneut passenden achtstelligen Werts bleibt bestehen.
+`MessageImage` is a **message memory image**, not yet a complete owner checkpoint. It contains the resident messages including expiration times, payloads and registry bindings. Resident, logically expired records may be included; a future owner restore must continue to discard them before output after their unchanged absolute time. `message()` is used for explicit offline inspection, does not execute client authentication or topic authorization and is not a server read path.
+
+The complete [Content-Checkpoint](content-storage.md) now embeds this message image together
+with policies, headstands and assignment metadata. `MessageImage` remains the narrower
+library interface; the service loads only the full checkpoint and only during the start.
+Security status and content remain separate. A topic cursor recognized as invalid now
+automatically starts at the active beginning; the ambiguity of a matching eight-digit value
+remains.

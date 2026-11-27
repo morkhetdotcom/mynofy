@@ -1,19 +1,14 @@
-# Stand und verbleibende Umsetzung
+<a id="stand-und-verbleibende-umsetzung"></a>
 
-Die Grundregeln sind in [workflow.md](workflow.md) entschieden: drei Rollen-Topics,
-Operator als Hauptnummerngeber, lokale Zustände, einmaliges Mandat, wiederverwendetes
-Protokoll mit abgestimmtem Revisionswechsel, Zustandstransfer an neue Worker sowie
-menschlicher Stopp und Wiederaufnahme. Hierfür ist keine weitere Grundsatzrunde offen.
+# Status and remaining implementation
 
-Noch umzusetzen bei der Client-Anpassung:
+The basic rules are decided in [workflow.md](workflow.md): three role topics, operator as main
+number transmitter, local states, one-time mandate, reused protocol with coordinated revision
+change, state transfer to new workers as well as human stop and resumption.
 
-- Gemeinsame lokale Ablagemechanik für Arbeitsstand und Übergabe.
-- Polling-/Nachrichtenübergabe, Interpretationstimer, Fristen und Abbruch als
-  technische Unterstützung; Subprozesse sind erlaubt, ein gemeinsamer Helfer fehlt.
-- Unterstützung des beim Start vorgegebenen Stopp-/Wiederaufnahmemodus durch die
-  konkrete Laufzeit. Es wird kein bereits vorhandener Supervisor vorausgesetzt.
+The [MCP client helper](mcp.md#polling-und-exakte-referenzen) provides paced polling
+and local checkpoints. The runtime owns deadlines, execution stops and resumption.
+The workflow still defines the status exchanged with other participants.
 
-MCP und CLI sind implementiert. Die Rollen wurden in zwei Demos praktisch benutzt;
-Bedienung und Grenzen stehen im [MCP-Leitfaden](../../../docs/mcp.md) und im [Adapter-Leitfaden](../../../docs/client-adapters.md). Automatisierte
-Fehlertests verwenden deterministische Softwareclients, keine allgemeine Agenten-
-Verhaltensprüfung. Ein eigenes Broker-Nachrichtenformat bleibt spätere Iteration.
+Automated error tests use deterministic software clients. Additional interfaces
+and a possible custom broker wire format are deferred until after v1.0.0.

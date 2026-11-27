@@ -1,10 +1,4 @@
 //! Owner-local RID ranges. No per-ID heap allocation or random generation.
-use std::sync::{
-    Arc,
-    atomic::{AtomicU64, Ordering},
-};
-use tokio::sync::mpsc;
-
 const ALPHABET: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 pub(crate) const SPACE: u64 = 218_340_105_584_896; // 62^8
 const BLOCK: u64 = 1024;
@@ -58,10 +52,8 @@ impl Range {
 }
 
 pub(crate) struct IdPool {
-    reserved: Arc<AtomicU64>,
+    reserved: u64,
     current: Range,
-    ready: mpsc::Receiver<Range>,
-    worker: Option<(mpsc::Sender<Range>, u64)>,
 }
 impl IdPool {
     pub(crate) fn new() -> Self {
@@ -69,44 +61,23 @@ impl IdPool {
     }
     pub(crate) fn at(mut position: u64) -> Self {
         let current = Range::reserve(&mut position);
-        let (sender, ready) = mpsc::channel(1);
-        // Channel is empty and open here. Warm both ranges before accepting clients.
-        let result = sender.try_send(Range::reserve(&mut position));
-        debug_assert!(result.is_ok());
         Self {
-            reserved: Arc::new(AtomicU64::new(position)),
+            reserved: position,
             current,
-            ready,
-            worker: Some((sender, position)),
         }
     }
-    pub(crate) fn start(&mut self) {
-        if let Some((sender, mut position)) = self.worker.take() {
-            let reserved = self.reserved.clone();
-            tokio::spawn(async move {
-                loop {
-                    // Reserve only when the bounded channel has room; no busy polling.
-                    let Ok(permit) = sender.reserve().await else {
-                        break;
-                    };
-                    let range = Range::reserve(&mut position);
-                    reserved.store(position, Ordering::Release);
-                    permit.send(range);
-                }
-            });
-        }
-    }
+    /// Checkpoints resume at the first ID beyond the current reserved range.
     pub(crate) fn reserved_position(&self) -> u64 {
-        self.reserved.load(Ordering::Acquire)
+        self.reserved
     }
-    pub(crate) fn take(&mut self) -> Option<[u8; 8]> {
+    pub(crate) fn take(&mut self) -> [u8; 8] {
         if self.current.remaining == 0 {
-            self.current = self.ready.try_recv().ok()?;
+            self.current = Range::reserve(&mut self.reserved);
         }
         let id = self.current.next.0;
         self.current.next.increment();
         self.current.remaining -= 1;
-        Some(id)
+        id
     }
 }
 
@@ -135,29 +106,24 @@ mod tests {
         }
     }
     #[test]
-    fn bounded_exhaustion_and_wrap() {
-        let mut pool = IdPool::at(SPACE - 1);
-        assert_eq!(pool.take(), Some(*b"zzzzzzzz"));
-        assert_eq!(pool.take(), Some(*b"00000000"));
-        for _ in 1..BLOCK {
-            assert!(pool.take().is_some());
+    fn synchronous_refill_crosses_block_boundaries_and_wraps() {
+        let start = SPACE - 3;
+        let mut pool = IdPool::at(start);
+        assert_eq!(pool.reserved_position(), 0);
+        for i in 0..BLOCK * 8 {
+            assert_eq!(pool.take(), Id::from_index((start + i) % SPACE).0);
         }
-        assert!(pool.take().is_none());
     }
-    #[tokio::test]
-    async fn asynchronous_refill_is_ordered_and_stops_on_drop() {
+
+    #[test]
+    fn restore_resumes_beyond_the_reserved_range() {
         let mut pool = IdPool::new();
-        pool.start();
-        for i in 0..BLOCK * 5 {
-            let value = loop {
-                if let Some(value) = pool.take() {
-                    break value;
-                }
-                tokio::task::yield_now().await;
-            };
-            assert_eq!(value, Id::from_index(i).0);
+        for i in 0..BLOCK + 1 {
+            assert_eq!(pool.take(), Id::from_index(i).0);
         }
-        drop(pool); // receiver drop wakes the blocked producer
-        tokio::task::yield_now().await;
+        assert_eq!(pool.reserved_position(), BLOCK * 2);
+        let mut restored = IdPool::at(pool.reserved_position());
+        assert_eq!(restored.take(), Id::from_index(BLOCK * 2).0);
+        assert_eq!(restored.reserved_position(), BLOCK * 3);
     }
 }

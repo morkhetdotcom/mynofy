@@ -165,7 +165,7 @@ pub(crate) fn authenticate(engine: &mut Engine, key: &[u8]) -> u64 {
     let nonce = crypto::decode(challenge["nonce"].as_str().unwrap()).unwrap();
     let signature = crypto::sign(
         key,
-        &crypto::auth_bytes(&nonce, &public, &engine.config.service.id),
+        &crypto::auth_bytes(&nonce, &public, &engine.config().service.id),
     )
     .unwrap();
     checked(

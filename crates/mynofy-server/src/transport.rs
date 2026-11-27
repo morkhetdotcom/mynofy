@@ -256,9 +256,8 @@ impl ServerState {
         secret: Option<crate::content::ContentSecret>,
     ) -> std::result::Result<Arc<Self>, BoxError> {
         config.require_local_owner()?;
-        let mut engine = Engine::new_with_content_secret(config, now_ms(), secret)?;
-        let config = engine.config.clone();
-        engine.start_id_allocator();
+        let engine = Engine::new_with_content_secret(config, now_ms(), secret)?;
+        let config = engine.config().clone();
         let engine = Arc::new(Mutex::new(engine));
         let network = crate::links::Network::new(config.clone(), Arc::downgrade(&engine))?;
         Ok(Arc::new(Self {

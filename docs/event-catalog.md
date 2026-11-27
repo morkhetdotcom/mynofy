@@ -1,25 +1,45 @@
-# Eingebauter Ereigniskatalog: mynofy, Version 1
+<a id="eingebauter-ereigniskatalog-mynofy-version-1"></a>
 
-Erster Entwurf zur gemeinsamen Prüfung. Die Kategorien, Aktionen und Statuswerte stammen aus `logging-engine/morkhet_logging_engine/src/provider_strings.rs`; die numerischen IDs stammen aus `types.rs`. Quellprüfsummen stehen in der [maschinenlesbaren Definition](../protocol/catalogs/mynofy-v1.json). `logging-engine` bleibt unverändert und ist keine Build- oder Laufzeitabhängigkeit.
+# Built-in event catalog: mynofy, version 1
 
-Der Katalog ist über `get_catalog` abrufbar und besitzt die feste numerische Katalog-ID `1`. Protobuf und die zwei Payload-Varianten sind implementiert: typisierte Ereignisse sowie freie Bytes mit hart maximal 4096 Byte. Generierte Enums und numerische Mitgliedschaftsprüfungen vermeiden einen Katalogscan pro Ereignis. Fachliche Signaturen/Profiles und automatischer Katalogabgleich bleiben Entwurf.
+The categories, actions and status values are from
+`logging-engine/morkhet_logging_engine/src/provider_strings.rs`; the numerical IDs are from
+`types.rs`. Source checksums are in [maschinenlesbaren
+Definition](../protocol/catalogs/mynofy-v1.json). `logging-engine` remains unchanged and is not
+a build or runtime dependency.
+
+The catalog can be accessed via `get_catalog` and has the fixed numerical catalog ID `1`.
+Protobuf and the two payload variants are implemented: typed events and free bytes with a hard
+maximum of 4096 bytes. Generated enums and numerical membership checks avoid one catalog scan
+per event. Technical Signaturen/Profiles and automatic catalog matching remain draft.
 
 ## Beschlossenes Zielmodell
 
-- Ein eingebauter Katalog mit Name `mynofy` und Version `1`; kompakte numerische Referenzen in den Ereignisnachrichten. Die numerische Katalogkennung und das konkrete Handshake-Format bleiben vor der Wire-Umsetzung festzulegen.
-- Eingebaute Definitionen beim Build in Enums/statische Tabellen überführen. Kein Parsen, Nachladen oder Registrieren von Katalogdefinitionen im Nachrichtenpfad.
-- Optionale eigene Kataloge sind eine spätere Erweiterung: vollständig beim Start laden und validieren, danach unveränderlich halten. Keine dynamische Katalogübertragung durch Messages.
-- Typisierte Ereignisse: Kategorie, Aktion, Status und bis zu drei primitive Werte, zusammen höchstens 24 Byte reine Werte. Typ-/Feldkennungen und Nachrichtenmetadaten kommen hinzu; dies ist keine Aussage über die vollständige Wire-Größe.
-- Freie Payload: höchstens 4096 tatsächliche Bytes. Kein großer Puffer in jedem kleinen Ereignis und keine automatische Aufteilung.
-- Fachliche Ereignisse besitzen dieselbe Nachrichtenhülle und dieselben ACL-/Ablaufregeln wie freie Bytes. Ein fachlicher `SUCCESS` ist kein Transport-ACK und umgekehrt.
+- A built-in catalog with name `mynofy` and version `1`; compact numerical references in the
+  event messages.
+- Transfer built-in definitions to Enums/statische tables during build. No parsing, reloading or
+  registering catalog definitions in the message path.
+- Optional own catalogs are a later extension: fully load and validate at start, then keep
+  immutable. No dynamic catalog transmission through messages.
+- Typed events: Category, Action, Status and up to three primitive values, together with a
+  maximum of 24 bytes of pure values. Type-/field identifiers and message metadata are added; this is
+  not a statement of the complete wire size.
+- Free payload: maximum 4096 actual bytes; no large buffer in each small event and no automatic
+  splitting.
+- Professional events have the same message envelope and the same ACL-/workflow rules as free
+  bytes.A professional `SUCCESS` is not a transport ACK and vice versa.
 
-## Übernommene Werte
+<a id="übernommene-werte"></a>
 
-ID `0` ist in allen drei Namensräumen reserviert und ungültig. Insbesondere ist `UNSPECIFIED` ein gültiger Status mit ID `1`. Die numerischen Lücken aus der Vorlage bleiben bestehen; keine automatische Neunummerierung. Diese Zahlen bezeichnen den Katalog und entscheiden noch nicht über dessen Protobuf-Darstellung.
+## Values taken
+
+ID `0` is reserved in all three namespaces and is invalid. In particular, `UNSPECIFIED` is a
+valid status with ID `1`. The numeric gaps from the template remain; no automatic renumbering.
+These numbers denote the catalog and do not yet determine its prototype representation.
 
 ### Kategorien
 
-43 Einträge.
+43 entries.
 
 | ID | Name |
 | ---: | --- |
@@ -69,7 +89,7 @@ ID `0` ist in allen drei Namensräumen reserviert und ungültig. Insbesondere is
 
 ### Aktionen
 
-49 Einträge.
+49 entries.
 
 | ID | Name |
 | ---: | --- |
@@ -125,7 +145,7 @@ ID `0` ist in allen drei Namensräumen reserviert und ungültig. Insbesondere is
 
 ### Status
 
-21 Einträge.
+21 entries.
 
 | ID | Name |
 | ---: | --- |
@@ -151,9 +171,9 @@ ID `0` ist in allen drei Namensräumen reserviert und ungültig. Insbesondere is
 | 20 | `DEFERRED` |
 | 21 | `CORRUPTED` |
 
-### Parameter-Grundtypen
+### Parameter types
 
-| ID | Typ | Reine Wertebytes |
+| ID | Type | Raw value bytes |
 | ---: | --- | ---: |
 | 1 | `U32` | 4 |
 | 2 | `U64` | 8 |
@@ -163,32 +183,61 @@ ID `0` ist in allen drei Namensräumen reserviert und ungültig. Insbesondere is
 | 6 | `F64` | 8 |
 | 7 | `BOOL` | 1 |
 
-Die Typen stammen ebenfalls aus `types.rs`. Dessen native Byte-Reihenfolge, Speicherlayout, Layout-IDs und generische Flagbits werden nicht als Netzwerkformat übernommen. Eigene Flags sind bislang ohne festgelegte Bedeutung und bleiben außerhalb dieser Basis. Ebenso wird Logging-Severity nicht stillschweigend zu einer mynofy-Pflichtangabe.
+The types also come from `types.rs` Its native byte order, memory layout, layout IDs and generic
+flagbits are not adopted as a network format. Proprietary flags are so far without defined
+meaning and remain outside of this base.
 
-## Prüfung anhand von Anwendungsfällen
+<a id="prüfung-anhand-von-anwendungsfällen"></a>
 
-Die [Produktprüfung mit 50 Anwendungsfällen](use-cases.md) ordnet den gesamten Katalog ein. `UNITY`, `UNITY_OBJECT`, `UNITY_SCENE` und `UNITY_ASSET` wurden aus dem eingebauten Entwurf entfernt. Ihre IDs 200–203 bleiben unbesetzt und dürfen nicht für andere Begriffe wiederverwendet werden. Die Quellprüfsummen bezeichnen weiterhin die ursprüngliche Importbasis, nicht einen unveränderten aktuellen Katalog.
+## Testing against use cases
 
-Der Entwurf enthält jetzt 43 Kategorien, 49 Aktionen und 21 Statuswerte. Weitere domänenspezifische Kategorien sind im Prüfbericht als Kandidaten für spätere optionale Kataloge markiert; sie wurden noch nicht entfernt. Neue Begriffe und Signaturen im Bericht sind Vorschläge, keine bereits verfügbaren Katalogwerte.
+The [Product testing with 50 use cases](use-cases.md) ranks the entire catalog. `UNITY`,
+`UNITY_OBJECT`, `UNITY_SCENE` and `UNITY_ASSET` have been removed from the built-in design. Your
+IDs 200-203 remain unfilled and may not be reused for other terms.
 
-Die typisierten Payloads prüfen noch keine fachlichen Ereignissignaturen. Für ausführbare Profile sind festzulegen: erlaubte Kombination, Bedeutung, Typ und Reihenfolge der Parameter sowie Versionierungsregeln. Fachliche Status lösen keine automatische Wiederholung oder Broker-Zustandsänderung aus. Das Protobuf-Format verwendet separate numerische Felder; kein natives EventKey-Speicherlayout.
+The draft now contains 43 categories, 49 actions and 21 status values; other domain-specific
+categories are marked in the review report as candidates for later optional catalogs; they
+have not yet been removed; new terms and signatures in the report are proposals, not already
+available catalog values.
 
-## Vom Client abrufen
+Typed payloads do not yet check technical event signatures. Executable profiles must specify:
+allowed combination, meaning, type and order of parameters, and versioning rules. Technical
+statuses do not trigger automatic repetition or broker state change. The protobuf format uses
+separate numeric fields; no native EventKey storage layout.
 
-Nach erfolgreicher Anmeldung kann jeder Client die eingebaute Definition abfragen, auch ohne Topic-Rechte:
+<a id="vom-client-abrufen"></a>
+
+## Retrieve from client
+
+After successful registration, any client can request the built-in definition, even without
+topic rights:
 
 ```json
 {"version":1,"type":"get_catalog","id":"schema-1","name":"mynofy","catalog_version":1}
 ```
 
-Die Antwort ist ein `catalog`-Frame mit `request_id` und dem vollständigen Objekt unter `catalog`, einschließlich Kategorien, Aktionen, Status, Parametertypen und vorgesehenen Limits. Das [vollständige Beispiel](../protocol/v1/catalog-examples.json) und das [Metadatenschema](../protocol/catalogs/catalog.schema.json) beschreiben das Format. Der CLI-Client akzeptiert die Abfrage wie andere JSONL-Commands; die Rust-Client-Bibliothek bietet `get_catalog(&mut socket, "mynofy", 1).await` und liefert das Katalogobjekt zurück.
+The answer is a `catalog` frame with `request_id` and the full object under `catalog`, including
+categories, actions, statuses, parameter types, and intended limits. The [complete
+example](../protocol/v1/catalog-examples.json) and the
+[metadata schema](../protocol/catalogs/catalog.schema.json) describe the format. The CLI client
+accepts the query like other JSONL commands; the Rust client library offers `get_catalog(&mut
+socket, "mynofy", 1).await` and returns the catalog object.
 
-Unbekannter Name oder nicht verfügbare Version ergeben `not_found`; fehlende Anmeldung ergibt `unauthorized`. Bestehende Client-Rate-Limits und Antwort-Byte-Limits gelten auch hier. Der Abruf verändert keinen Zustand und richtet keinen Katalog ein. Clients können die Antwort pro Owner/Name/Version zwischenspeichern; solange Version 1 ein Entwurf ist, nach einem Service-Update erneut abrufen.
+Unknown name or unavailable version results in `not_found`; missing login results in
+`unauthorized`. Existing client rate limits and response byte limits also apply here. Retrieval
+does not change state and does not set up a catalog. Clients can cache the response per
+Owner/Name/Version; as long as version 1 is a draft, retrieve it after a service update.
 
-Die eingebundene JSON-Definition wird pro Prozess einmal geparst und auf gültige, eindeutige IDs/Namen geprüft, beim Engine-Start vor Annahme von Commands. Mehrere Engines teilen dieselbe unveränderliche Definition. Einzelabfragen kopieren die vorbereiteten Metadaten in ihre begrenzte Antwort; keine erneute Interpretation der Katalogdatei und keine Datei-I/O im Request-Pfad. Für Ereignisse sind generierte Enums und statische numerische Prüfungen bereits implementiert.
+The embedded JSON definition is parsed once per process and checked for valid, unique IDs/Namen,
+at engine start before accepting commands. Multiple engines share the same immutable definition.
+Individual queries copy the prepared metadata into their limited response; no re-interpretation
+of the catalog file and no Datei-I/O in the request path. Generated enums and static numerical
+checks are already implemented for events.
 
-## Einheitliches Aktions-/Statusmodell
+## unified Aktions-/Statusmodell
 
-[Workflow-Semantik](workflow-semantics.md) legt die Bedeutung vorhandener Tripel als Grundlage fest: `(JOB, START, PENDING)` = Start steht aus, `(JOB, START, SUCCESS)` = gestartet, `(JOB, ACQUIRE, SUCCESS)` = übernommen, `(JOB, COMPLETE, SUCCESS)` = abgeschlossen. Zusätzliche Status RUNNING/ACCEPTED oder ein REQUEST/EVENT-Feld sind für dieses Grundmodell nicht vorgesehen. Die [50 UCs als Daten](../protocol/catalogs/use-cases-v1.json) referenzieren nur vorhandene Kennungen. Neue Wire-Felder oder ein installierter AI-Skill entstehen dadurch nicht.
+[Workflow-Semantik](workflow-semantics.md) defines the meaning of existing triples as the basis: `(JOB, START, PENDING)` = start is pending, `(JOB, START, SUCCESS)` = started, `(JOB, ACQUIRE, SUCCESS)` = assumed, `(JOB, COMPLETE, SUCCESS)` = completed. Additional statuses RUNNING/ACCEPTED or a REQUEST/EVENT-Field are not provided for this basic model. [50 UCs als data](../protocol/catalogs/use-cases-v1.json) only reference existing identifiers. New wire fields or an installed AI skill do not arise.
 
-Der Katalog ist außerdem die Basis für [laufbezogene Vereinbarungen zwischen Agenten und Menschen](agent-coordination.md). Die Aushandlung eigener Anwendungsprotokolle installiert keine zusätzlichen Kataloge im Dienst.
+The catalog is also the basis for [Running-related agreements between agents and
+people](agent-coordination.md). Negotiating your own application protocols does not install
+additional catalogs in the service.

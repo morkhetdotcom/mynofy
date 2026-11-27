@@ -1,6 +1,8 @@
-# Offline-Werkzeuge und gezielte Speicherabbrüche
+<a id="offline-werkzeuge-und-gezielte-speicherabbrüche"></a>
 
-Die Offline-CLI bietet:
+# Offline tools and targeted memory abortions
+
+The offline CLI offers:
 
 ```sh
 mynofy storage help
@@ -13,65 +15,114 @@ mynofy storage rekey --config config.yaml
 mynofy storage topic-ram --config config.yaml --topic jobs/status
 ```
 
-Die [vollständigen Betriebsregeln](restart-and-storage.md) gelten weiterhin: Dienst stoppen; Content und Security bleiben exklusiv gesperrt; Secrets nur über stdin; Restore verändert keine aktuelle Security und setzt den Referenz-Hochwasserstand nicht zurück; der explizite Rückwechsel zu RAM entfernt gespeicherte Topic-Dateien.
+Stop the service before running offline maintenance. The tools hold
+exclusive content and security locks. Provide secrets through stdin.
+Restore preserves the current security state and validates content before
+writing. Switching a topic to RAM removes its persisted content through
+the offline transition. [Restart and storage](restart-and-storage.md)
 
-`inspect` liefert pro Topic Strategie, gespeicherte Revision, Dateigröße, aktive Nachrichtenzahl und Zahl der Bestätigungspaare. Nachrichteninhalte und Secrets werden nicht ausgegeben. Größen sind gespeicherte Topic-Dateibytes einschließlich Framing beziehungsweise Verschlüsselungsumschlag, keine RAM-/RSS-Messung.
+`inspect` reports each topic's storage mode, saved revision, file size
+and active message count. Stored bytes include framing and encryption
+overhead. The command does not print payloads or secrets.
 
-`cleanup` validiert zuerst den vollständigen gespeicherten Stand und entfernt danach nur unreferenzierte interne Hash-/Slot-Dateien und die festen Staging-Namen `topic.tmp`, `state.tmp`, `references.tmp`. Aktive Dateien, Security, unbekannte Dateien und externe Backup-Verzeichnisse bleiben erhalten. Symlinks im unreferenzierten internen Namensraum werden selbst entfernt, nicht ihr Ziel. Eine erneute Bereinigung ist zulässig. Auch `topic-ram` kann nach einem bereits erfolgten Manifest-Commit wiederholt werden, um eine unterbrochene Dateibereinigung abzuschließen.
+`cleanup` first validates the full stored state and then removes only unreferenced internal hash and slot files and the fixed staging names `topic.tmp`, `state.tmp`, `references.tmp`. Active files, security, unknown files and external backup directories remain. Symlinks in the unreferenced internal namespace are removed themselves, not their destination. Re-cleaning is allowed. `topic-ram` can also be repeated after an already completed manifest commit to complete an interrupted file cleanup.
 
-Unvollständige Kommandoargumente werden vor CFG-/Storage-Zugriff und Secret-Abfrage abgewiesen. `storage help` benötigt keine Konfiguration. Die bestehenden globalen Regeln zum frühen Rechteabbau gelten unverändert.
+Incomplete command arguments are rejected before CFG-/Storage-access and Secret query. `storage
+help` does not require configuration. The existing global rules for early rights removal apply
+unchanged.
 
-## Testablauf
+## test procedure
 
 ```sh
 ./scripts/test-storage-crashes.sh
 ```
 
-Alternativ eine einzelne Gruppe:
+Alternatively, a single group:
 
 ```sh
 cargo test --locked -p mynofy-server storage_fault_empty_restore -- --nocapture
 ```
 
-Die Tests sind Bestandteil von `cargo test --locked --workspace`. Sechs Matrix-Tests starten zusammen **176 echte Kindprozesse** mit privaten Testverzeichnissen und bekannten Test-Credentials. Ein eigener Worker-Test ist im normalen Lauf als `ignored` markiert und wird ausschließlich durch die Matrix mit `--ignored --exact` gestartet. Die tatsächlichen Fälle werden dadurch trotzdem ausgeführt.
+The tests are part of `cargo test --locked --workspace`. Six matrix tests start together **176
+real child processes** with private test directories and known test credentials. A separate
+worker test is marked as `ignored` in the normal run and is started exclusively by the matrix
+with `--ignored --exact`.
 
-Der Worker verwendet dieselben `Engine`-/`OfflineStorage`-Schreibpfade wie Dienst und CLI. An einem ausgewählten Schritt meldet er dem Parent über stderr, dass der Punkt erreicht ist. Bei Abbruchfällen wartet er dort ohne Busy-Loop; erst dann beendet ihn der Parent mit **SIGKILL** und wartet das Prozessende ab. Es gibt keine geschätzten Sleeps, um einen Schreibzeitpunkt zu treffen. Begrenzte Deadlines erkennen ausgebliebene Haltepunkte beziehungsweise hängende Worker.
+The worker uses the same `Engine` -/ `OfflineStorage` writing paths as service and CLI. At a
+selected step, he reports to the parent via stderr that the point has been reached. In the event
+of termination, he waits there without a busy loop; only then does the parent terminate with **
+SIGKILL ** and wait for the end of the process. There are no estimated sleeps to hit a writing
+time. Limited deadlines detect missed breakpoints or hanging workers.
 
-Die Haltepunkte und Teil-Schreibvorgänge sind ausschließlich mit `cfg(test)` eingebaut. Im normalen Library-/CLI-Build werden keine Fault-Schalter, Umgebungsprüfungen, Wartepunkte oder zusätzlichen Teil-Writes erzeugt. Keine zusätzliche Registry-Abhängigkeit und kein eigenes unsafe.
+The breakpoints and part-writes are built-in with `cfg(test)` only. In the normal
+Library-/CLI-Build no fault switches, environmental checks, waiting points or additional
+part-writes are generated. No additional registry dependency and no own unsafe.
 
-## Matrix und Erwartungen
+<a id="matrix-und-erwartungen"></a>
 
-| Bereich | Geprüfte Grenzen |
+## Matrix and expectations
+
+| area | Tested limits |
 | --- | --- |
-| Topic-Dateien | Nach Truncate, echtem halbem Staging-Write, vollständigem Write, File-Sync, Rename und Verzeichnis-Sync; jeweils erste und zweite Topic-Datei. |
-| Manifest | Halber/vollständiger Write, File-Sync, vor/nach Rename, vor/nach Verzeichnis-Sync. |
-| Cleanup / Storage→RAM | Vor und nach Entfernen alter Slots sowie vor abschließendem Verzeichnis-Sync; Wiederaufnahme der Bereinigung. |
-| Neuer Restore-Zielspeicher | Halbe Referenzdatei, Referenz-Rename und teilweise/vollständig geschriebener Initialisierungsmarker vor dem ersten Manifest. |
-| I/O-Fehler | Simuliertes ENOSPC und EIO an Öffnen, Schreiben, File-Sync, Rename und Manifest-Verzeichnis-Sync für Save, Backup, Restore und Rekey. |
+| Topic-Dateien | After Truncate, real half staging writing, full writing, file sync, rename and directory sync; first and second topic files each. |
+| Manifest | Partial or complete Write, File Sync, vor/nach Rename, vor/nach Directory Sync. |
+| Cleanup / Storage→RAM | Before and after removing old slots and before final directory sync; resuming cleanup. |
+| New Restore target memory | Half reference file, reference rename and partially or fully written initialization marker before the first manifest. |
+| I/O-errors | Simulate ENOSPC and EIO to Open, Write, File Sync, Rename and Manifest Directory Sync for Save, Backup, Restore and Rekey. |
 
-Von den 176 Fällen sind **109 SIGKILL-Abbrüche**, **34 ENOSPC-** und **33 EIO-Injektionen**. Die Hauptmatrix nutzt ein gemeinsames Raw-Key-Secret mit einem Klartext-Topic und einem verschlüsselten Topic. Zusätzliche Abbruchfälle verwenden vollständig unverschlüsselten Content sowie den Passwortmodus. Nachrichten nutzen echte 4096-Byte-Payloads; gespeicherte ACK-/NACK-Endzustände gehören zum Prüfbestand.
+Of the 176 cases, **109 SIGKILL are aborts**, **34 ENOSPC -** and **33 EIO injections**. The
+main matrix uses a common Raw Key Secret with a plaintext topic and an encrypted topic.
+Additional aborts use completely unencrypted content and password mode. Messages use real 4096
+byte payloads.
 
-Nach jedem Fall wird der Speicher neu geöffnet und geprüft:
+After each case, the memory is reopened and checked:
 
-- vor dem Manifest-Commit bleibt die vorherige vollständige Generation lesbar;
-- nach dem bereits sichtbaren Manifest-Rename ist bei diesem Prozessabbruch die neue vollständige Generation lesbar;
-- niemals ein Topic aus der alten und das andere aus der neuen Generation;
-- Inhalt, Payloadlänge, stabile Bestätigungsreferenzen sowie ACK-/NACK-Zustände bleiben korrekt;
-- beim Rekey akzeptiert der gültige aktuelle Stand genau das zugehörige alte oder neue Secret;
-- ein unterbrochenes Backup ohne Manifest wird nicht als vollständiges Backup angenommen; die Quelle bleibt bytegleich;
-- Offline-Operationen lassen Security-Snapshot und Journal bytegleich und senken keinen vorhandenen Referenz-Hochwasserstand;
-- beim Rückwechsel zu RAM bleibt das andere Topic erhalten; ein erneutes Öffnen/Bereinigen entfernt nur nicht mehr referenzierte Dateien.
+- before the manifest commit, the previous full generation remains readable;
+- after the already visible manifest rename, the new full generation can be read in this process
+  termination;
+- never a topic from the old and the other from the new generation;
+- Content, payload length, stable message IDs and cursor positions remain correct;
+- for the rekey, the valid current status accepts exactly the corresponding old or new secret;
+- An interrupted backup without a manifest is not accepted as a full backup; the source remains
+  byte-for-byte unchanged;
+- Offline operations preserve the security snapshot and journal;
+- When switching back to RAM, the other topic is retained; reopening/cleaning only removes
+  unreferenced files.
 
-## Geschlossene Wiederanlauflücken
+<a id="geschlossene-wiederanlauflücken"></a>
 
-Ein Abbruch zwischen Referenz-Rename und fertigem Initialisierungsmarker blockierte zuvor einen erneuten Restore in einen leeren Zielspeicher. Die Wiederaufnahme ist jetzt eng begrenzt: **kein publiziertes Manifest**, gültige Owner-/Checksum-Bindung der bereits gespeicherten Referenzdatei und ein leerer beziehungsweise gültiger Präfix des erwarteten Markers. Der Marker wird vollständig geschrieben und synchronisiert; der Hochwasserstand wird nicht neu berechnet oder abgesenkt. Ein beschädigter Marker neben einem vorhandenen Manifest bleibt ein Fehler.
+## Closed restart gaps
 
-Nach einem fehlgeschlagenen Manifest-Verzeichnis-Sync ist der sichtbare Commit unbestätigt. Der laufende Dienst meldet `content_storage.requires_restart: true`, lässt ungesicherte RAM-Änderungen dirty und weist weitere Saves bereits vor einer neuen Capture-Kopie mit `content_storage_requires_restart` ab. Normale Vorab-I/O-Fehler bleiben erneut versuchbar. Im Offline-Objekt verhindern dieselben Regeln insbesondere ein Backup oder Cleanup anhand der noch alten In-Memory-Dateiverweise. `check`/`inspect` kennzeichnen den Zustand mit `durability_uncertain`; vor weiterer Wartung muss neu geöffnet werden. Beim Öffnen wird der sichtbare Verzeichnisstand synchron bestätigt, bevor alte Slots wiederverwendet oder entfernt werden dürfen. Weitere ENOSPC-/EIO-Fälle prüfen, dass ein fehlgeschlagener Bestätigungs-Sync das Öffnen ohne Datenänderung abbricht.
+An abort between the reference rename and the finished initialization marker previously blocked
+a new restore to an empty target memory. The resumption is now narrowly limited: **no published
+manifest**, valid Owner-/Checksum-binding of the already stored reference file and an empty or
+valid prefix of the expected marker. The marker is written and synchronized completely; the
+flood level is not recalculated or lowered. A damaged marker next to an existing manifest
+remains an error.
 
-Beim Schließen wird der eigene flock ausdrücklich freigegeben. Dadurch hält eine während eines parallelen Prozessstarts kurzzeitig geerbte Descriptor-Kopie das bereits beendete Owner-Objekt nicht weiter gesperrt. Ein eigener Test hält eine Descriptor-Kopie offen und prüft das erneute Öffnen.
+If synchronization of the manifest directory fails after a rename, the
+visible commit may still exist with uncertain durability. The running
+service exposes `content_storage.requires_restart: true`, leaves affected
+RAM changes dirty and rejects further saves with
+`content_storage_requires_restart`. Offline tools report
+`durability_uncertain` and require reopening before further maintenance.
+Reopening confirms the visible directory state before any old slot can be
+reused or removed. Injected ENOSPC and EIO cases verify that another failed
+confirmation sync leaves data untouched.
 
-Außerdem prüft Restore den vollständigen Initialisierungs-/Vergabestand des Backups, bevor Zieldaten oder Ziel-Hochwasserstand geändert werden. Eine beschädigte Backup-Metadatei wird nicht als fehlender neuer Stand interpretiert.
+Upon closing, one's own flock is explicitly released, so that a descriptor copy inherited for a
+short time during a parallel process start does not further block the already terminated owner
+object. A separate test keeps a descriptor copy open and checks for reopening.
 
-## Einordnung
+In addition, Restore checks the full initialization-/Vergabestand of the backup before
+changing the target data or the target high level, and a corrupted backup metadata file is not
+interpreted as missing new status.
 
-Dies prüft reale Prozessabbrüche und simulierte I/O-Fehler auf dem Linux-Dateisystem der Testumgebung. Stromverlust, Controller-/Datenträgerfehler, Netzwerkdateisysteme und native macOS-Laufzeit sind damit nicht validiert. Auch ein erfolgreicher Rename ohne bestätigtes Verzeichnis-Sync ist keine Haltbarkeitszusage bei Stromverlust. Es wurden keine Performancewerte abgeleitet.
+<a id="einordnung"></a>
+
+## Classification
+
+This checks real process terminations and simulated I/O-errors on the Linux file system of the
+test environment. Power loss, Controller-/storage errors, network file systems and native
+macOS runtime are therefore not validated. Even a successful rename without confirmed directory
+sync is not a durability commitment in the case of power loss.

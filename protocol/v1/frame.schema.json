@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "mynofy v1 CLI JSON frame representation",
-  "description": "Readable CLI/SDK representation of the Protobuf application protocol. Broker client connections accept binary Protobuf frames only; JSON text commands are unsupported. See docs/protocol.md.",
+  "description": "Readable CLI/SDK representation of the Protobuf application protocol. Broker client connections accept binary Protobuf frames only; JSON text commands are unsupported. Topic names are limited to 256 UTF-8 bytes at runtime. See docs/protocol.md.",
   "$defs": {
     "expires": {
       "type": "object",

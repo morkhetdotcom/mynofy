@@ -23,7 +23,7 @@ fn main() -> Result<(), BoxError> {
   cfg.clients=vec![Client{client_id:client.clone(),display_name:None,disabled:false,keys:vec![PublicKey{algorithm:"ed25519".into(),public_key:crypto::encode(&public),valid_until:protocol::timestamp(NOW+86400000)?}]}];
   cfg.topics[0].acl=Some(vec![Rule{client_id:client,allow:vec![Action::Publish,Action::Subscribe,Action::InspectOwn]}]);
   cfg.limits.client_burst=1000000;cfg.limits.client_requests_per_second=1000000;
-  let mut engine=Engine::new(cfg,NOW)?;engine.start_id_allocator();let session=authenticate(&mut engine,&key);
+  let mut engine=Engine::new(cfg,NOW)?;let session=authenticate(&mut engine,&key);
   // Setup a varied-expiry page, so formatting is not hidden by the last-expiry cache.
   for i in 0..100 {let frame=frame(pb::Body::Publish(pb::Publish{id:"seed".into(),topic:"local/events".into(),payload:Payload::bytes(vec![1;32],None),expires:Some(pb::Expires{time:protocol::timestamp(NOW+10000+i)?})}));let r=engine.handle_protobuf(session,&frame.encode_to_vec(),NOW);assert!(matches!(r.body,Some(pb::Body::Result(_))));}
   let poll=frame(pb::Body::Poll(pb::Poll{id:"seed-poll".into(),topic:"local/events".into(),after:None,limit:Some(100)}));let p=engine.handle_protobuf(session,&poll.encode_to_vec(),NOW);

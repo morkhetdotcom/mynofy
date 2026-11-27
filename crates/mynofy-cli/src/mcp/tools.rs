@@ -3,7 +3,7 @@ fn object(properties: Value, required: &[&str]) -> Value {
     json!({"type":"object","properties":properties,"required":required,"additionalProperties":false})
 }
 fn topic() -> Value {
-    json!({"type":"string","minLength":1,"maxLength":256})
+    json!({"type":"string","minLength":1,"maxLength":256,"description":"Exact topic name, 1–256 UTF-8 bytes. The runtime enforces the byte limit."})
 }
 pub(super) fn list() -> Value {
     definitions().clone()
@@ -14,7 +14,7 @@ fn definitions() -> &'static Value {
     let definitions = [
         (
             "mynofy_connection_info",
-            "Authenticate and report the configured owner, client and restart counter. No credentials are returned.",
+            "Report the owner, client and restart counter. Indicates whether the session was just authenticated or the data is cached.",
             object(json!({}), &[]),
             true,
             true,
@@ -38,6 +38,27 @@ fn definitions() -> &'static Value {
             ),
             true,
             true,
+        ),
+        (
+            "mynofy_poll_next",
+            "Read a page from the local checkpoint (requires --checkpoint). If the next poll is not due, return retry_after_ms immediately. Commit the returned receipt after handling the page.",
+            object(json!({"topic":topic(),"limit":{"type":"integer","minimum":1,"maximum":100},"replay":{"type":"boolean","default":false},"interval_ms":{"type":"integer","minimum":1000,"maximum":3600000,"default":30000}}), &["topic"]),
+            false,
+            false,
+        ),
+        (
+            "mynofy_checkpoint_status",
+            "Read local checkpoint state without contacting the owner. Reports committed and last observed owner context. Requires --checkpoint.",
+            object(json!({"topic":topic()}), &["topic"]),
+            true,
+            true,
+        ),
+        (
+            "mynofy_checkpoint_commit",
+            "Record processing of a page locally. Optionally replace its topic's workflow state, or delete it with null, atomically with the cursor. Requires --checkpoint.",
+            object(json!({"topic":topic(),"receipt":{"type":"string","minLength":32,"maxLength":32},"state":{"type":["object","null"]}}), &["topic","receipt"]),
+            false,
+            false,
         ),
         (
             "mynofy_list_messages",
@@ -77,7 +98,7 @@ fn definitions() -> &'static Value {
             true,
         ),
     ];
-    let tools:Vec<_>=definitions.into_iter().map(|(name,description,input,read,idempotent)|json!({"name":name,"description":description,"inputSchema":input,"annotations":{"readOnlyHint":read,"destructiveHint":false,"idempotentHint":idempotent,"openWorldHint":true}})).collect();
+    let tools:Vec<_>=definitions.into_iter().map(|(name,description,input,read,idempotent)|json!({"name":name,"description":description,"inputSchema":input,"annotations":{"readOnlyHint":read,"destructiveHint":false,"idempotentHint":idempotent,"openWorldHint":name!="mynofy_checkpoint_commit" && name!="mynofy_checkpoint_status"}})).collect();
     json!({"tools":tools})
     })
 }
@@ -105,6 +126,13 @@ pub(super) fn command(name: &str, arguments: &Value) -> Result<Option<Value>, &'
     }
     for (key, value) in fields {
         let field = &schema["properties"][key];
+        if key == "state"
+            && matches!(name, "mynofy_checkpoint_commit")
+            && !value.is_null()
+            && !value.is_object()
+        {
+            return Err("State must be an object or null");
+        }
         match field["type"].as_str() {
             Some("string") => {
                 let Some(text) = value.as_str() else {
@@ -117,7 +145,7 @@ pub(super) fn command(name: &str, arguments: &Value) -> Result<Option<Value>, &'
                         .as_u64()
                         .is_some_and(|n| text.len() > (n as usize))
                 {
-                    return Err("String argument out of bounds");
+                    return Err("String argument exceeds its UTF-8 byte bounds");
                 }
             }
             Some("integer") => {
@@ -130,6 +158,7 @@ pub(super) fn command(name: &str, arguments: &Value) -> Result<Option<Value>, &'
                     return Err("Integer argument out of bounds");
                 }
             }
+            Some("boolean") if !value.is_boolean() => return Err("Expected boolean argument"),
             Some("object") if !value.is_object() => return Err("Expected object argument"),
             _ => {}
         }
@@ -142,6 +171,12 @@ pub(super) fn command(name: &str, arguments: &Value) -> Result<Option<Value>, &'
     request["version"] = 1.into();
     request["type"] = method.into();
     request["id"] = "mcp-validate".into();
+    if matches!(
+        method,
+        "poll_next" | "checkpoint_status" | "checkpoint_commit"
+    ) {
+        return Ok(Some(request));
+    }
     if method == "get_catalog" {
         if request.get("name").is_none() {
             request["name"] = "mynofy".into();

@@ -3,40 +3,41 @@
 
 The broker uses stateless polling: ACK/NACK, delivery IDs and confirmation counters have been removed. Application results are published messages. See [upgrade notes](../../docs/message-client-confirmation.md).
 
-Eigenständiger Client ab Java 17 für direkte WSS- und lokale Unix-Verbindungen.
-Vorhandenes Protobuf v1, ohne CLI-Unterprozesse oder Server-Core-Abhängigkeit.
-API und Protokoll sind noch veränderliche Prototypen.
+Stand-alone client from Java 17 for direct WSS and local Unix connections. Existing prototype
+v1, without CLI subprocesses or server core dependency. API and protocol are still variable
+prototypes.
 
 ## Einbinden
 
-Das Maven-Artefakt ist noch nicht veröffentlicht. Lokal installieren:
+The Maven artifact has not yet been published.
 
 ```sh
 mvn -f sdks/java/pom.xml -DskipTests install
 ```
 
-Im eigenen Maven-Projekt:
+In his own Maven project:
 
 ```xml
 <dependency>
   <groupId>dev.mynofy</groupId>
   <artifactId>mynofy-client</artifactId>
-  <version>0.3.0-SNAPSHOT</version>
+  <version>0.4.0-SNAPSHOT</version>
 </dependency>
 ```
 
-Zwei direkte Laufzeitabhängigkeiten: offizielle
-[Protobuf-Runtime](https://protobuf.dev/reference/java/java-generated/) und
-[Java-WebSocket](https://github.com/TooTallNate/Java-WebSocket), dazu dessen
-transitive SLF4J-API. Das SDK installiert keinen Logging-Provider. TLS, Ed25519
-und AES-GCM verwenden ausschließlich die JDK-Implementierungen. Kein gRPC,
-JNI-Zusatzpaket, JSON-Parser oder Protobuf-Compiler zur Laufzeit. Die generierten
-Typen liegen im JAR unter `dev.mynofy.protocol.Wire`.
+Two Direct Term Dependencies: Official
+[Protobuf-Runtime](https://protobuf.dev/reference/java/java-generated/) and
+[Java-WebSocket](https://github.com/TooTallNate/Java-WebSocket), and its transitory SLF4J - API.
+The SDK installs no logging provider. TLS, Ed25519 and AES-GCM use the JDK
+-Implementations. No gRPC, additional JNI package, JSON -parser or protobuf compiler at runtime. JAR
+unter `dev.mynofy.protocol.Wire`.
 
-## Lokal senden und lesen
+<a id="lokal-senden-und-lesen"></a>
 
-Public Key und Topic-Rechte müssen beim Owner registriert sein. `mynofy keygen`
-erzeugt direkt kompatible Schlüssel. Derselbe normale OS-Benutzer wie beim Service:
+## Send locally and read
+
+Public key and topic rights must be registered with the owner. `mynofy keygen` creates
+compatible keys directly.The same normal OS user as the service:
 
 ```java
 import dev.mynofy.Client;
@@ -57,7 +58,7 @@ class LocalExample {
             var page = client.poll("local/events", null, 20);
             for (var item : page.getItemsList()) {
                 System.out.println(item.getMessage());
-                // Nach Verstehen/Zuordnen; kein fachlicher Abschluss:
+                // After Verstehen/Zuordnen; no professional degree:
             }
             System.out.println(sent.getMessageId() + " " + page.getNextCursor());
         }
@@ -65,14 +66,15 @@ class LocalExample {
 }
 ```
 
-`poll` liest sofort eine Seite; bei `has_more` weitere Seiten mit `next_cursor`
-abholen. Cursor erst nach Verarbeitung oder dauerhafter eigener Übernahme speichern.
-`null` liest den aktiven Bestand erneut. Nach bekanntem Neustart anhand von
-`info().restartCounter()` neu ohne Cursor lesen und mit lokalem Arbeitsstand
-abgleichen. Das SDK speichert keinen Fortschritt und bestätigt nicht automatisch.
-Poll reads without recording reader state; the client keeps its progress locally.
+`poll` reads a page immediately; at `has_more` more pages with `next_cursor`
+collect. save cursor only after processing or permanently own takeover. `null` reads the active
+stock again. read again after a known restart using `info().restartCounter()` without cursor and
+compare it with local work status. SDK does not store any progress and does not confirm
+automatically. Poll reads without recording reader state; the client keeps its progress locally.
 
-## WSS und Unix-Sicherheit
+<a id="wss-und-unix-sicherheit"></a>
+
+## WSS and Unix security
 
 ```java
 var config = Client.Config.wss(
@@ -80,33 +82,32 @@ var config = Client.Config.wss(
     Path.of(".local/demo/ca.crt"));
 ```
 
-Ohne CA-Datei (`null`) gelten die JDK-Trustroots. Nur WSS mit TLS 1.3 und
-Hostname-Prüfung, keine abschaltbare Zertifikatsprüfung, Redirects oder Übernahme
-von Proxy-Umgebungsvariablen. Unix verwendet den JDK-SocketChannel, prüft den
-Pfad, Modus 0600 und Kernel-Peer-Identität über `SO_PEERCRED`. Aktuelle OS-Identität
-über `UnixSystem`, unabhängig von der veränderlichen Java-Property `user.name`.
-Dafür werden die JDK-Module `jdk.net` und `jdk.security.auth` benötigt. Fehlende
-Peer-Credentials führen zum Abbruch. Linux ist nativ getestet; macOS folgt in der CI.
+Without CA file (`null` ) apply the JDK -Trustroots. Only WSS with TLS 1.3 and hostname check,
+no turn-off certificate check, redirects or adoption of proxy environment variables. Unix uses
+the JDK -SocketChannel, checks the path, mode 0600 and kernel peer identity over `SO_PEERCRED`.
+Current OS identity over `UnixSystem`, regardless of the changeable Java property `user.name`.
+For this purpose, the JDK modules `jdk.net` and `jdk.security.auth` are required.
 
-## Weitere Operationen
+<a id="weitere-operationen"></a>
 
-- `publish(topic, payload, expires)`: bis zu 4096 rohe Bytes oder ein Katalogevent;
-  `expires` ist `java.time.Instant`, mit `null` entscheidet die Topic-Policy.
-- `Client.event(Wire.Event)`: Katalog 1/v1, gültige Enum-IDs, höchstens drei typisierte
-  Parameter. `Client.bytes` kopiert die Eingabe in einen unveränderlichen ByteString.
-- `listMessages(topic, cursor, limit)`: eigene aktive Nachrichten. Optionaler Filter
-  und Cursor jeweils `null`; beim Paging Filter und Seitengröße beibehalten.
-- `getMessage(id)`, `getPermissions(topic)`, `getCatalog("mynofy", 1)`.
-  Katalogdefinition als JSON-Bytes in `getDefinition()`; die Anwendung verwendet
-  ihren eigenen Parser. Das SDK interpretiert diese JSON-Definition nicht.
+## Other operations
 
-Rückgaben sind generierte Protobuf-Typen. Optionale Felder mit `has...()` prüfen.
-`uint64` verwendet den vollständigen Bitbereich eines Java-`long`: Werte oberhalb
-von `Long.MAX_VALUE` erscheinen negativ, bleiben aber unverändert. Dezimalausgabe
-mit `Long.toUnsignedString`, Eingabe mit `Long.parseUnsignedLong`; `uint32`
-entsprechend mit `Integer.toUnsignedLong`. Kein Umweg über `double`.
+- `publish(topic, payload, expires)`: up to 4096 raw bytes or a catalog event; `expires` is
+  `java.time.Instant`, with `null` decides the topic policy.
+- `Client.event(Wire.Event)`: Catalogue 1/v1, valid enum IDs, maximum three typed parameters.
+  `Client.bytes` copies the input into an immutable ByteString.
+- `listMessages(topic, cursor, limit)`: own active messages. Optional filter and cursor each
+  `null`; maintained with paging filter and page size.
+- `getMessage(id)`, `getPermissions(topic)`, `getCatalog("mynofy", 1)`. Catalog definition as
+  JSON -Bytes in `getDefinition()` The application uses its own parser. SDK interpretiert diese
+  according to its JSON definition.
 
-Beispiel für ein Event, IDs aus Katalog/Anwendungsvereinbarung:
+Returns are generated protobuf types. `has...()` check. `uint64` Uses the full bit range of a
+Java- `long` Values above `Long.MAX_VALUE` appear negative, but remain unchanged.
+`Long.toUnsignedString`, Eingabe with `Long.parseUnsignedLong`; `uint32` entsprechend with
+`Integer.toUnsignedLong` No detour through `double`.
+
+Example of an event, IDs from catalog/application protocol agreement:
 
 ```java
 var event = dev.mynofy.protocol.Wire.Event.newBuilder()
@@ -118,80 +119,77 @@ var event = dev.mynofy.protocol.Wire.Event.newBuilder()
 client.publish("local/events", Client.event(event), null);
 ```
 
-## Abbruch, Parallelität und Fehler
+<a id="abbruch-parallelität-und-fehler"></a>
 
-Synchrone, blockierende API; die WebSocket-Bibliothek betreibt ihre I/O-Threads.
-Eine Operation pro Client. Gleichzeitige Aufrufe liefern `Client.BusyException`
-ohne zusätzliche fachliche Queue. Für Parallelität getrennte Verbindungen nutzen.
-`Config.timeout` begrenzt eine Operation, Standard zehn Sekunden. Verbindungsaufbau
-inklusive Authentifizierung und der gesamte Schlüsselwechsel haben jeweils ein
-solches Gesamtbudget. Poll-Intervalle bleiben Aufgabe der Anwendung.
+## Abort, parallelism and errors
 
-`close()` von einem anderen Thread oder Unterbrechen des aufrufenden Threads
-bricht den Austausch ab und verwirft die Verbindung. Der Interrupt-Status bleibt
-erhalten. `Client.TransportException.outcomeUnknown()` weist auf möglicherweise
-bereits angenommene Mutationen hin. Den Grund über `getCause()` prüfen, etwa
-`InterruptedException` oder `SocketTimeoutException`. Kein blindes erneutes Publish.
+Synchronous, blocking API; the WebSocket library operates its I/O-Threads. one operation per
+client. Simultaneous calls provide `Client.BusyException` without additional technical queue.
+Use separate connections for parallelism. `Config.timeout` limits an operation, standard ten
+seconds. Connection setup including authentication and the entire key change each have such a
+total budget. Poll intervals remain the task of the application.
 
-`Client.BrokerException.error()` enthält Code, Detail und optional `retry_after_ms`.
-Keine automatische Wiederholung, kein Backoff oder Reconnect. Nach Fehlern muss
-die Anwendung explizit neu verbinden und Identität/Neustart prüfen.
+`close()` from another thread or interrupting the calling thread
+discontinues the exchange and discards the connection. The interrupt state is retained.
+`Client.TransportException.outcomeUnknown()` indicates possibly already assumed mutations. Check
+the reason about `getCause()`, such as `InterruptedException` or `SocketTimeoutException`.
 
-## Schlüssel und Rotation
+`Client.BrokerException.error()` contains code, detail and optionally `retry_after_ms`.
+No automatic repetition, no backoff or reconnect. After errors, the application must explicitly
+reconnect and check identity/restart.
 
-`Key.generate()`, `publicKey()`, `tokenId()` und `clientId()` liefern die Daten zur
-Provisionierung. `privateBytes()` exportiert das gemeinsame PKCS#8-v2-Format;
-Dateien selbst mit Modus 0600 speichern. Import prüft Format und Zusammengehörigkeit
-von Private/Public Key durch JDK-Signatur und -Verifikation.
+<a id="schlüssel-und-rotation"></a>
 
-`Key.parse(der)` akzeptiert das exakt geprüfte v2-Format von Rust/Python/Go. Bei
-kanonischem PKCS#8 v1 zusätzlich den rohen Public Key angeben:
-`Key.parse(der, publicKeyBytes)`. Das JDK bietet keine direkte Ableitung des Public
-Keys aus diesem Seed; dafür wird kein zusätzlicher Kryptoanbieter eingebunden.
-Die API garantiert keine vollständige Speicherlöschung aller Schlüsselkopien.
+## Key and rotation
 
-`client.rotate(newKey)` verlangt, dass die Anwendung den neuen Schlüssel vorher
-sicher gespeichert hat. Nach Erfolg ist die alte Sitzung geschlossen. Neu mit dem
-neuen Schlüssel und der **ursprünglichen** `Config.clientId` verbinden. Bei
-unklarem Commit beide Schlüssel behalten und den neuen Zugang prüfen. Das SDK
-schreibt keine Schlüsseldateien.
+`Key.generate()`, `publicKey()`, `tokenId()` and `clientId()` provide the data for
+Provisioning. `privateBytes()` exports the common PKCS #8-v2 format; save files even with mode
+0600. Import verifies format and togetherness of Private/Public Key by JDK signature and
+verification.
 
-## Tests und Generierung
+`Key.parse(der)` accepts the exactly tested v2 format of Rust/Python/Go.
+canonical PKCS #8 v1 additionally specify the raw public key: `Key.parse(der, publicKeyBytes)`.
+JDK does not provide a direct derivation of the public key from this seed; no additional crypto
+provider is included. API does not guarantee complete memory erasure of all key copies.
 
-Als normaler Benutzer mit Java 17, Maven, Rust/Cargo und OpenSSL:
+`client.rotate(newKey)` requires that the application first use the new key
+After success, the old session is closed. New with the new key and the **original**
+`Config.clientId` If the commit is unclear, keep both keys and check the new access. SDK does
+not write key files.
+
+<a id="tests-und-generierung"></a>
+
+## Testing and generation
+
+As a normal user with Java 17, Maven, Rust/Cargo and OpenSSL:
 
 ```sh
 ./scripts/test-java-sdk.sh
-# Optional zusätzlich Python-Schlüsselinterop:
+# Optional additional Python keyinterop:
 MYNOFY_PYTHON=/pfad/zum/venv/bin/python ./scripts/test-java-sdk.sh
 ```
 
-Die Tests starten temporäre Dienste, prüfen Unix/WSS, Auth/ACL, Bytes/Events,
-Integergrenzen, Cursor, Rotation sowie Rust- und optional Python-Zugang.
-Gemeinsame Wire-/Auth-/Rotationstranskripte kommen aus
-`protocol/conformance/sdk-v1.json`. Deterministische Fehlerpeers prüfen Antwortverlust,
-ungültige Frames und Welcome-Daten, Größenlimit, Timeout, Interrupt, Close und Busy.
-JUnit und `protobuf-java-util` einschließlich JSON-Hilfen sind ausschließlich Testabhängigkeiten.
-Vorhandene Demo-Zustände werden nicht verändert.
+The tests start temporary services, check Unix/WSS, Auth/ACL, Bytes/Events, integer limits,
+cursor, rotation, and rust and optionally Python access. Common Wire-/Auth-/Rotationstranskripte
+comes from `protocol/conformance/sdk-v1.json`. Deterministic error peers check response loss,
+invalid frames and welcome data, size limit, timeout, interrupt, close and busy. JUnit and
+`protobuf-java-util` including JSON helps are only test dependencies. Existing demo states are
+not changed.
 
-Bindings liegen im Repository. Nur zur Entwicklung mit offiziellem protoc 36.2:
+Bindings are in the repository, only for development with official protoc 36.2:
 
 ```sh
 PROTOC=/pfad/zu/protoc python3 sdks/java/generate.py
 ```
 
-Der Generator übernimmt die gemeinsame `.proto`-Quelle mit Java-Ausgabeoptionen
-und den Ereigniskatalog; keine zweite manuell gepflegte Protokolldefinition.
+The generator handles the common `.proto` source with Java output options and the event catalog;
+no second manually maintained protocol definition.
 
-Kein Peer-/Owner-Tunnel, Admin-Zugang oder Agenten-/Polling-Zustandshelfer in dieser
-Version. Rust/CLI unterstützen Owner-Tunnel. Weitere Sprachen: [SDK-Übersicht](../../docs/sdks.md).
+Kein Peer-/Owner-Tunnel, admin access, or Agenten-/Polling-state helper in this version.
+Rust/CLI support owner tunnels. Other languages: [SDK - Overview](../../docs/sdks.md).
 
 ## Owner-authenticated producer identity
 
-Read `item.getMessage().getProducerId()` for the stable client identity stamped by the owner.
-It is immutable, survives authorized key rotation and storage restore, and is
-separate from any sender or actor claim inside the payload. Match workflow roles
-to this value. This is an assertion over the protected owner connection, not a
-portable cryptographic message signature.
+Read `item.getMessage().getProducerId()` for the stable client identity stamped by the owner. It is immutable, survives authorized key rotation and storage restore, and is separate from any sender or actor claim inside the payload. Match workflow roles to this value. This is an assertion over the protected owner connection, not a portable cryptographic message signature.
 
 For cursor continuity, compare `ConnectionInfo.bootId()` between authenticated sessions. A null value indicates a legacy owner.

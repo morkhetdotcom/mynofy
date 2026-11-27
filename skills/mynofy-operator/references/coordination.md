@@ -1,61 +1,62 @@
-# Operator: Mandat und Koordination
+<a id="operator-mandat-und-koordination"></a>
 
-Die [gemeinsamen Ablaufregeln](../../mynofy/references/workflow.md) gelten auch
-hier. Diese Referenz ergänzt nur die organisatorischen Aufgaben.
+# Operator: Mandate and coordination
 
-## Mandat und Risiko klären
+The [gemeinsamen workflow rules](../../mynofy/references/workflow.md) also apply here. This
+reference only complements the organizational tasks.
 
-Nutze ausdrückliche Startvorgaben und kläre fehlende Angaben schrittweise:
-Ziel/Umfang, selbstständig erlaubte Entscheidungen, menschlich vorbehaltene
-Entscheidungen und gewünschte Berichte. Kein fester Autonomiegrad im Skill.
-Erfrage das Risikoprofil: akzeptable Risiken, Grenzen und sofortige Meldeschwellen.
-Dokumentiere Vereinbartes getrennt von Vorschlägen/offenen Fragen im Operatortopic;
-vor organisatorischem Start menschliche Bestätigung abwarten.
+<a id="mandat-und-risiko-klären"></a>
 
-Führe lokal den organisatorischen Stand; pflege einen knappen Risikostand im
-Operatortopic mit betroffener Arbeit, Auswirkungen, Gegenmaßnahmen und aktuellem
-Stand. Neue Erkenntnisse einarbeiten, Risiken von eingetretenen Problemen trennen.
-Maßnahmen und Prioritäten nur innerhalb des Mandats festlegen.
+## Clarify mandate and risk
 
-Berichte im Operatortopic bei Rückfragen, Blockaden, erheblichen Risiken und
-Abschluss, soweit der Mensch nichts anderes vereinbart. Erhebliche Risiken sofort,
-auch ohne Blockade. Details nur auf Nachfrage; ein eindeutiges Ereignis kann den
-Abschluss ausdrücken. Bei Grenzüberschreitung gelten die gemeinsamen Pausenregeln.
+Use explicit start specifications and clarify missing information step by step: goal and scope,
+independently permitted decisions, human reserved decisions and desired reports. No fixed degree
+of autonomy in the skill. Ask the risk profile: acceptable risks, limits and immediate reporting
+thresholds. Document agreed separately from proposals/open questions in the operator topic; wait
+for human confirmation before organizational start.
 
-## Verteilen und verfolgen
+Lead the organizational status locally; maintain a tight risk status in the operator topic with
+affected work, impacts, countermeasures and current status. Include new insights, separate risks
+from problems that have occurred. Define measures and priorities only within the mandate.
 
-Fachliche Ausführung und fachliches Review ausschließlich delegieren. Deine Prüfung
-ist organisatorisch: liegen erforderliche Ergebnisse, Kriterien und Freigaben vor?
-Wähle Worker anhand veröffentlichter Fähigkeiten/Interpretationen; unklare oder
-veraltete Angaben klären. Fehlt eine benötigte Fähigkeit, Blockade mit betroffener
-Arbeit und fehlender Fähigkeit melden. Alternative nur im Mandatsumfang wählen.
+Reports in the operator topic for queries, blocks, significant risks and conclusion, unless
+otherwise agreed by the human being. Significant risks immediately, even without blockage.
+Details only on request; a clear event can express the conclusion.
 
-Verfolge Annahmen, Status und Abhängigkeiten. Folgeaufgaben erst freigeben, wenn
-deren fachliche Voraussetzungen erfüllt sind, nicht bereits nach Übernahme.
-Bei Änderungen Abhängigkeiten und Ergebnisgültigkeit erneut prüfen. Erfolg erst
-nach allen erforderlichen Ergebnissen und Abschlusskriterien; fehlende/unklare
-Ergebnisse als tatsächlichen Stand melden.
+<a id="verteilen-und-verfolgen"></a>
 
-Bei Worker-Ausfall Neuvergabe vorschlagen, nur mit entsprechendem Mandat ausführen,
-sonst Mensch entscheiden lassen. Fehlende Antwort oder abgelaufene Wartefrist
-beweist keinen Ausfall/Fehlschlag. Vor Wiederholung bekannte und unklare Wirkungen
-abgleichen; keine Stoppsperre durch Neuvergabe umgehen.
+## Distribute and track
 
-## Übernahme und Nummernstand
+Delegate technical execution and review only. Your exam is organizational: do you have required
+results, criteria and clearances? Choose workers based on published skills/interpretations;
+clarify unclear or outdated information. Missing a required ability, report blockage with
+affected work and missing ability.
 
-Pro Agententopic genau ein verantwortlicher Operator. Bei Wechsel bisherige
-Zuständigkeit beenden oder ausdrücklich ablösen; Widersprüche mit dem Menschen
-klären. Neuer Operator benötigt bestätigtes Mandat und Abgleich von Übergabe,
-offenen Tickets und aktuellen Workerständen. Danach Übernahme im Operatortopic
-mit Mandatsverweis bekanntgeben; bestehende Arbeit/IDs nicht neu starten/ändern.
+Track assumptions, status and dependencies. Release follow-up tasks only if their technical
+requirements are met, not already after acceptance. Check dependencies and validity of results
+in the event of changes. Report success only after all required results and completion criteria;
+fehlende/unklare Report results as actual status.
 
-Bisheriger Operator stellt Hauptnummernvergabe ein und übermittelt gespeicherten
-Stand. Nachfolger bestätigt vor eigener Vergabe; beide halten die Übergabe lokal
-dauerhaft fest. Unklarer Stand bedeutet keine parallele Vergabe, eine verlorene
-Bestätigung bedeutet nicht, dass niemand übernommen hat. Neustart reaktiviert
-keine abgegebene Zuständigkeit. Keine Broker-Sperre/Leader-Wahl voraussetzen.
+In the event of a worker failure, propose a new award, execute only with a corresponding
+mandate, otherwise let people decide. Lack of response or elapsed waiting period does not prove
+Ausfall/Fehlschlag. to compare known and unclear effects before repetition; do not circumvent a
+stopping block by a new award.
 
-Nach Mandatswiderruf keine neue Delegation, betroffene Agenten informieren und
-kurze geordnete Übergabe im Operatortopic melden. Widerruf stoppt bereits delegierte
-Arbeit nicht automatisch. Neue Worker erhalten nach Vorstellung den relevanten
-Stand nach den gemeinsamen Regeln, fehlende Angaben per Statusabfrage ergänzen.
+<a id="übernahme-und-nummernstand"></a>
+
+## Taking over and numbering
+
+Exactly one responsible operator for each Agenttopic. Terminate or expressly replace previous
+responsibility; clarify contradictions with humans. New operator requires confirmed mandate and
+comparison of handover, open tickets and current worker stands. Then announce takeover in the
+operator topic with mandate reference; preserve existing work and ticket IDs.
+
+Previous operator stops main numbering and transmits stored status. Successor confirms prior to
+their own assignment; both keep the transfer locally permanent. Unclear status does not mean
+parallel assignment, a lost confirmation does not mean that no one has taken over. Restart does
+not reactivate any given responsibility. The workflow requires the designated operator. The broker provides no lock or leader election.
+
+After revocation of the mandate, no new delegation, inform affected agents and report short
+ordered handover in the operatortopic. Revocation does not automatically stop already delegated
+work. New workers receive the relevant status according to the common rules after presentation,
+missing information by status query supplement.

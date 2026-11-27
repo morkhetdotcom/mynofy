@@ -49,6 +49,109 @@ struct Model {
     now: u64,
 }
 impl Model {
+    fn recreate_topic(
+        &mut self,
+        engine: &mut Engine,
+        fixture: &Fixture,
+        sessions: &mut [u64; 2],
+        cursors: &[Option<String>; 2],
+        topic: usize,
+        client: usize,
+    ) {
+        use crate::admin::Command;
+        let name = TOPICS[topic];
+        let delete = Command::TopicDelete { topic: name.into() };
+        if self
+            .messages
+            .iter()
+            .any(|m| m.topic == topic && m.until > self.now)
+        {
+            let error = engine
+                .admin(delete, self.now)
+                .err()
+                .expect("active topic deletion");
+            assert_eq!(error.code, "topic_not_empty");
+            return;
+        }
+
+        // Drain physically expired records before expecting deletion to succeed.
+        while engine.cleanup_step(self.now, 512).work != 0 {}
+        engine.admin(delete, self.now).unwrap();
+        assert!(!engine.topics.contains_key(name));
+        assert!(!engine.topic_names.iter().any(|entry| entry == name));
+        assert!(engine.topic_owner(name).is_none());
+        for (index, session) in sessions.iter_mut().enumerate() {
+            let had_grant = self.rights[index][topic] != 0;
+            assert_eq!(engine.authenticated(*session, self.now), !had_grant);
+            self.rights[index][topic] = 0;
+            if had_grant {
+                *session = auth(engine, &fixture.keys[index], self.now);
+            }
+        }
+        let old_head = self.heads[topic];
+        engine
+            .admin(
+                Command::TopicCreate {
+                    topic: name.into(),
+                    policy: Policy {
+                        default_ttl_seconds: 2,
+                        max_ttl_seconds: 5,
+                    },
+                },
+                self.now,
+            )
+            .unwrap();
+        self.heads[topic] = self.produced.iter().sum();
+        self.check(engine, &fixture.ids);
+
+        let request = json!({"version":1,"type":"publish","id":"recreated","topic":name,"payload":"new generation"});
+        assert_eq!(
+            send(engine, sessions[client], request.clone(), self.now)["code"],
+            "forbidden"
+        );
+        let old_cursor = cursors[client]
+            .clone()
+            .unwrap_or_else(|| Id::from_index(old_head).to_string());
+        let poll = json!({"version":1,"type":"poll","id":"recreated-poll","topic":name,"after":old_cursor});
+        assert_eq!(
+            send(engine, sessions[client], poll.clone(), self.now)["code"],
+            "forbidden"
+        );
+
+        if self.messages.iter().filter(|m| m.until > self.now).count()
+            < engine.config.limits.max_active_messages
+        {
+            engine
+                .set_acl(
+                    &fixture.ids[client],
+                    name,
+                    vec![Action::Publish, Action::Subscribe],
+                )
+                .unwrap();
+            self.rights[client][topic] = 3;
+            sessions[client] = auth(engine, &fixture.keys[client], self.now);
+            let reply = send(engine, sessions[client], request, self.now);
+            assert_eq!(reply["type"], "result", "{reply}");
+            let id = reply["message_id"].as_str().unwrap().to_owned();
+            self.heads[topic] += 1;
+            self.produced[client] += 1;
+            self.messages.push(Message {
+                id: id.clone(),
+                producer: client,
+                topic,
+                value: "new generation".into(),
+                until: self.now + 2000,
+                seq: self.heads[topic],
+            });
+            let page = send(engine, sessions[client], poll, self.now);
+            let items = page["items"]
+                .as_array()
+                .expect("poll after topic recreation");
+            assert_eq!(items.len(), 1, "{page}");
+            assert_eq!(items[0]["message"]["id"], id);
+        }
+    }
+
     fn check(&self, engine: &Engine, ids: &[String]) {
         assert_eq!(engine.index.len(), engine.records.len());
         assert_eq!(
@@ -77,9 +180,14 @@ impl Model {
             .enumerate()
             .map(|(i, m)| (m.id.as_str(), i))
             .collect();
+        let mut topic_bytes = [0; 2];
+        let mut publisher_bytes = [0; 2];
         for (slot, record) in engine.records.iter_slots() {
             let text = record.id().to_string();
             let message = &self.messages[modeled[text.as_str()]];
+            let charge = record.charge(&engine.content_types, &engine.payloads);
+            topic_bytes[message.topic] += charge;
+            publisher_bytes[message.producer] += charge;
             assert_eq!(engine.index.get(&record.id()), Some(&slot));
             assert_eq!(record.until(), message.until);
             assert_eq!(record.seq(), message.seq);
@@ -125,9 +233,22 @@ impl Model {
         }
         for (client, id) in ids.iter().enumerate() {
             assert_eq!(engine.clients[id].produced, self.produced[client]);
+            assert_eq!(engine.clients[id].active_bytes, publisher_bytes[client]);
+            for (topic, name) in TOPICS.iter().enumerate() {
+                for (bit, action) in [Action::Publish, Action::Subscribe, Action::InspectOwn]
+                    .into_iter()
+                    .enumerate()
+                {
+                    assert_eq!(
+                        engine.allowed(id, name, action),
+                        self.rights[client][topic] & (1 << bit) != 0
+                    );
+                }
+            }
         }
         for (topic, name) in TOPICS.iter().enumerate() {
             assert_eq!(engine.topics[*name].head, self.heads[topic]);
+            assert_eq!(engine.topics[*name].active_bytes, topic_bytes[topic]);
         }
 
         assert!(engine.records.len() <= engine.config.limits.max_active_messages);
@@ -198,7 +319,7 @@ fn run_case(seed: u64, steps: usize) {
             max_ttl_seconds: 5,
         });
     }
-    let mut engine = Engine::new(fixture.cfg, NOW).unwrap();
+    let mut engine = Engine::new(fixture.cfg.clone(), NOW).unwrap();
     let mut sessions = [
         auth(&mut engine, &fixture.keys[0], NOW),
         auth(&mut engine, &fixture.keys[1], NOW),
@@ -214,7 +335,7 @@ fn run_case(seed: u64, steps: usize) {
     let mut trace = std::collections::VecDeque::new();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         for step in 0..steps {
-            let operation = rng.pick(16);
+            let operation = rng.pick(17);
             let client = rng.pick(2);
             let topic = rng.pick(2);
             trace.push_back(format!(
@@ -378,6 +499,17 @@ fn run_case(seed: u64, steps: usize) {
                     let budget = rng.pick(9);
                     let progress = engine.cleanup_step(model.now, budget);
                     assert!(progress.work <= budget);
+                }
+                16 => {
+                    let previous_cursors = [cursors[0][topic].clone(), cursors[1][topic].clone()];
+                    model.recreate_topic(
+                        &mut engine,
+                        &fixture,
+                        &mut sessions,
+                        &previous_cursors,
+                        topic,
+                        client,
+                    );
                 }
                 _ => {
                     let backwards = model.now.saturating_sub(60_000);
@@ -605,7 +737,7 @@ fn functional_seeded_json_typed_and_direct_protobuf_have_the_same_effects() {
         }
     }
     eprintln!(
-        "JSON/typed/direct differential checks: {cases} requests including bytes/events, payload boundaries, expiry and confirmations"
+        "JSON/typed/direct differential checks: {cases} requests including bytes/events, payload boundaries, expiry and permissions"
     );
 }
 

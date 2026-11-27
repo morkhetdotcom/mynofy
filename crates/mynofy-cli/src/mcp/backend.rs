@@ -12,6 +12,8 @@ pub(super) struct Config {
     via: Option<String>,
     owner_ca: Option<PathBuf>,
     owner_name: Option<String>,
+    #[cfg(unix)]
+    checkpoint: Option<checkpoint::Shared>,
 }
 impl Config {
     pub(super) fn parse(flags: &BTreeMap<String, String>) -> Result<Self, BoxError> {
@@ -35,17 +37,35 @@ impl Config {
             return Err("Owner TLS overrides require --via-topic".into());
         }
         let key = Zeroizing::new(std::fs::read(required("--key")?)?);
-        client::crypto::public_key(&key)?;
+        let _public = client::crypto::public_key(&key)?;
+        let owner = required("--owner")?;
+        let client_id = flags.get("--client-id").cloned();
+        #[cfg(unix)]
+        let checkpoint = flags
+            .get("--checkpoint")
+            .map(|path| {
+                let expected = client_id
+                    .clone()
+                    .unwrap_or_else(|| client::crypto::initial_client_id(&_public));
+                checkpoint::Checkpoint::open(std::path::Path::new(path), &owner, &expected)
+            })
+            .transpose()?;
+        #[cfg(not(unix))]
+        if flags.contains_key("--checkpoint") {
+            return Err("MCP checkpoints require Unix".into());
+        }
         Ok(Self {
             socket,
             url,
             ca: flags.get("--ca").map(PathBuf::from),
             key: Arc::new(key),
-            owner: required("--owner")?,
-            client: flags.get("--client-id").cloned(),
+            owner,
+            client: client_id,
             via: flags.get("--via-topic").cloned(),
             owner_ca: flags.get("--owner-ca").map(PathBuf::from),
             owner_name: flags.get("--owner-name").cloned(),
+            #[cfg(unix)]
+            checkpoint,
         })
     }
 }
@@ -137,6 +157,10 @@ impl Backend {
                 (Socket::Wss(Box::new(ws)), welcome)
             }
         };
+        #[cfg(unix)]
+        if let Some(state) = &self.config.checkpoint {
+            state.lock().await.bind(&welcome)?;
+        }
         self.socket = Some(socket);
         self.welcome = Some(welcome);
         Ok(())
@@ -151,18 +175,110 @@ impl Backend {
         }
         envelope
     }
-    pub(super) async fn call(&mut self, mut request: Option<Value>) -> Value {
-        if self.connect().await.is_err() {
+    pub(super) async fn call(&mut self, request: Option<Value>) -> Value {
+        if let Some(request) = request.as_ref()
+            && matches!(
+                request["type"].as_str(),
+                Some("poll_next" | "checkpoint_status" | "checkpoint_commit")
+            )
+        {
+            #[cfg(unix)]
+            if let Some(checkpoint) = self.config.checkpoint.clone() {
+                return self.checkpoint_call(checkpoint, request).await;
+            }
             return tool_result(
-                json!({"code":"connection_failed","message":"Could not authenticate with the configured owner.","outcome_unknown":false}),
+                json!({"code":"checkpoint_disabled","message":"Start MCP with --checkpoint to use local polling helpers."}),
                 true,
             );
         }
+        let (value, error) = self.owner_call(request).await;
+        tool_result(value, error)
+    }
+
+    #[cfg(unix)]
+    async fn checkpoint_call(&mut self, checkpoint: checkpoint::Shared, request: &Value) -> Value {
+        let topic = request["topic"].as_str().expect("validated topic");
+        match request["type"].as_str() {
+            Some("checkpoint_status") => {
+                let state = checkpoint.lock().await;
+                return tool_result(state.status(topic, self.welcome.as_ref()), false);
+            }
+            Some("checkpoint_commit") => {
+                let topic = topic.to_owned();
+                let receipt = request["receipt"]
+                    .as_str()
+                    .expect("validated receipt")
+                    .to_owned();
+                if !checkpoint.lock().await.has_receipt(&topic, &receipt) {
+                    return checkpoint::stale_receipt();
+                }
+                let (response, error) = self
+                    .owner_call(Some(json!({
+                        "type":"get_permissions","version":1,"topic":topic
+                    })))
+                    .await;
+                if error {
+                    return tool_result(response, true);
+                }
+                let welcome = self.welcome.clone();
+                let state = request.get("state").cloned();
+                return tokio::task::spawn_blocking(move || {
+                    checkpoint.blocking_lock().commit(
+                        &topic,
+                        &receipt,
+                        state.as_ref(),
+                        welcome.as_ref(),
+                    )
+                })
+                .await
+                .unwrap_or_else(|_| tool_result(json!({"code":"checkpoint_write_failed"}), true));
+            }
+            _ => {}
+        }
+        if self.connect().await.is_err() {
+            return tool_result(connection_error(), true);
+        }
+        let interval = Duration::from_millis(request["interval_ms"].as_u64().unwrap_or(30_000));
+        let after = match checkpoint.lock().await.begin(topic, interval) {
+            Ok(after) => after,
+            Err(result) => return result,
+        };
+        let mut poll = json!({"type":"poll","version":1,"topic":topic});
+        if request["replay"] != true
+            && let Some(after) = after
+        {
+            poll["after"] = after.into();
+        }
+        if let Some(limit) = request.get("limit") {
+            poll["limit"] = limit.clone();
+        }
+        let (mut envelope, error) = self.owner_call(Some(poll)).await;
+        let mut checkpoint = checkpoint.lock().await;
+        checkpoint.finish(topic, interval);
+        let response = &envelope["response"];
+        if error || response["type"] != "messages" {
+            return tool_result(envelope, error);
+        }
+        let receipt = checkpoint.page(topic, response);
+        match receipt {
+            Ok(receipt) => {
+                envelope["checkpoint_receipt"] = receipt.into();
+                tool_result(envelope, false)
+            }
+            Err(_) => tool_result(json!({"code":"invalid_poll_page"}), true),
+        }
+    }
+
+    async fn owner_call(&mut self, mut request: Option<Value>) -> (Value, bool) {
+        let was_connected = self.socket.is_some();
+        if self.connect().await.is_err() {
+            return (connection_error(), true);
+        }
         let Some(ref mut request) = request else {
-            return tool_result(self.envelope(json!({"type":"connection_info"})), false);
+            return (self.envelope(json!({"type":"connection_info","owner_context":if was_connected {"cached"} else {"authenticated_now"}})), false);
         };
         let Some(next) = self.sequence.checked_add(1) else {
-            return tool_result(json!({"code":"request_id_exhausted"}), true);
+            return (json!({"code":"request_id_exhausted"}), true);
         };
         self.sequence = next;
         request["id"] = format!("mcp-{next}").into();
@@ -176,17 +292,21 @@ impl Backend {
         {
             Ok(response) => {
                 let error = response["type"] == "error";
-                tool_result(self.envelope(response), error)
+                (self.envelope(response), error)
             }
             Err(_) => {
                 // A lost response must never cause the same mutation to be replayed.
                 self.socket = None;
                 self.welcome = None;
-                tool_result(
+                (
                     json!({"code":"transport_error","message":"Owner connection lost. The operation was not retried. Inspect state before repeating a mutation.","outcome_unknown":unknown}),
                     true,
                 )
             }
         }
     }
+}
+
+fn connection_error() -> Value {
+    json!({"code":"connection_failed","message":"Could not authenticate with the configured owner.","outcome_unknown":false})
 }

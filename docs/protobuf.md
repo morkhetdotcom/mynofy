@@ -1,23 +1,35 @@
-# Protobuf und typisierte Payloads
+<a id="protobuf-und-typisierte-payloads"></a>
 
-Release **v0.1.0 is the first compatibility baseline**. Earlier development and
-demo formats are not supported releases and require no migration support.
-Within protocol version 1, preserve existing field numbers, meanings and required
-fields. New optional fields must preserve behavior when absent; retired tags stay
-reserved. Incompatible changes require a new protocol version and an explicit
-upgrade plan. The listener rejects unsupported frame versions.
+# Protobuf and Typed Payloads
 
-## Verfügbare Schnittstelle
+Release **v0.1.0 is the first compatibility baseline**. Earlier development and demo formats are not supported releases and require no migration support. Within protocol version 1, preserve existing field numbers, meanings and required fields. New optional fields must preserve behavior when absent; retired tags stay reserved. Incompatible changes require a new protocol version and an explicit upgrade plan. The listener rejects unsupported frame versions.
 
-Client und CLI verwenden ausschließlich binäre Protobuf-Nachrichten über denselben abgesicherten WebSocket-/Unix-Transport. Eine WebSocket-Nachricht enthält genau einen Protobuf-Frame. Es wird kein zusätzliches Längenpräfix innerhalb der WebSocket-Nachricht benötigt. JSON-Anwendungscommands als Textframes werden vor und nach Authentifizierung mit WebSocket-Code 1003 abgewiesen. Der separate Admin-Socket und JSON-Steuerframes für Peers/Tunnel sind eigene Schnittstellen.
+<a id="verfügbare-schnittstelle"></a>
 
-Die CLI liest und schreibt weiter JSONL für Menschen und Terminalwerkzeuge. Dafür wandelt sie an der Grenze zwischen der lesbaren Darstellung und Protobuf um. Für direkten Zugriff ohne JSON-Konvertierung bietet das SDK `exchange_frame` mit `mynofy_protocol::pb::Frame`. `exchange` ist die bisherige JSON-förmige Komfort-API mit Protobuf auf dem Netzwerk; `exchange_json` wurde entfernt; ein JSON-Text-Wire-Modus für Client-Commands existiert nicht mehr.
+## Available interface
 
-Alle bestehenden lokalen Client-Commands haben Protobuf-Varianten: Auth, Publish/Poll, Producer-Abfragen, Permissions, Katalogabruf und Rotation. Peer/proxy control messages use a separate protocol; see [networking](networking.md). Protocol version 1 uses release v0.1.0 as its compatibility baseline.
+Client and CLI use only binary protobuf messages via the same secured WebSocket-/Unix-Transport.
+A WebSocket message contains exactly one prototype frame, and no additional length prefix is
+required within the WebSocket message. JSON Application commands as text frames are rejected
+before and after authentication with WebSocket code 1003. JSON control frames for Peers/Tunnel
+They are their own interfaces.
 
-## Schema und Generierung
+The CLI continues to read and write JSONL for people and terminal tools, but it converts at the
+boundary between the readable display and Protobuf. For direct access without JSON conversion,
+the SDK`exchange_frame` with `mynofy_protocol::pb::Frame`. `exchange` is the previous JSON
+-shaped convenience API with Protobuf on the network; `exchange_json` has been removed; a JSON
+-text wire mode for client commands no longer exists.
 
-[generate.py](../protocol/protobuf/generate.py) enthält die Felddefinitionen und erzeugt das [portable proto2-Schema](../protocol/protobuf/mynofy.proto), prost-Derives, JSON-Adapter und die statischen Katalog-Enums/Mitgliedschaftsprüfungen. Existing field numbers must not be reinterpreted or reused. Es gibt keinen zur Laufzeit benötigten Descriptor-Loader und keine Build-Abhängigkeit zu `protoc`/`prost-build`.
+All existing local client commands have protobuf variants: Auth, Publish/Poll, Producer queries,
+permissions, catalog retrieval and rotation. Peer/proxy control messages use a separate
+protocol; see [networking](networking.md). Protocol version 1 uses release v0.1.0 as its
+compatibility baseline.
+
+<a id="schema-und-generierung"></a>
+
+## Scheme and generation
+
+[generate.py](../protocol/protobuf/generate.py) contains the field definitions and generates the [portable proto2-Schema](../protocol/protobuf/mynofy.proto), prost-Derives, JSON -Adapters and the static catalog enums/membership checks. Existing field numbers must not be reinterpreted or reused. There is no descriptor loader required at runtime and no build dependency on `protoc` / `prost-build`.
 
 ```sh
 python3 protocol/protobuf/generate.py
@@ -25,43 +37,85 @@ cargo fmt --all -- --check
 cargo test --locked -p mynofy-protocol
 ```
 
-Der Generator ist Entwicklungstooling und benötigt Python/Rustfmt; normale Cargo-Builds verwenden die eingecheckten Dateien. Die Rust-Namen `pb::Result` und `payload::Body` sind Protokolltypen, keine Rust-Fehlerbehandlung.
+The generator is development tooling and requires Python/Rustfmt; normal cargo builds use the
+checked-in files. The Rust names `pb::Result` and `payload::Body` are protocol types, not Rust
+error handling.
 
-Die Implementierung verwendet den offiziellen [prost-Upstream](https://github.com/tokio-rs/prost) und [Bytes](https://github.com/tokio-rs/bytes). `bytes` war bereits transitiv vorhanden. Die zusätzliche Laufzeitbibliothek ist prost; derive bringt notwendige Build-/Makroabhängigkeiten mit. Es gibt keine lokalen Forks oder Git-Patches.
+The implementation uses the official [prost-Upstream](https://github.com/tokio-rs/prost) and
+[Bytes](https://github.com/tokio-rs/bytes). `bytes` was already transitive. The additional
+runtime library is prost; derive brings necessary build and macro dependencies. There are no local
+forks or git patches.
 
 ## Zwei Payload-Varianten
 
-Freie Bytes bestehen aus Bytes und optionalem `content_type` (1–128 UTF-8-Bytes). Harte Obergrenze: **4096 tatsächliche Datenbytes**, gegebenenfalls durch `limits.max_payload_bytes` weiter eingeschränkt. Es gibt keine automatische Fragmentierung, Kürzung oder große vorreservierte Payload pro Nachricht. Im RAM hält der Core Bytes als geteilte, unveränderliche `Bytes`; Poll-Kopien müssen deren Inhalt nicht noch einmal kopieren.
+Free bytes consist of bytes and optional `content_type` (1–128 UTF -8 bytes). Hard cap: **4096
+actual data bytes**, possibly further restricted by `limits.max_payload_bytes`. There is no
+automatic fragmentation, shortening or large pre-reserved payload per message. In RAM, the core
+bytes holds as divided, immutable `Bytes`; poll copies do not have to copy their contents again.
 
-Lesbare Darstellung:
+Lesbare representation:
 
 ```json
 {"version":1,"type":"publish","id":"p1","topic":"local/events","payload":{"kind":"bytes","content_type":"text/plain","data":"SGFsbG8="}}
 ```
 
-`data` ist nur in der JSON-Darstellung kanonisches Standard-Base64. Auf dem Protobuf-Wire stehen die tatsächlichen Bytes. Das Beispiel enthält fünf Nutzbytes (`Hallo`). Leere Bytes sind erlaubt.
+`data` is the standard canonical base64 only in the JSON representation, and the protobuf wire contains the actual bytes, and the example contains five useful bytes (`Hallo`).
 
-Typisierte Ereignisse enthalten numerische Katalog-ID/-version, Kategorie, Aktion, Status und höchstens drei primitive Parameter mit insgesamt höchstens 24 reinen Wertebytes. Katalog-ID 1 bezeichnet `mynofy`, Version 1. Unbekannte Versionen/IDs, fehlende Parameterwerte und nicht endliche Floats werden abgewiesen. Die Grundtypen sind U32/U64/I32/I64/F32/F64/Bool. Keine Strings oder nachgeladenen Kataloge innerhalb eines Ereignisses.
+Typed events contain numerical catalog-ID/-version, category, action, status and a maximum of
+three primitive parameters with a total of 24 pure value bytes. Catalog ID 1 denotes `mynofy`,
+version 1. unknown Versionen/IDs, missing parameter values and non-finite floats are rejected.
+The basic types are U32/U64/I32/I64/F32/F64/Bool. No strings or reloaded catalogs within an
+event.
 
 ```json
 {"version":1,"type":"publish","id":"p2","topic":"workflow/4711/communication","payload":{"kind":"event","catalog":1,"catalog_version":1,"category":12,"action":40,"status":7,"parameters":[{"u64":4711}]}}
 ```
 
-Das bedeutet `(JOB, EXECUTE, PENDING)` mit einem U64-Parameter. Die konkrete Bedeutung dieses Parameters gehört zum vereinbarten Profil. Der Core prüft bekannte Kennungen und Größen, keine fachlichen Übergänge oder Rollen innerhalb einer Payload. Die [Enums](../crates/mynofy-protocol/src/catalog_values.rs) und numerischen Prüfungen werden aus dem Katalog erzeugt; kein JSON-Katalogscan pro Ereignis.
+This means `(JOB, EXECUTE, PENDING)` with a U64 parameter. The specific meaning of this
+parameter belongs to the agreed profile. The core checks known identifiers and sizes, no
+technical transitions or roles within a payload. The
+[Enums](../crates/mynofy-protocol/src/catalog_values.rs) and numerical checks are generated from
+the catalog; no JSON catalog scan per event.
 
-Eine Payload ist entweder Event oder Bytes. Parameter plus freie Bytes in derselben Payload sind keine dritte implizite Variante. Benötigter Kontext muss im Profil/Topic bekannt sein oder in einer einzelnen freien Payload stehen.
+A payload is either event or bytes. Parameters plus free bytes in the same payload are not a
+third implicit variant. Required context must be known in the Profil/Topic or be in a single
+free payload.
 
-## Kompatibilität und Migration
+<a id="kompatibilität-und-migration"></a>
 
-- Ältere beliebige JSON-Payloads bleiben als Komfortdarstellung lesbar. Sie werden intern als UTF-8-JSON-Bytes gespeichert; ihre vollständige JSON-Serialisierung muss in 4096 Byte passen. Ein String mit 4096 Zeichen benötigt zusätzlich seine JSON-Anführungszeichen und passt so nicht mehr. Für genau 4096 Nutzbytes die explizite Byte-Variante verwenden.
-- Die Payload-Objekte mit `kind: "event"` beziehungsweise `kind: "bytes"` sind für die neuen Varianten reserviert. Der interne Inhaltstyp `application/vnd.mynofy.legacy+json` dient dem JSON-Kompatibilitätsadapter; er prüft UTF-8/JSON und darf nicht als undurchsichtiger binärer Typ benutzt werden.
-- Vorhandene Service-Konfigurationen mit `max_payload_bytes: 65536` müssen auf höchstens 4096 umgestellt werden. Neue Szenariovorlagen setzen bereits 4096. Bestehende lokale `.local/*`-Dateien werden nicht ungefragt geändert. Den Server nach Aktualisierung neu starten.
-- Antwortgrößen und Transportgrößen haben weiterhin eigene Limits; eine Poll-Seite oder Katalogantwort darf größer als eine einzelne Payload sein.
-- Protobuf ignoriert unbekannte Felder gemäß dem verwendeten Decoder; oneof-/Scalar-Wiederholungen folgen dessen Zusammenführungsregeln. Die lesbare JSON-Eingabe der CLI prüft doppelte Schlüssel und unbekannte Command-Felder vor der Übersetzung. Der Broker prüft Version, Richtung, Identität, ACL, Grenzen und Zustand zusätzlich zum Protobuf-Codec.
-- Auth-Schlüsselfelder/Signaturen und RFC3339-Zeiten behalten vorerst ihre vorhandene Textdarstellung in den typisierten Kontrollnachrichten. Das verändert weder Signaturtranskripte noch Rotationsbindungen. Der seltene Katalogabruf transportiert die eigenständig versionierte JSON-Definition als Bytes in einer Protobuf-Katalogantwort.
+## Compatibility and migration
 
-## Speicher und Messung
+- Older arbitrary JSON payloads remain readable as a convenience display. They are stored
+  internally as UTF -8- JSON bytes; their complete JSON serialization must fit in 4096 bytes. A
+  string with 4096 characters additionally requires its JSON quotes and thus no longer fits.
+- The payload objects with `kind: "event"` or `kind: "bytes"` are reserved for the new variants.
+  The internal content type `application/vnd.mynofy.legacy+json` serves the JSON compatibility
+  adapter; it checks UTF-8/JSON and must not be used as an opaque binary type.
+- Existing service configurations with `max_payload_bytes: 65536` must be upgraded to a maximum
+  of 4096. New scenario templates already set 4096. Existing local `.local/*` files are not
+  changed unasked. Restart the server after update.
+- Response sizes and transport sizes still have their own limits; a poll page or catalog
+  response may be larger than a single payload.
+- Protobuf ignores unknown fields according to the decoder used; oneof-/Scalar-retries
+  follows its merging rules. The readable JSON input of the CLI checks duplicate keys and
+  unknown command fields before translation. The broker checks version, direction, identity,
+  ACL, limits and state in addition to the Protobuf codec.
+- Auth key fields/signatures and RFC3339 times retain their existing text representation in the
+  typed control messages for the time being, which does not change signature transcripts or
+  rotation bindings. The rare catalog retrieval transports the independently versioned JSON
+  definition as bytes in a prototype catalog response.
 
-Nachrichten liegen im [kompakten RAM-Format](binary-message-layout.md) mit numerischen Referenzen, Zeitwerten und eingebetteten Eventparametern statt als Wire-Nachrichten oder JSON-Objektbäume vor. Protobuf-`StoredMessage` wird erst für Antworten aufgebaut. Publish und Poll haben einen direkten Protobuf-Pfad. Auth und Rotation nutzen weiterhin JSON-Konvertierung an ihrem internen Adapter; Publish/Poll/Get/List/Permissions/Katalog besitzen native Protobuf-Pfade. Es wäre falsch, daraus einen vollständig JSON-freien Server abzuleiten. Konfiguration unterstützt YAML/JSON; CLI-Darstellung und Katalogdefinition verwenden weiterhin JSON.
+<a id="speicher-und-messung"></a>
 
-Der the storage and transport guides trennt den gleichen aktuellen Core mit zwei Encodings vom zusätzlichen Speicherumbau gegenüber der älteren Implementation. Netzwerk/TLS-Durchsatz wurde damit nicht gemessen.
+## Memory and measurement
+
+The news is in [kompakten RAM-Format](binary-message-layout.md) with numerical references, time
+values and embedded event parameters instead of wire messages, or JSON -Object trees. Protobuf-
+`StoredMessage` Publish and Poll have a direct protobuf path. Auth and rotation continue to use
+JSON -conversion to its internal adapter; Publish/Poll/Get/List/Permissions/catalog They have
+native protobuf paths. JSON -free server to derive. Configuration supported YAML/JSON; CLI
+-Representation and catalog definition continue to use JSON.
+
+The storage and transport guides separates the same current core with two encodings from the
+additional memory conversion compared to the older implementation. Netzwerk/TLS-Durchsatz was
+thus not measured.

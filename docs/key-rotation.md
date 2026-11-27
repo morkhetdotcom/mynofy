@@ -1,43 +1,114 @@
-# Kontrollierter Schlüsselwechsel
+<a id="kontrollierter-schlüsselwechsel"></a>
 
-Entwurf gemäß der Projektentscheidung vom 11. November 2026. Der clientseitig gestartete Ablauf ist im lokalen Prototyp implementiert; die konkreten [Frames und kryptografischen Bindungen](protocol.md) sind dokumentiert. Nur der Client initiiert den Wechsel; serverseitige Offers sind nicht vorgesehen. Dies ist ein Wechsel des Client-Tokens auf Anwendungsebene, keine TLS-Renegotiation und kein TLS-Traffic-Key-Update.
+# Controlled key change
 
-## Identität und Gültigkeit
+Draft according to the project decision of November 11, 2026.The client-side launched process is
+implemented in the local prototype; the specific [Frames and cryptographic bonds](protocol.md)
+is documented.Only the client initiates the change; server-side offerers are not provided. This
+is a change of the client token at the application level, no TLS renegotiation and no TLS
+traffic key update.
 
-Die stabile Client-ID wird beim ersten Einrichten aus dem ersten Public Key abgeleitet: `client:` gefolgt von dessen `token_id`. Sie bleibt bei allen späteren autorisierten Schlüsselwechseln gleich. Der aktuelle Token-Fingerprint identifiziert dagegen genau einen aktuellen Schlüssel. Anzeigenamen wie `codex` sind keine Eigentumskennung und können nicht durch Neuanlegen eine alte Identität übernehmen.
+<a id="identität-und-gültigkeit"></a>
 
-Registrierung und Wechsel gelten pro Owner. Ein Wechsel bei einem Owner aktualisiert keine anderen Owner. Der Client muss die zugehörigen aktuellen privaten Schlüssel pro Owner verwalten. Eine globale Synchronisierung ist nicht vorgesehen. Die konzeptionellen Regeln des Wechsels sind festgelegt; die unten genannten konkreten Frames und kryptografischen Parameter sind Implementierungsaufgaben.
+## Identity and validity
 
-Der Service hält die Zuordnung von stabiler Identität, aktuellem Schlüssel, Gültigkeitszeitraum und Sperrstatus im RAM. Beim Prozessstart wird die Baseline aus der [Konfigurationsdatei](configuration.md) geladen und der aktuelle [Security-Stand](security-journal.md) wiederhergestellt. Laufzeit-Wechsel und Sperren werden automatisch asynchron gespeichert. Der Client benötigt entsprechende Gültigkeitsmetadaten. Ein roher Ed25519-Public-Key enthält selbst weder Ablaufdatum noch Widerrufsinformation; diese stammen aus der Registrierung. Ein TLS-Zertifikat hat einen eigenen, davon getrennten Lebenszyklus.
+The stable client ID is derived from the first public key at the first setup: `client:` followed
+by `token_id`. It remains the same for all subsequent authorized key changes. The current token
+fingerprint, on the other hand, identifies exactly one current key. Display names such as
+`codex` are not a property identifier and cannot take over an old identity by re-creation.
 
-Ein Wechsel ist nur zulässig, solange der bestehende Token noch gültig und nicht gesperrt ist und die Verbindung damit authentifiziert wurde. Ist der Token gesperrt oder bereits abgelaufen, muss er über einen vertrauenswürdigen Verwaltungsweg neu eingerichtet werden. Ein abgelaufenes oder widerrufenes, zur Verbindung benötigtes Zertifikat darf ebenfalls nicht durch diesen Ablauf umgangen werden. Eine manuelle Wiederanbindung an eine alte stabile Identität ist eine ausdrückliche Betreiberentscheidung, kein Recht aus dem neuen Public Key.
+Registration and change are per owner. Change to an owner does not update other owners. The
+client must manage the associated current private keys per owner. Global synchronization is not
+foreseen. The conceptual rules of change are specified; the concrete frames and cryptographic
+parameters mentioned below are implementation tasks.
 
-## Vorgesehener Ablauf mit Shared Secret
+The service keeps the assignment of stable identity, current key, validity period and lock
+status in the RAM. At the start of the process, the baseline is loaded from the
+[configuration file](configuration.md) and the current [security state](security-journal.md) is
+restored. Runtime change and locks are automatically stored asynchronously. The client requires
+corresponding validity metadata. A raw Ed25519 public key itself contains neither expiration
+date nor revocation information; these are from the registration. A TLS certificate has its own
+separate life cycle.
 
-1. Der Client erkennt das bevorstehende Ablaufdatum und fragt auf der bestehenden authentifizierten WSS-Verbindung an, ob der Schlüsselwechsel beginnen soll.
-2. Die Gegenstelle bestätigt. Pro Identität darf nur ein Wechsel gleichzeitig ausstehen. Beide Seiten kennen eine eindeutige Wechsel-ID und eine kurze Frist.
-3. Der Initiator erzeugt ein kryptografisch zufälliges, einmaliges Shared Secret und überträgt es ausschließlich über diese authentifizierte, verschlüsselte Verbindung. Es erscheint nicht in URLs, Logs, Topic-Nachrichten oder allgemeinen Statusabfragen.
-4. Der Client erzeugt ein neues Schlüsselpaar. Er behält den alten Schlüssel zunächst lokal und verschlüsselt den neuen Public Key mit authentifizierter Verschlüsselung unter dem Shared Secret. Stabile Client-ID, Service-ID, Wechsel-ID und alter Token-Fingerprint müssen gegen Austausch gebunden werden.
-5. Der Service entschlüsselt und prüft den Public Key. Vor Übernahme muss zusätzlich der Besitz des neuen privaten Schlüssels nachgewiesen werden, etwa mit einer neuen signierten Challenge. Die Verschlüsselung des Public Keys allein beweist diesen Besitz nicht.
-6. Der Service prüft unmittelbar vor dem Commit erneut Gültigkeit und Sperrstatus des alten Tokens sowie die unveränderte Identitätszuordnung. Der neue Schlüssel wird atomar derselben stabilen Client-ID zugeordnet; der alte Schlüssel wird ersetzt. Eigentum und vorhandene ACL bleiben bestehen. Der Wechsel erweitert keine Rechte.
-7. Der Service bestätigt den Commit. Der Client prüft die neue Anmeldung und verwirft den alten Schlüssel erst, nachdem der Erfolg eindeutig festgestellt wurde. Shared Secret und ausstehender Wechselzustand werden nach Erfolg, Abbruch oder Fristende verworfen.
+A change is only allowed as long as the existing token is still valid and not blocked and the
+connection has thus been authenticated. If the token is blocked or has already expired, it must
+be re-established via a trustworthy administrative channel. A certificate that has expired or is
+revoked and is required for the connection must also not be circumvented by this expiration. A
+manual reconnection to an old stable identity is an explicit operator decision, not a right from
+the new public key.
 
-Rechteentzug, Token-Widerruf und Ablauf haben Vorrang vor einem noch nicht abgeschlossenen Wechsel. Ein eingeleiteter Wechsel darf die Gültigkeit nicht selbst verlängern. Ausstehende normale Auth-Challenges, die einen ersetzten oder entzogenen Schlüssel betreffen, werden ungültig; Annahme des Proofs und Bindung der Sitzung müssen gegen die aktuelle Konfiguration atomar geprüft werden.
+<a id="vorgesehener-ablauf-mit-shared-secret"></a>
 
-## Fristende und Neustart des Vorgangs
+## Scheduled Expiration with Shared Secret
 
-Jeder Vorgang hat eine feste Frist aus der Konfiguration. Wird er bis dahin nicht abgeschlossen, verfallen Shared Secret, reservierter neuer Schlüssel und ausstehende Challenges dieses Vorgangs. Ein neuer Versuch startet vollständig mit neuer Wechsel-ID und neuem Shared Secret. Ein alter Vorgang wird nicht nach Fristende fortgesetzt. Es gibt pro stabiler Client-ID ein Rate-Limit für gestartete Wechsel, gemeinsam über alle Verbindungen; ein Timeout setzt dieses Budget nicht zurück.
+1. The client recognizes the upcoming expiration date and asks on the existing authenticated WSS
+   connection if the key change should begin.
+2. The opposite office confirms that only one change per identity must be pending at the same
+   time. Both sides know a unique change ID and a short period of time.
+3. The initiator creates a cryptographic random, one-time shared secret and transmits it
+   exclusively through this authenticated, encrypted connection, which does not appear in URLs,
+   logs, topic messages or general status queries.
+4. The client creates a new key pair. It first keeps the old key locally and encrypts the new
+   public key with authenticated encryption under the shared secret. Stable client ID, service
+   ID, change ID and old token fingerprint must be tied for exchange.
+5. The service decrypts and checks the public key. Before taking over, the ownership of the new
+   private key must also be proven, for example with a new signed challenge. The encryption of
+   the public key alone does not prove this ownership.
+6. Immediately before committing, the service checks the validity and blocking status of the old
+   token and the unchanged identity assignment. The new key is atomically assigned to the same
+   stable client ID; the old key is replaced. Property and existing ACL remain in place. The
+   change does not extend rights.
+7. The service confirms the commit. The client checks the new login and discards the old key
+   only after the success has been clearly established. Shared Secret and pending change state
+   are discarded after success, cancellation or deadline.
 
-Vor dem atomaren Commit bleibt der bisherige Schlüssel maßgeblich. Nach einem erfolgreichen Commit ist der neue Schlüssel maßgeblich, auch wenn die Antwort verloren ging. Ein Fristablauf rollt einen bereits übernommenen Schlüssel nicht zurück. Der Client behält deshalb den neuen privaten Schlüssel und kann dessen Anmeldung versuchen. Scheitert ein unvollständiger Ablauf, startet er mit dem noch gültigen akzeptierten Schlüssel neu; ist keiner mehr gültig oder vorhanden, ist eine neue Einrichtung nötig. Es wird kein automatischer Rückfall auf einen widerrufenen oder abgelaufenen Schlüssel erlaubt.
+Withdrawal of rights, token revocation and expiration take precedence over a change that has not
+yet been completed. An initiated change may not itself extend the validity. Pending normal Auth
+Challenges involving a replaced or revoked key become invalid; acceptance of the proof and
+binding of the session must be atomically verified against the current configuration.
+
+<a id="fristende-und-neustart-des-vorgangs"></a>
+
+## End date and restart of the process
+
+Each task has a fixed deadline from the configuration. If it is not completed by then, Shared
+Secret, reserved new key and pending challenges of this task expires. A new attempt starts
+completely with new change ID and new Shared Secret. An old task does not continue after
+deadline. There is a rate limit for each stable client ID for started change, shared across all
+connections; a timeout does not reset this budget.
+
+Before the atomic commit, the previous key remains relevant. After a successful commit, the new
+key is relevant even if the response was lost. A deadline does not roll back a previously
+accepted key. The client therefore retains the new private key and can attempt to log on. If an
+incomplete expiry fails, it restarts with the still valid accepted key; if none is valid or
+exists, a new setup is necessary. No automatic reversion to a revoked or expired key is allowed.
 
 On restart, the service restores the synchronized security journal. With `security_storage.sync: true`, `rotation_complete` confirms that the new key was synchronized. Durable confirmation is the default. Explicit `security_storage.sync: false` can lose unsynced changes on a crash. A lost commit response or failed synchronization leaves the outcome unknown; retain both keys and reconcile without automatically replaying the commit.
 
-Rechteentzug, Widerruf und Ablauf haben Vorrang vor einem noch offenen Commit. Die Prüfung und der Commit erfolgen serialisiert gegen die aktuelle Konfigurationsgeneration. Ein Limit schützt nicht vor jedem verteilten Angriff; zusätzliche Listener-/Quellenlimits greifen bereits vor erfolgreicher Authentifizierung.
+Withdrawal of rights, revocation and expiration take precedence over a still open commit. The
+check and the commit are serialized against the current configuration generation. A limit does
+not protect against every distributed attack; additional Listener-/Quellenlimits already apply
+to successful authentication.
 
-## Umsetzung des lokalen Prototyps
+<a id="umsetzung-des-lokalen-prototyps"></a>
 
-Der Client initiiert `rotation_start`; das bestätigende Offer enthält Frist und neue Owner-Gültigkeit. Erst danach erzeugt der Client das Shared Secret und sendet es mit `rotation_confirm`. Der Service antwortet mit Nonce und Proof-Challenge, ohne das Secret zurückzusenden. `rotation_commit` transportiert den AES-256-GCM-geschützten Public Key und den Besitznachweis des neuen privaten Schlüssels. Die Ersetzung ist ein atomarer Core-Schritt ohne Netzwerk-I/O innerhalb des Commits.
+## Implementation of the local prototype
 
-Shared Secrets werden im Serverzustand durch `zeroize` beim Verwerfen gelöscht. Der CLI-Client hält alte und neue private Dateien getrennt; ein neuer Schlüssel überschreibt keinen bestehenden Pfad. Der aktuelle lokale Prototyp unterstützt manuell clientseitig angestoßene Rotation. Ein serverseitiger Anstoß ist nicht vorgesehen. Automatische Ablaufwarnungen und ein dauerhafter Wechselzustand sind nicht implementiert. Eine unabhängig neu provisionierte Identität wird aus ihrem ersten Public Key abgeleitet und übernimmt keine vorhandenen ACLs oder Inhalte. Reguläre clientinitiierte Rotation erhält dagegen die stabile Client-ID.
+The client initiates `rotation_start`; the confirming offer contains deadline and new owner
+validity. only after that the client creates the shared secret and sends it with
+`rotation_confirm` The service responds with nonce and proof challenge without sending back the
+secret. `rotation_commit` transportiert den AES -256- GCM The replacement is an atomic core step
+without any atomic key. Netzwerk-I/O within the commit.
 
-Ein Public Key ist nicht geheim. Das zusätzliche Shared Secret kann den Wechsel an einen vereinbarten Vorgang binden, schützt aber ohne den bereits authentifizierten TLS-Kanal keinen Schlüsselaustausch. Die Berechtigung zum Wechsel stammt aus der gültigen alten Identität und der Bestätigung, nicht aus bloßer Kenntnis eines vom Client selbst mitgebrachten Secrets.
+Shared secrets are deleted in the server state by `zeroize` when discarded. The CLI client keeps
+old and new private files separate; a new key does not overwrite an existing path. The current
+local prototype does not support a rotation initiated manually on the client side. A server-side
+trigger is not provided. Automatic expiration warnings and a permanent change state are not
+implemented. An independently re-provisioned identity is derived from its first public key and
+does not take over any existing ACLs or contents. Regular client-initiated rotation, on the
+other hand, receives the stable client ID.
+
+A public key is not a secret. The additional shared secret can tie the change to an agreed
+process, but does not protect a key exchange without the already authenticated TLS channel. The
+permission to change comes from the valid old identity and the confirmation, not just from the
+knowledge of a secret brought by the client itself.

@@ -1,48 +1,47 @@
-# Deterministische Client-Fehlertests
+# Deterministic client failure tests
 
 ```sh
 ./scripts/test-client-failures.sh
 ```
 
-Der Lauf startet eigene lokale Testdienste und Testclients in temporären
-Verzeichnissen. Keine LLM, keine laufende Demo und keine neuen Abhängigkeiten
-sind nötig. Getestet werden Softwareverhalten und Fehlergrenzen, nicht die
-Befolgung eines Skills durch ein Modell. Unter Linux/macOS; ein privilegierter
-Testprozess führt die Szenarien unter der vorhandenen unprivilegierten
-Testidentität aus, ohne die Root-Startregel zu lockern.
+The script starts its own services and test clients in temporary
+directories on Linux or macOS. It requires no running demo, language
+model or additional dependencies. If the test runner is privileged, the
+CLI scenarios run under the existing unprivileged test identity.
 
-## Neue Fälle
+<a id="neue-fälle"></a>
 
-`crates/mynofy-cli/tests/failure_clients.rs` prüft über echte Unix-/WebSocket-
-Verbindungen und den vorhandenen Rust-Client:
+## Transport cases
 
-| Fall | Erwartetes Softwareverhalten |
+`crates/mynofy-cli/tests/failure_clients.rs` exercises real Unix and
+WebSocket connections with the Rust client.
+
+| Case | Expected behavior |
 | --- | --- |
-| Reader-Verbindung nach Poll abbrechen | Poll nach Reconnect ohne Cursor liefert die weiterhin aktive Nachricht mit derselben Message-ID. Mit dem gespeicherten Cursor setzt der Consumer beim nächsten Eintrag fort. Dauerhafter fachlicher Fortschritt liegt beim Consumer. |
-| Publish mit gleicher Request-ID nach Reconnect erneut senden | Zwei unterschiedliche Message-IDs; eine Request-ID ist kein Idempotenzschlüssel. |
-| Ungültige Protobuf-Daten und Payload über 4096 Bytes | Fehler ohne Veröffentlichung; unabhängiger Client kann weiter lesen und schreiben. Der rohe Oversize-Frame umgeht bewusst die SDK-Vorprüfung. |
-| ACL während bestehender Sitzung entziehen | Alte Verbindung wird geschlossen, neue Publish/Poll-Aktionen werden verweigert. Eigener ursprünglicher Inhalt bleibt für den authentifizierten Producer lesbar. Andere berechtigte Clients bleiben nutzbar. |
-| WebSocket ohne Authentifizierung und authentifizierter Idle-Client | Verbindungen werden nach konfigurierter Frist geschlossen; anschließend funktioniert ein neuer Client. |
+| Disconnect after polling | A poll without a cursor after reconnect returns the same active message with the same ID. A saved cursor resumes after that position. Consumers own durable processing progress. |
+| Repeat a publish with the same request ID after reconnect | The owner assigns two different message IDs. Request IDs correlate responses. |
+| Send malformed Protobuf or a payload over 4096 bytes | The request fails without publishing. An independent client can continue publishing and polling. A raw frame exercises the server's size validation directly. |
+| Revoke a topic permission while a session is active | The old session closes and fresh publish or poll requests are denied. The authenticated producer retains access to its original content. Other authorized clients can continue. |
+| Leave a WebSocket unauthenticated or an authenticated client idle | The service closes the connection after the configured timeout and accepts a subsequent client. |
 
-Die Tests prüfen konkrete Antworten und Zustände. Warteoperationen besitzen
-Test-Deadlines, damit ein ausbleibender Abbruch den Test fehlschlagen lässt.
-Die Timeout-Szenarien verwenden kurze konfigurierte Servicefristen; sie sind
-keine Performance- oder exakten Timingtests.
+Each wait has a test deadline. The timeout tests use short service
+intervals to verify behavior.
 
-## Vorhandene MCP-Fälle im selben Lauf
+## MCP cases
 
-`crates/mynofy-cli/tests/mcp.rs` ergänzt unter anderem:
+`crates/mynofy-cli/tests/mcp.rs` also checks:
 
-- Ein Owner akzeptiert den Publish, schließt aber vor der Antwort: MCP meldet
-  `outcome_unknown`; nach Reconnect gibt es genau eine Nachricht und keinen
-  automatischen erneuten Publish.
-- Cancellation und EOF beenden ausstehende Owner-Arbeit; Metadaten bleiben
-  während einer blockierten fachlichen Operation erreichbar.
-- Clientoperationen und ACL- und Poll-Semantik über echte stdio-MCP-Prozesse.
-- Offline-Discovery und Trennung der unterstützten MCP-Protokollmodi.
+- If the owner accepts a publish and disconnects before the response,
+  MCP reports `outcome_unknown`. Reconnecting reveals one message and
+  triggers no automatic republish.
+- Cancellation and EOF end pending owner operations. Metadata remains
+  available while application work is blocked.
+- Real stdio MCP processes preserve client operations, ACL checks and
+  poll behavior.
+- Offline discovery and separation of supported MCP protocol modes.
 
-Das Skript umfasst derzeit 14 Integrationstests. Es ersetzt weder die
-funktionalen Core-/Mutationstests (`scripts/test-core-functional.sh`) noch die
-separate Speicher-Abbruchmatrix (`scripts/test-storage-crashes.sh`). Fachliche
-Workflow-Entscheidungen, menschlicher Stopp und Mandat bleiben Clientlogik;
-der Broker interpretiert ihre Inhalte nicht als eigene Zustandsmaschine.
+The script runs the MCP and review follow-up integration suites. The core model and
+mutation cases run through `scripts/test-core-functional.sh`.
+Storage interruption cases run through `scripts/test-storage-crashes.sh`.
+Human stop requests, mandates and business workflow decisions are
+interpreted by the participating clients.
